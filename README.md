@@ -76,6 +76,7 @@ Windows only. CMake >= 3.26, Ninja, MSVC (VS 2026 or Build Tools), Vulkan SDK
 
 ```
 git clone --recurse-submodules <repo-url>
+git submodule update --init --recursive
 cmake --preset windows-msvc-debug
 cmake --build --preset windows-msvc-debug
 ctest --test-dir builds/windows-msvc-debug --output-on-failure
