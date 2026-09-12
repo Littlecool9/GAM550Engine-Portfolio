@@ -187,7 +187,7 @@ More info: [extending.md](extending.md).
 
 | Symptom | Cause |
 |---|---|
-| `VCPKG_ROOT is not set` | `setx` only affects new processes. Restart the terminal and all of VS Code. |
+| Configure fails, toolchain file not found | `VCPKG_ROOT` unset or wrong. `setx` only affects new processes -> restart the terminal and all of VS Code. |
 | `slangc not found` | No Vulkan SDK, or `VULKAN_SDK` unset. |
 | Configure fails right after **New Module** | A module with no sources is an empty library. Add a file. |
 | A new `.cpp` never links | Nothing is globbed. List it in its module's `target_sources`. |
@@ -197,6 +197,14 @@ More info: [extending.md](extending.md).
 | `cl.exe` not found in a plain terminal | MSVC environment not loaded. Use a Developer PowerShell or prefix with `vcvars64.bat`. |
 
 ## Changed
+
+*2026-09-11* — **`toolchainFile` in presets, not a wrapper `.cmake`.** vcpkg
+resolution moved from `cmake/VcpkgToolchain.cmake` into each preset's
+`toolchainFile: $env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake`. Fewer moving
+parts, and matches how vcpkg's own docs and cloud CI setups expect it wired. The
+cost is a plainer error when `VCPKG_ROOT` is unset or wrong: CMake reports the
+toolchain file as missing instead of the old message's exact fix, which is why
+that fix now lives in Troubleshooting below.
 
 *2026-09-01* — **CMake, not premake.** Premake is pleasanter to write, but
 vcpkg, CMake presets and the VS Code tooling all assume CMake, and the ecosystem

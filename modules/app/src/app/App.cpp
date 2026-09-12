@@ -45,11 +45,11 @@ namespace mir
 
         EnsureDpiAware();
 
-        if (!mSplash.Show({.mEngineName = desc.mAppName,
+        if (!mSplash.Show({ .mEngineName = desc.mAppName,
                            .mVersion = kEngineVersion,
                            .mCopyright = kEngineCopyright,
                            .mStatus = "Creating window...",
-                           .mProgress = 0.0f}))
+                           .mProgress = 0.0f }))
         {
             MIR_LOG_WARN("Splash screen failed to show, continuing without it");
         }
@@ -70,9 +70,9 @@ namespace mir
         }
 
         mSplash.SetProgress("Initializing renderer...", 0.2f);
-        if (!mRenderer.Initialize({.window = mWindow.get(),
+        if (!mRenderer.Initialize({ .window = mWindow.get(),
                                    .appName = desc.mAppName,
-                                   .enableValidation = desc.mEnableValidation}))
+                                   .enableValidation = desc.mEnableValidation }))
         {
             MIR_LOG_ERROR("Renderer initialization failed");
             mWindow.reset();
@@ -101,7 +101,7 @@ namespace mir
         RegisterScriptComponents();
 
         // defers structural change
-        mWorld.EmplaceResource<FrameCommands>(FrameCommands{&mCommands});
+        mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
 
         mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mDesc.mProjectSettingsPath));
         mWorld.EmplaceResource<InputState>();
@@ -173,7 +173,7 @@ namespace mir
 
     SystemContext App::MakeContext(float dt)
     {
-        return SystemContext{mWorld, mCommands, dt, mElapsed, mFrame};
+        return SystemContext{ mWorld, mCommands, dt, mElapsed, mFrame };
     }
 
     void App::Run()
@@ -194,7 +194,7 @@ namespace mir
 
             const auto now = std::chrono::steady_clock::now();
             const float dt = std::min(std::chrono::duration<float>(now - previous).count(),
-                                      mDesc.mMaxDeltaSeconds);
+                mDesc.mMaxDeltaSeconds);
             previous = now;
             mElapsed += dt;
 

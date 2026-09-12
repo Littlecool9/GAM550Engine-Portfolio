@@ -1,8 +1,5 @@
 ﻿cmake_minimum_required(VERSION 3.26)
 
-# Must come before project(): CMAKE_TOOLCHAIN_FILE is only honoured there.
-include(${CMAKE_CURRENT_LIST_DIR}/cmake/VcpkgToolchain.cmake)
-
 project(Mjolnir
     VERSION 0.1.0
     DESCRIPTION "A modular 3D engine"
