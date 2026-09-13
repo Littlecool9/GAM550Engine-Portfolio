@@ -219,7 +219,10 @@ namespace mir
             }
 
             mRenderer.SetImGuiDrawData(mEditor.EndFrame());
+
+            mEditor.UpdateCamera(dt);
             mRenderSystem->SetViewportRect(0, mEditor.SceneViewportRect());
+            mRenderSystem->SetExternalCamera(0, mEditor.SceneCamera().Matrix(), mEditor.SceneCamera().mLens);
 
             mWorld.Resource<InputState>().SetUiCapture(mEditor.WantsCaptureKeyboard(), mEditor.WantsCaptureMouse());
 

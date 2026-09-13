@@ -32,7 +32,7 @@ namespace mir
 
         Entity mCameraEntity = kNullEntity;
 
-        WorldTransform mExternalCameraTransform{};
+        glm::mat4 mExternalCameraWorld{ 1.0f };
         Camera mExternalCamera{};
         bool mUseExternalCamera = false;
     };
@@ -81,13 +81,11 @@ namespace mir
             }
         }
 
-        // Points this viewport at a camera the World doesn't own, such as
-        // the editor's free-fly camera
-        void SetExternalCamera(ViewportId id, const WorldTransform &transform, const Camera &camera)
+        void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera &camera)
         {
             if (id < mViewports.size())
             {
-                mViewports[id].mExternalCameraTransform = transform;
+                mViewports[id].mExternalCameraWorld = cameraWorld;
                 mViewports[id].mExternalCamera = camera;
                 mViewports[id].mUseExternalCamera = true;
             }
@@ -95,8 +93,6 @@ namespace mir
 
         void OnUpdate(SystemContext &) override
         {
-            // First-match-wins World camera, used by any viewport that
-            // hasn't been pointed at a specific Entity or external camera.
             bool haveDefaultCamera = false;
             glm::mat4 defaultCameraWorld{ 1.0f };
             Camera defaultCamera{};
@@ -129,15 +125,12 @@ namespace mir
 
                 if (viewport.mUseExternalCamera)
                 {
-                    cameraWorld = viewport.mExternalCameraTransform.Matrix();
+                    cameraWorld = viewport.mExternalCameraWorld;
                     camera = viewport.mExternalCamera;
                     haveCamera = true;
                 }
                 else if (viewport.mCameraEntity != kNullEntity)
                 {
-                    // Not indexed by entity: viewports pointing at a specific
-                    // camera are rare (editor game-view target), so a linear
-                    // scan of the same query is fine over a per-entity map.
                     mCameraQuery->ForEach([&](Entity e, const WorldTransform &world, const Camera &cam)
                         {
                             if (e == viewport.mCameraEntity)
@@ -196,9 +189,6 @@ namespace mir
 
         std::vector<Viewport> mViewports;
 
-        // Rebuilt every frame but kept around to steady allocation. One
-        // item list per viewport, indexed the same as mViewports; RenderView
-        // spans point into these, so they must outlive the DrawFrame call.
         std::vector<std::vector<DrawItem>> mDrawItemsPerViewport;
         std::vector<RenderView> mRenderViews;
 

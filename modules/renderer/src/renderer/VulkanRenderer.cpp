@@ -1532,9 +1532,9 @@ namespace mir
                 .color{ 1.0f, 0.0f, 1.0f, 1.0f } };
             vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
         }
-        -
-            for (const RenderView &view : views)
-                RecordView(cmd, view);
+
+        for (const RenderView &view : views)
+            RecordView(cmd, view);
 
         if (mImguiDrawData != nullptr)
             ImGui_ImplVulkan_RenderDrawData(mImguiDrawData, cmd);

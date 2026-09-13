@@ -49,7 +49,7 @@ namespace mir
             io.Fonts->AddFontDefault();
         }
 
-        static const ImWchar iconRanges[] = {ICON_MIN_FA, ICON_MAX_FA, 0};
+        static const ImWchar iconRanges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
         ImFontConfig iconConfig;
         iconConfig.MergeMode = true;
         iconConfig.PixelSnapH = true;
@@ -115,7 +115,7 @@ namespace mir
         const float barHeight = Window::kTitleBarHeightDip * scale;
 
         if (!ImGui::BeginViewportSideBar("##TitleBar", viewport, ImGuiDir_Up, barHeight,
-                                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
         {
             ImGui::End();
             return;
@@ -136,19 +136,19 @@ namespace mir
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 
         const auto controlButton = [&](const char *icon)
-        {
-            ImGui::PushID(icon);
-            ImGui::SetCursorPosY(buttonY);
-            const bool clicked = ImGui::Button(icon, ImVec2(buttonWidth, buttonHeight));
-            const ImVec2 rMin = ImGui::GetItemRectMin();
-            const ImVec2 rMax = ImGui::GetItemRectMax();
-            mTitleBarInteractiveRects.push_back(PixelRect{
-                static_cast<int32_t>(rMin.x), static_cast<int32_t>(rMin.y),
-                static_cast<uint32_t>(rMax.x - rMin.x), static_cast<uint32_t>(rMax.y - rMin.y)});
-            ImGui::PopID();
-            ImGui::SameLine();
-            return clicked;
-        };
+            {
+                ImGui::PushID(icon);
+                ImGui::SetCursorPosY(buttonY);
+                const bool clicked = ImGui::Button(icon, ImVec2(buttonWidth, buttonHeight));
+                const ImVec2 rMin = ImGui::GetItemRectMin();
+                const ImVec2 rMax = ImGui::GetItemRectMax();
+                mTitleBarInteractiveRects.push_back(PixelRect{
+                    static_cast<int32_t>(rMin.x), static_cast<int32_t>(rMin.y),
+                    static_cast<uint32_t>(rMax.x - rMin.x), static_cast<uint32_t>(rMax.y - rMin.y) });
+                ImGui::PopID();
+                ImGui::SameLine();
+                return clicked;
+            };
 
         if (controlButton(ICON_FA_WINDOW_MINIMIZE))
             mWindow->Minimize();
@@ -194,7 +194,7 @@ namespace mir
                 ImGui::DockBuilderFinish(dockspaceId);
             }
 
-            for (const char *name : {"Hierarchy", "Inspector"})
+            for (const char *name :{ "Hierarchy", "Inspector" })
             {
                 ImGui::Begin(name);
                 ImGui::End();
@@ -208,9 +208,9 @@ namespace mir
                 centralNode != nullptr)
             {
                 mSceneViewportRect = VkRect2D{
-                    .offset{static_cast<int32_t>(centralNode->Pos.x), static_cast<int32_t>(centralNode->Pos.y)},
-                    .extent{static_cast<uint32_t>(std::max(centralNode->Size.x, 0.0f)),
-                            static_cast<uint32_t>(std::max(centralNode->Size.y, 0.0f))}};
+                    .offset{ static_cast<int32_t>(centralNode->Pos.x), static_cast<int32_t>(centralNode->Pos.y) },
+                    .extent{ static_cast<uint32_t>(std::max(centralNode->Size.x, 0.0f)),
+                            static_cast<uint32_t>(std::max(centralNode->Size.y, 0.0f)) } };
             }
 
             if (ImGui::BeginMainMenuBar())
@@ -274,4 +274,10 @@ namespace mir
 
     bool Editor::WantsCaptureKeyboard() const { return ImGui::GetIO().WantCaptureKeyboard; }
     bool Editor::WantsCaptureMouse() const { return ImGui::GetIO().WantCaptureMouse; }
+
+    void Editor::UpdateCamera(float dt)
+    {
+        const bool lookHeld = !WantsCaptureMouse() && mWindow->RawInput().IsDown(MouseButton::Right);
+        mCamera.Update(mWindow->RawInput(), lookHeld, dt);
+    }
 }

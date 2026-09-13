@@ -10,6 +10,7 @@
 #pragma once
 
 #include <core/platform/Surface.h>
+#include <editor/EditorCamera.h>
 #include <editor/panels/LogPanel.h>
 #include <editor/panels/ProjectSettingsPanel.h>
 #include <renderer/VulkanRenderer.h>
@@ -52,16 +53,18 @@ namespace mir
         // Call once per frame, before DrawLayout or any editor drawing.
         void BeginFrame();
 
-        // Draws the editor shell and returns the File menu action picked this frame.
         // enableLayout = false disables editor
         SceneMenuAction DrawLayout(bool enableLayout, InputMap &inputMap);
 
-        // Returns draw data for VulkanRenderer::SetImGuiDrawData.
-        // BeginFrame is needed regardless of skipping layout
         ImDrawData *EndFrame();
 
         // The dockspace's central node, where the 3D scene shows through.
         VkRect2D SceneViewportRect() const { return mSceneViewportRect; }
+
+
+        void UpdateCamera(float dt);
+
+        EditorCamera &SceneCamera() { return mCamera; }
 
         bool IsInitialized() const { return mInitialized; }
 
@@ -81,5 +84,6 @@ namespace mir
         std::vector<PixelRect> mTitleBarInteractiveRects;
         LogPanel mLogPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
+        EditorCamera mCamera;
     };
 }
