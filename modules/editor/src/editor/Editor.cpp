@@ -256,12 +256,16 @@ namespace mir
             {
                 if (ImGui::BeginMenu("File"))
                 {
+                    ImGui::BeginDisabled(mode.mMode == EngineMode::Play);
+
                     if (ImGui::MenuItem("New Scene"))
                         sceneAction = SceneMenuAction::New;
                     if (ImGui::MenuItem("Save Scene"))
                         sceneAction = SceneMenuAction::Save;
                     if (ImGui::MenuItem("Load Scene"))
                         sceneAction = SceneMenuAction::Load;
+
+                    ImGui::EndDisabled();
                     ImGui::EndMenu();
                 }
                 if (ImGui::BeginMenu("Project"))

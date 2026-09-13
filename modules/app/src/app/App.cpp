@@ -213,17 +213,35 @@ namespace mir
 
     void App::NewScene(std::string name)
     {
+        if (IsPlaying(mWorld))
+        {
+            MIR_LOG_WARN("App::NewScene: ignored while Play is running (Stop first)");
+            return;
+        }
+
         UnloadScene(mWorld, mScene);
         mScene = mir::NewScene(std::move(name));
     }
 
     bool App::SaveScene()
     {
+        if (IsPlaying(mWorld))
+        {
+            MIR_LOG_WARN("App::SaveScene: ignored while Play is running (Stop first)");
+            return false;
+        }
+
         return mir::SaveScene(mWorld, mSceneDir, mScene);
     }
 
     bool App::LoadScene()
     {
+        if (IsPlaying(mWorld))
+        {
+            MIR_LOG_WARN("App::LoadScene: ignored while Play is running (Stop first)");
+            return false;
+        }
+
         // scene hardcoded at the moment
         if (!std::filesystem::exists(mSceneDir / "scene.json"))
         {

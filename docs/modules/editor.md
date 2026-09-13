@@ -117,6 +117,12 @@ viewport's remaining work area for whoever asks next.
 `World` entity, so a `Transform` has nothing to attach to; `SetExternalCamera`
 takes the camera's world matrix directly rather than a `WorldTransform`.
 
+**The File menu's New/Save/Load are disabled during Play**
+(`ImGui::BeginDisabled(mode.mMode == EngineMode::Play)`). This is the visible
+half of the rule; `App` enforces it independently (see [app.md](app.md)) since
+this module only greys out a button, it does not stop another caller from
+reaching `App::SaveScene()` directly.
+
 ## State
 
 *As of 2026-09-12.* One fixed layout: `Hierarchy` left, `Inspector` right,
@@ -148,6 +154,12 @@ No tests. It needs a device and a display.
    second panel; nothing calls it yet.
 
 ## Changed
+
+*2026-09-12* — **File menu greyed out during Play.** Was: New/Save/Load stayed
+clickable regardless of mode, and `App` (see [app.md](app.md)) silently
+no-oped them with a log warning. Now: `ImGui::BeginDisabled` around the three
+items while `mode.mMode == EngineMode::Play`, so the UI itself shows why
+nothing happens rather than relying on the log.
 
 *2026-09-12* — **`EditorCamera` and a Play/Pause/Stop toolbar added.** Was:
 `DrawLayout` took only `enableLayout`, and the scene viewport always showed

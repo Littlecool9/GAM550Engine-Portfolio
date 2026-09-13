@@ -214,6 +214,8 @@ derived from `mDesc.mProjectPath`, not caller config — a project switch would
 need to re-resolve both together, so nothing outside `Initialize` should set
 one without the other.
 
+**`NewScene`/`SaveScene`/`LoadScene` refuse while Play is running.** These can corrupt the current scene. Both `Editor` and app will opt out.
+
 ## State
 
 *As of 2026-09-12.* The loop runs, the scheduler ticks, scripts drive entities,
@@ -256,6 +258,15 @@ they live. A headless renderer is the prerequisite for testing anything here.
    cheap for a large scene.
 
 ## Changed
+
+*2026-09-12* — **`NewScene`/`SaveScene`/`LoadScene` refuse while Play is
+running.** Was: nothing stopped any of the three from running mid-Play — Save
+would overwrite the authored scene file with Play's live mutations, and
+New/Load would desync `mPlaySnapshot` from the World it was captured from, so
+a later Stop silently restored stale content instead of erroring. Now: each
+checks `IsPlaying(mWorld)` first and no-ops with a logged warning; `Editor`'s
+File menu also greys the same three items out for the same reason (see
+[editor.md](editor.md)).
 
 *2026-09-12* — **`AppDesc` takes a project path instead of pre-resolved
 fields.** Was: `main.cpp` parsed `game.json` into a `GameProject` and copied
