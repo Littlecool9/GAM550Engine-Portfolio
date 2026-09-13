@@ -165,7 +165,44 @@ namespace mir
         ImGui::End();
     }
 
-    SceneMenuAction Editor::DrawLayout(bool enableLayout, InputMap &inputMap)
+    SceneMenuAction Editor::DrawPlayControls(const EngineModeState &mode)
+    {
+        SceneMenuAction action = SceneMenuAction::None;
+
+        ImGuiViewport *viewport = ImGui::GetMainViewport();
+        const float height = 28.0f * mWindow->ContentScale();
+
+        if (!ImGui::BeginViewportSideBar("##PlayControls", viewport, ImGuiDir_Up, height,
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
+        {
+            ImGui::End();
+            return action;
+        }
+
+        const bool playing = mode.mMode == EngineMode::Play;
+        const bool paused = playing && mode.mPlayState == PlayState::Paused;
+
+        ImGui::SetCursorPosY((height - ImGui::GetFrameHeight()) * 0.5f);
+
+        if (!playing)
+        {
+            if (ImGui::Button(ICON_FA_PLAY " Play"))
+                action = SceneMenuAction::Play;
+        }
+        else
+        {
+            if (ImGui::Button(paused ? ICON_FA_PLAY " Resume" : ICON_FA_PAUSE " Pause"))
+                action = SceneMenuAction::TogglePause;
+            ImGui::SameLine();
+            if (ImGui::Button(ICON_FA_STOP " Stop"))
+                action = SceneMenuAction::Stop;
+        }
+
+        ImGui::End();
+        return action;
+    }
+
+    SceneMenuAction Editor::DrawLayout(bool enableLayout, InputMap &inputMap, const EngineModeState &mode)
     {
         SceneMenuAction sceneAction = SceneMenuAction::None;
 
@@ -173,6 +210,8 @@ namespace mir
         {
             if (mWindow->HasCustomTitleBar())
                 DrawTitleBar();
+
+            sceneAction = DrawPlayControls(mode);
 
             const ImGuiID dockspaceId = ImGui::DockSpaceOverViewport(
                 0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);

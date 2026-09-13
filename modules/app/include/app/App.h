@@ -15,6 +15,7 @@
 #include <assets/AssetManifest.h>
 #include <editor/Editor.h>
 #include <renderer/VulkanRenderer.h>
+#include <scene/PlaySnapshot.h>
 #include <scene/SceneAsset.h>
 #include <script/ScriptHost.h>
 #include <script/ScriptReloadWatcher.h>
@@ -29,6 +30,7 @@
 namespace mir
 {
     class RenderSystem;
+    class ScriptSystem;
 
     struct AppDesc
     {
@@ -91,6 +93,15 @@ namespace mir
         // contents. False if mSceneDir has no scene.json to load.
         bool LoadScene();
 
+        // Edit -> Play
+        void PlayScene();
+
+        // Play -> Edit
+        void StopScene();
+
+        // Toggles Running/Paused. No-op outside Play.
+        void TogglePause();
+
     private:
         // context is rebuilt per tick
         SystemContext MakeContext(float dt);
@@ -106,6 +117,8 @@ namespace mir
         World mWorld;
         SystemScheduler mScheduler;
         RenderSystem *mRenderSystem = nullptr;
+        ScriptSystem *mScriptSystem = nullptr;
+        PlaySnapshot mPlaySnapshot;
         ScriptHost mScriptHost;
         ScriptReloadWatcher mScriptReloadWatcher{ mScriptHost };
         LoadedScene mScene;

@@ -1,7 +1,8 @@
 engine_add_module(scene)
 
 target_sources(engine_scene PRIVATE
-    src/scene/SceneIO.cpp)
+    src/scene/SceneIO.cpp
+    src/scene/PlaySnapshot.cpp)
 
 # get external libraries here
 find_package(nlohmann_json CONFIG REQUIRED)

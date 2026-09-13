@@ -12,6 +12,7 @@
 #include <core/EngineVersion.h>
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/DeferredAccess.h>
+#include <core/ecs/EngineMode.h>
 #include <core/ecs/TransformHierarchy.h>
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
@@ -105,10 +106,11 @@ namespace mir
 
         mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mDesc.mProjectSettingsPath));
         mWorld.EmplaceResource<InputState>();
+        mWorld.EmplaceResource<EngineModeState>();
 
         mScheduler.AddSystem<InputSystem>(SystemPhase::PreUpdate, *mWindow);
 
-        mScheduler.AddSystem<ScriptSystem>(SystemPhase::PreUpdate, mScriptHost);
+        mScriptSystem = &mScheduler.AddSystem<ScriptSystem>(SystemPhase::PreUpdate, mScriptHost);
 
         // should be before any other system in PostUpdate
         mScheduler.AddSystem<TransformPropagateSystem>(SystemPhase::PostUpdate);
@@ -146,6 +148,39 @@ namespace mir
         UnloadScene(mWorld, mScene);
         mScene = mir::LoadScene(mWorld, mDesc.mSceneDir);
         return true;
+    }
+
+    void App::PlayScene()
+    {
+        if (IsPlaying(mWorld))
+            return;
+
+        mPlaySnapshot = CaptureWorld(mWorld);
+
+        SetPlayState(mWorld, PlayState::Running);
+        SetEngineMode(mWorld, EngineMode::Play);
+    }
+
+    void App::StopScene()
+    {
+        if (!IsPlaying(mWorld))
+            return;
+
+        SystemContext context = MakeContext(0.0f);
+        mScriptSystem->StopAllScripts(context);
+
+        mScene = RestoreWorld(mWorld, mPlaySnapshot);
+
+        SetEngineMode(mWorld, EngineMode::Edit);
+        SetPlayState(mWorld, PlayState::Running);
+    }
+
+    void App::TogglePause()
+    {
+        if (!IsPlaying(mWorld))
+            return;
+
+        SetPlayState(mWorld, IsPaused(mWorld) ? PlayState::Running : PlayState::Paused);
     }
 
     AssetCache *App::Assets()
@@ -202,7 +237,8 @@ namespace mir
 
             if (mWindow->Width() != 0 && mWindow->Height() != 0)
             {
-                switch (mEditor.DrawLayout(mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>()))
+                switch (mEditor.DrawLayout(mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(),
+                    mWorld.Resource<EngineModeState>()))
                 {
                 case SceneMenuAction::New:
                     NewScene();
@@ -213,6 +249,15 @@ namespace mir
                 case SceneMenuAction::Load:
                     LoadScene();
                     break;
+                case SceneMenuAction::Play:
+                    PlayScene();
+                    break;
+                case SceneMenuAction::TogglePause:
+                    TogglePause();
+                    break;
+                case SceneMenuAction::Stop:
+                    StopScene();
+                    break;
                 case SceneMenuAction::None:
                     break;
                 }
@@ -222,7 +267,11 @@ namespace mir
 
             mEditor.UpdateCamera(dt);
             mRenderSystem->SetViewportRect(0, mEditor.SceneViewportRect());
-            mRenderSystem->SetExternalCamera(0, mEditor.SceneCamera().Matrix(), mEditor.SceneCamera().mLens);
+
+            if (IsEditing(mWorld))
+                mRenderSystem->SetExternalCamera(0, mEditor.SceneCamera().Matrix(), mEditor.SceneCamera().mLens);
+            else
+                mRenderSystem->SetViewportCamera(0, kNullEntity);
 
             mWorld.Resource<InputState>().SetUiCapture(mEditor.WantsCaptureKeyboard(), mEditor.WantsCaptureMouse());
 

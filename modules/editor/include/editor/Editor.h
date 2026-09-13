@@ -9,6 +9,7 @@
  */
 #pragma once
 
+#include <core/ecs/EngineMode.h>
 #include <core/platform/Surface.h>
 #include <editor/EditorCamera.h>
 #include <editor/panels/LogPanel.h>
@@ -30,6 +31,9 @@ namespace mir
         New,
         Save,
         Load,
+        Play,
+        TogglePause,
+        Stop,
     };
 
     class Editor
@@ -54,7 +58,8 @@ namespace mir
         void BeginFrame();
 
         // enableLayout = false disables editor
-        SceneMenuAction DrawLayout(bool enableLayout, InputMap &inputMap);
+        // `mode` drives the Play/Pause/Stop toolbar's labels and which of them are enabled
+        SceneMenuAction DrawLayout(bool enableLayout, InputMap &inputMap, const EngineModeState &mode);
 
         ImDrawData *EndFrame();
 
@@ -73,6 +78,9 @@ namespace mir
 
     private:
         void DrawTitleBar();
+        // Returns Play/TogglePause/Stop if one of the toolbar's buttons was
+        // clicked this frame, else None.
+        SceneMenuAction DrawPlayControls(const EngineModeState &mode);
 
         bool mInitialized = false;
         bool mShowStyleEditor = false;
