@@ -4,50 +4,76 @@ The ImGui context and backend lifecycle, and the Slate editor shell — dockspac
 default panel layout, Debug menu. It is the only place in the engine that calls
 `ImGui::*` or `ImGui_Impl*`.
 
-`mir::editor` · depends `mir::renderer`, `mir::window` (public); `mir::core`, `mir::editortheme`, `imgui`, `iconfontcppheaders` (private) · API `modules/editor/include/editor/` · maintainer Sumin Park · reviewed 2026-09-06
+`mir::editor` · depends `mir::renderer`, `mir::window` (public); `mir::core`, `mir::editortheme`, `imgui`, `iconfontcppheaders` (private) · API `modules/editor/include/editor/` · maintainer Sumin Park · reviewed 2026-09-12
 
 ## Model
 
-`App` drives `Editor` through four calls a frame and reads one piece of state
-back.
+`App` drives `Editor` through several calls a frame and reads state back.
 
 ```cpp
 mEditor.BeginFrame();                                   // the ImGui NewFrame trio
 
 if (windowVisible)
-    Act(mEditor.DrawLayout(mDesc.mEnableEditorLayout)); // New / Save / Load, or None
+    Act(mEditor.DrawLayout(mDesc.mEnableEditorLayout,   // New / Save / Load / Play / TogglePause / Stop, or None
+                            world.Resource<InputMap>(), world.Resource<EngineModeState>()));
 
 mRenderer.SetImGuiDrawData(mEditor.EndFrame());         // ImGui::Render, hand off draw data
 mRenderSystem.SetViewportRect(0, mEditor.SceneViewportRect());
+
+if (IsEditing(world))                                   // Play shows the World's own camera instead
+{
+    mEditor.UpdateCamera(dt);
+    mRenderSystem.SetExternalCamera(0, mEditor.SceneCamera().Matrix(), mEditor.SceneCamera().mLens);
+}
 ```
 
-`DrawLayout` returns the `SceneMenuAction` the File menu picked this frame. The
-editor decides what was asked for and `App` decides what it means, so this module
-never touches `SceneIO` or the `World`.
+`DrawLayout` returns the `SceneMenuAction` the File menu or the Play/Pause/Stop
+toolbar picked this frame. The editor decides what was asked for and `App`
+decides what it means, so this module never touches `SceneIO`, `PlaySnapshot`
+or the `World`'s entities — `EngineModeState` is read-only here, just to draw
+the toolbar's current label.
 
 `DrawLayout(true)` builds the dockspace once. It splits into left, right and
 bottom with `DockBuilderSplitNode`, keeps the centre undocked through
 `ImGuiDockNodeFlags_PassthruCentralNode`, docks `Hierarchy`, `Inspector` and
-`Output` into the splits, draws the `Debug` menu bar, and optionally the Style
-Editor.
+`Output` into the splits, draws a Play/Pause/Stop toolbar strip and the `Debug`
+menu bar, and optionally the Style Editor.
 
 Passing `false` skips all of that and resets `SceneViewportRect()` to zero
 extent, which the renderer reads as "use the full swapchain". An ImGui context
 still runs, so a caller can draw its own UI.
 
+`EditorCamera` is a free-fly camera for the scene viewport — position plus
+yaw/pitch, not a `WorldTransform` (that type's matrix is resolver-only,
+unconstructable outside the ECS hierarchy resolve, and this camera is
+deliberately outside the `World`: it must survive a Play session's
+snapshot/restore untouched). `Update` reads `Window::RawInput()` directly
+rather than `InputMap`/`InputState`, so a project's key bindings can't affect
+the editor's own camera. Right-drag flies/looks (WASD/QE, scroll for speed);
+`Editor::UpdateCamera` gates that on `!WantsCaptureMouse()` so a drag ImGui
+itself is handling doesn't also move it.
+
 ## API
 
 ```cpp
-bool Initialize(Window &window, VulkanRenderer &renderer);
+bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath);
 void Shutdown(VulkanRenderer &renderer);
 
 void BeginFrame();
-SceneMenuAction DrawLayout(bool enableLayout);   // None / New / Save / Load
+SceneMenuAction DrawLayout(bool enableLayout, InputMap &inputMap, const EngineModeState &mode);
 ImDrawData *EndFrame();
 
 VkRect2D SceneViewportRect() const;
 bool IsInitialized() const;
+
+void UpdateCamera(float dt);          // once per frame, after BeginFrame/DrawLayout
+EditorCamera &SceneCamera();
 ```
+
+| Type | Header | Role |
+|---|---|---|
+| `SceneMenuAction` | `editor/Editor.h` | `None`/`New`/`Save`/`Load`/`Play`/`TogglePause`/`Stop` |
+| `EditorCamera` | `editor/EditorCamera.h` | Free-fly scene camera, position + yaw/pitch, outside the `World` |
 
 `LogPanel`, in `src/editor/panels/LogPanel.cpp`, renders `core`'s `LogHistory`
 into the `Output` dock. It is not public — panels are reached only through
@@ -82,14 +108,27 @@ every call.
 Fonts are Inter for body text and Font Awesome 6 for icons, merged into one atlas
 and rescaled for the window's `ContentScale()`.
 
+**The Play/Pause/Stop toolbar is another `Up` viewport side bar**, drawn right
+after the title bar and before the dockspace, so it stacks the same way the
+title bar already does — each `BeginViewportSideBar` call shrinks the main
+viewport's remaining work area for whoever asks next.
+
+**`EditorCamera` has no `Transform` component, deliberately.** It isn't a
+`World` entity, so a `Transform` has nothing to attach to; `SetExternalCamera`
+takes the camera's world matrix directly rather than a `WorldTransform`.
+
 ## State
 
-*As of 2026-09-06.* One fixed layout: `Hierarchy` left, `Inspector` right,
-`Output` bottom, and the scene showing through the passthru centre. It is built
-once and left alone, persisted only through ImGui's own `imgui.ini` next to the
-executable.
+*As of 2026-09-12.* One fixed layout: `Hierarchy` left, `Inspector` right,
+`Output` bottom, a Play/Pause/Stop toolbar strip, and the scene showing through
+the passthru centre. It is built once and left alone, persisted only through
+ImGui's own `imgui.ini` next to the executable.
 
 `Output` is wired to `LogHistory` through `LogPanel`.
+
+`EditorCamera` flies and looks in Edit mode; `App` stops feeding it input and
+switches viewport 0 to the World's default camera in Play (see
+[app.md](app.md)).
 
 No tests. It needs a device and a display.
 
@@ -103,8 +142,23 @@ No tests. It needs a device and a display.
 4. **Make `Editor` optional on `App`** — a `unique_ptr`, null in a packaged game
    build. This module's boundary is what makes that swap possible without
    touching `RenderSystem` or `VulkanRenderer`.
+5. **A second viewport showing `EditorCamera` during Play+Paused**, so pausing
+   lets you look around the live World independent of the game camera. Needs
+   `RenderSystem::AddViewport` (see [renderer.md](renderer.md)) wired to a
+   second panel; nothing calls it yet.
 
 ## Changed
+
+*2026-09-12* — **`EditorCamera` and a Play/Pause/Stop toolbar added.** Was:
+`DrawLayout` took only `enableLayout`, and the scene viewport always showed
+whatever World `Camera` `RenderSystem` found first. Now: `DrawLayout` also
+takes `InputMap`/`EngineModeState`, draws a toolbar that reads/writes Play mode
+through `SceneMenuAction`, and `Editor` owns a free-fly `EditorCamera` that
+`App` feeds into viewport 0 while editing.
+
+Driven by wanting the scene view navigable independent of any World camera,
+and by Play/Pause needing a visible way to start and stop, not just the
+`EngineModeState` resource existing.
 
 *2026-09-03* — **The module was extracted from `App.cpp`.** Was: about 150 lines
 of `ImGui::*` and `ImGui_Impl*` calls sitting next to window and ECS

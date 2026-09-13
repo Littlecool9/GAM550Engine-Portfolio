@@ -26,6 +26,8 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 
 namespace mir
 {
@@ -36,7 +38,8 @@ namespace mir
     {
         uint32_t mWidth = 1280;
         uint32_t mHeight = 720;
-        const char *mTitle = "MjolnirEngine";
+
+        // Vulkan instance name. Engine-level, not project data
         const char *mAppName = "MjolnirEngine";
         bool mEnableValidation = true;
 
@@ -44,8 +47,8 @@ namespace mir
 
         float mMaxDeltaSeconds = 0.25f;
 
-        // temp default path for scenes
-        std::filesystem::path mSceneDir = "scenes/default";
+        // Path to the project's game.json, relative to the executable
+        std::filesystem::path mProjectPath;
 
         // Where the Project Settings window's Save button writes
         std::filesystem::path mProjectSettingsPath = "project_settings.json";
@@ -89,9 +92,9 @@ namespace mir
         // Writes Scene() to mSceneDir. False on I/O failure
         bool SaveScene();
 
-        // Discards mScene's entities and replaces it with mSceneDir's
-        // contents. False if mSceneDir has no scene.json to load.
         bool LoadScene();
+
+        bool LoadScriptAsset(std::string_view assetPath, std::string_view scriptName);
 
         // Edit -> Play
         void PlayScene();
@@ -105,6 +108,9 @@ namespace mir
     private:
         // context is rebuilt per tick
         SystemContext MakeContext(float dt);
+
+        void ResolveSceneMeshes();
+        void ResolveSceneScripts();
 
         SplashScreen mSplash;
         std::unique_ptr<Window> mWindow;
@@ -124,6 +130,10 @@ namespace mir
         LoadedScene mScene;
 
         AppDesc mDesc;
+
+        std::filesystem::path mSceneDir;
+        std::string mAssetsRoot;
+
         double mElapsed = 0.0;
         uint64_t mFrame = 0;
 
