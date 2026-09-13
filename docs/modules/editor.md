@@ -18,7 +18,7 @@ if (windowVisible)
     Act(mEditor.DrawLayout(mDesc.mEnableEditorLayout)); // New / Save / Load, or None
 
 mRenderer.SetImGuiDrawData(mEditor.EndFrame());         // ImGui::Render, hand off draw data
-mRenderer.SetSceneViewport(mEditor.SceneViewportRect());
+mRenderSystem.SetViewportRect(0, mEditor.SceneViewportRect());
 ```
 
 `DrawLayout` returns the `SceneMenuAction` the File menu picked this frame. The

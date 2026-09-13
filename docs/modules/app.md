@@ -27,7 +27,7 @@ while not ShouldClose:
     Editor::BeginFrame
     Editor::DrawLayout -> SceneMenuAction    New / Save / Load acted on here
     renderer.SetImGuiDrawData(Editor::EndFrame())
-    renderer.SetSceneViewport(Editor::SceneViewportRect())
+    renderSystem.SetViewportRect(0, Editor::SceneViewportRect())
     ScriptReloadWatcher::Poll
     SystemScheduler::Update            PreUpdate, Update, PostUpdate, Render
     ++frame
@@ -168,6 +168,13 @@ they live. A headless renderer is the prerequisite for testing anything here.
    is also why the name-to-handle resolve passes live in `main.cpp`.
 
 ## Changed
+
+*2026-09-12* — **Scene-viewport wiring moved from the renderer to
+`RenderSystem`.** Was: `App::Run` called `renderer.SetSceneViewport(...)`
+directly. Now: `mRenderSystem->SetViewportRect(0, ...)`, since `RenderSystem`
+owns the viewport list (see [renderer.md](renderer.md#changed)). `App` also now
+picks that same viewport's camera each frame — the editor's free-fly camera in
+Edit mode, the World's default `Camera` in Play.
 
 *2026-09-03* — **Drawing left `App::Run`.** Was: `CollectDrawInstances` and
 `DrawFrame` called by hand between scheduler phases, so draw-list assembly had no
