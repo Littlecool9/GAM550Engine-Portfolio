@@ -43,15 +43,22 @@ namespace mir
         MeshHandle mesh;
 
         // model * view projection
-        glm::mat4 model{1.0f};
+        glm::mat4 model{ 1.0f };
 
         // transpose(inverse(mat3(model)))
-        glm::mat3 normalMatrix{1.0f};
+        glm::mat3 normalMatrix{ 1.0f };
 
-        glm::vec4 tint{1.0f, 1.0f, 1.0f, 1.0f};
+        glm::vec4 tint{ 1.0f, 1.0f, 1.0f, 1.0f };
 
         // kNullMaterial means "use the renderer's default material".
         MaterialHandle material;
+    };
+
+    // One camera's worth of draw items, clipped to a screen-space rect
+    struct RenderView
+    {
+        VkRect2D rect{};
+        std::span<const DrawItem> items;
     };
 
     class VulkanRenderer
@@ -65,32 +72,16 @@ namespace mir
 
         // abstraction from imgui
         void SetImGuiDrawData(ImDrawData *drawData) { mImguiDrawData = drawData; }
-
-        // Viewport/scissor rect (window pixels) the scene pass is clipped to
-        void SetSceneViewport(VkRect2D rect) { mSceneViewportRect = rect; }
-
-        // Uploads geometry and returns a handle to it.
-        // Use on load time
         MeshHandle CreateMesh(std::span<const Vertex> vertices,
-                              std::span<const uint32_t> indices);
+            std::span<const uint32_t> indices);
 
-        // Handle of a pipeline
-        // kNullMaterial means default material
+// Handle of a pipeline
+// kNullMaterial means default material
         MaterialHandle CreateMaterial(const MaterialDesc &desc);
 
-        // Width/height of whatever the scene actually renders into: the
-        // editor viewport once one is set, else the full swapchain.
-        float AspectRatio() const
-        {
-            const VkExtent2D extent = HasSceneViewport()
-                                          ? mSceneViewportRect.extent
-                                          : mSwapchainExtent;
-            return extent.height == 0
-                       ? 1.0f
-                       : static_cast<float>(extent.width) / static_cast<float>(extent.height);
-        }
+        VkExtent2D SwapchainExtent() const { return mSwapchainExtent; }
 
-        void DrawFrame(std::span<const DrawItem> items);
+        void DrawFrame(std::span<const RenderView> views);
 
         void SetClearColor(const glm::vec4 &color) { mClearColor = color; }
 
@@ -99,11 +90,6 @@ namespace mir
     private:
         struct GpuMesh;
         struct GpuMaterial;
-
-        bool HasSceneViewport() const
-        {
-            return mSceneViewportRect.extent.width > 0 && mSceneViewportRect.extent.height > 0;
-        }
 
         bool CreateVulkanInstance(const RendererDesc &desc);
         bool CreateDebugMessenger();
@@ -128,17 +114,19 @@ namespace mir
         const GpuMesh *FindMesh(MeshHandle handle) const;
         const GpuMaterial *FindMaterial(MaterialHandle handle) const;
         void NameObject(VkObjectType type, uint64_t handle, const char *name);
-        void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const DrawItem> items);
+        void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
+        // Draws one view's items, clipped to its rect
+        void RecordView(VkCommandBuffer cmd, const RenderView &view);
 
     private:
-        constexpr static uint32_t VulkanVersion{VK_API_VERSION_1_3};
+        constexpr static uint32_t VulkanVersion{ VK_API_VERSION_1_3 };
         constexpr static uint32_t kFramesInFlight = 2;
 
         // 32-bit float depth, no stencil.
         constexpr static VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
         // Default: dark gray. Overridden via SetClearColor.
-        glm::vec4 mClearColor{0.02f, 0.02f, 0.02f, 1.0f};
+        glm::vec4 mClearColor{ 0.02f, 0.02f, 0.02f, 1.0f };
 
         const ISurfaceProvider *mWindow;
         VkInstance mVulkanInstance = VK_NULL_HANDLE;
@@ -154,7 +142,6 @@ namespace mir
         VkFormat mSwapchainFormat = VK_FORMAT_UNDEFINED;
         VkExtent2D mSwapchainExtent{};
 
-        VkRect2D mSceneViewportRect{};
         std::vector<VkImage> mSwapchainImages;
         std::vector<VkImageView> mSwapchainViews;
 

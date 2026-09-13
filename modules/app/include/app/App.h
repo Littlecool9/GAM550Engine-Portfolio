@@ -28,6 +28,8 @@
 
 namespace mir
 {
+    class RenderSystem;
+
     struct AppDesc
     {
         uint32_t mWidth = 1280;
@@ -103,8 +105,9 @@ namespace mir
 
         World mWorld;
         SystemScheduler mScheduler;
+        RenderSystem *mRenderSystem = nullptr;
         ScriptHost mScriptHost;
-        ScriptReloadWatcher mScriptReloadWatcher{mScriptHost};
+        ScriptReloadWatcher mScriptReloadWatcher{ mScriptHost };
         LoadedScene mScene;
 
         AppDesc mDesc;

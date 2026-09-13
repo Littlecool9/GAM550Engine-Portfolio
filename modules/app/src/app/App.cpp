@@ -113,7 +113,7 @@ namespace mir
         // should be before any other system in PostUpdate
         mScheduler.AddSystem<TransformPropagateSystem>(SystemPhase::PostUpdate);
 
-        mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
+        mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
         mSplash.SetProgress("Loading scene...", 0.9f);
         mScene = mir::NewScene("untitled");
@@ -219,7 +219,7 @@ namespace mir
             }
 
             mRenderer.SetImGuiDrawData(mEditor.EndFrame());
-            mRenderer.SetSceneViewport(mEditor.SceneViewportRect());
+            mRenderSystem->SetViewportRect(0, mEditor.SceneViewportRect());
 
             mWorld.Resource<InputState>().SetUiCapture(mEditor.WantsCaptureKeyboard(), mEditor.WantsCaptureMouse());
 

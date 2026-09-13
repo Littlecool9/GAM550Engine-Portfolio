@@ -23,12 +23,28 @@
 
 namespace mir
 {
+    using ViewportId = size_t;
+
+    struct Viewport
+    {
+        // zero = the whole swapchain
+        VkRect2D mRect{};
+
+        Entity mCameraEntity = kNullEntity;
+
+        WorldTransform mExternalCameraTransform{};
+        Camera mExternalCamera{};
+        bool mUseExternalCamera = false;
+    };
+
     class RenderSystem final : public ISystem
     {
     public:
         explicit RenderSystem(VulkanRenderer &renderer)
             : mRenderer(renderer)
         {
+            // Viewport 0 : whole window, first World Camera.
+            mViewports.push_back(Viewport{});
         }
 
         void OnStart(SystemContext &context) override
@@ -37,38 +53,140 @@ namespace mir
             mCameraQuery = &context.world.GetOrCreateQuery<const WorldTransform, const Camera>();
         }
 
+        ViewportId AddViewport(VkRect2D rect)
+        {
+            mViewports.push_back(Viewport{ .mRect = rect });
+            return mViewports.size() - 1;
+        }
+
+        void RemoveViewport(ViewportId id)
+        {
+            if (id != 0 && id < mViewports.size())
+                mViewports.erase(mViewports.begin() + static_cast<ptrdiff_t>(id));
+        }
+
+        void SetViewportRect(ViewportId id, VkRect2D rect)
+        {
+            if (id < mViewports.size())
+                mViewports[id].mRect = rect;
+        }
+
+        // Points this viewport at a Camera entity in the World (game cameras).
+        void SetViewportCamera(ViewportId id, Entity camera)
+        {
+            if (id < mViewports.size())
+            {
+                mViewports[id].mCameraEntity = camera;
+                mViewports[id].mUseExternalCamera = false;
+            }
+        }
+
+        // Points this viewport at a camera the World doesn't own, such as
+        // the editor's free-fly camera
+        void SetExternalCamera(ViewportId id, const WorldTransform &transform, const Camera &camera)
+        {
+            if (id < mViewports.size())
+            {
+                mViewports[id].mExternalCameraTransform = transform;
+                mViewports[id].mExternalCamera = camera;
+                mViewports[id].mUseExternalCamera = true;
+            }
+        }
+
         void OnUpdate(SystemContext &) override
         {
-            // First match wins
-            bool haveCamera = false;
-            glm::mat4 viewProj{1.0f};
+            // First-match-wins World camera, used by any viewport that
+            // hasn't been pointed at a specific Entity or external camera.
+            bool haveDefaultCamera = false;
+            glm::mat4 defaultCameraWorld{ 1.0f };
+            Camera defaultCamera{};
 
             mCameraQuery->ForEach([&](Entity, const WorldTransform &world, const Camera &camera)
-                                  {
-                if (haveCamera)
-                    return;
+                {
+                    if (haveDefaultCamera)
+                        return;
+                    defaultCameraWorld = world.Matrix();
+                    defaultCamera = camera;
+                    haveDefaultCamera = true;
+                });
 
-                viewProj = MakeViewProjection(world.Matrix(), camera.mFovYDegrees,
-                                              camera.mNearZ, camera.mFarZ,
-                                              mRenderer.AspectRatio());
-                haveCamera = true; });
+            const VkExtent2D swapchainExtent = mRenderer.SwapchainExtent();
 
-            mDrawItems.clear();
+            mDrawItemsPerViewport.resize(mViewports.size());
+            mRenderViews.clear();
 
-            if (haveCamera)
+            bool warnNoCamera = false;
+
+            for (size_t i = 0; i < mViewports.size(); ++i)
             {
-                mMeshQuery->ForEach([this, &viewProj](Entity, const WorldTransform &world, const MeshRenderer &renderer)
-                                    {
-                    const glm::mat3 normalMatrix = glm::inverseTranspose(glm::mat3(world.Matrix()));
-                    mDrawItems.push_back(DrawItem{renderer.mesh, viewProj * world.Matrix(), normalMatrix, renderer.tint, renderer.material}); });
+                const Viewport &viewport = mViewports[i];
+                std::vector<DrawItem> &items = mDrawItemsPerViewport[i];
+                items.clear();
+
+                glm::mat4 cameraWorld{ 1.0f };
+                Camera camera{};
+                bool haveCamera = false;
+
+                if (viewport.mUseExternalCamera)
+                {
+                    cameraWorld = viewport.mExternalCameraTransform.Matrix();
+                    camera = viewport.mExternalCamera;
+                    haveCamera = true;
+                }
+                else if (viewport.mCameraEntity != kNullEntity)
+                {
+                    // Not indexed by entity: viewports pointing at a specific
+                    // camera are rare (editor game-view target), so a linear
+                    // scan of the same query is fine over a per-entity map.
+                    mCameraQuery->ForEach([&](Entity e, const WorldTransform &world, const Camera &cam)
+                        {
+                            if (e == viewport.mCameraEntity)
+                            {
+                                cameraWorld = world.Matrix();
+                                camera = cam;
+                                haveCamera = true;
+                            }
+                        });
+                }
+                else if (haveDefaultCamera)
+                {
+                    cameraWorld = defaultCameraWorld;
+                    camera = defaultCamera;
+                    haveCamera = true;
+                }
+
+                if (!haveCamera)
+                {
+                    warnNoCamera = true;
+                    continue;
+                }
+
+                const VkExtent2D viewExtent = (viewport.mRect.extent.width > 0 && viewport.mRect.extent.height > 0)
+                    ? viewport.mRect.extent
+                    : swapchainExtent;
+                const float aspect = viewExtent.height == 0
+                    ? 1.0f
+                    : static_cast<float>(viewExtent.width) / static_cast<float>(viewExtent.height);
+
+                const glm::mat4 viewProj = MakeViewProjection(cameraWorld, camera.mFovYDegrees,
+                    camera.mNearZ, camera.mFarZ, aspect);
+
+                mMeshQuery->ForEach([&items, &viewProj](Entity, const WorldTransform &world, const MeshRenderer &renderer)
+                    {
+                        const glm::mat3 normalMatrix = glm::inverseTranspose(glm::mat3(world.Matrix()));
+                        items.push_back(DrawItem{ renderer.mesh, viewProj * world.Matrix(), normalMatrix, renderer.tint, renderer.material });
+                    });
+
+                mRenderViews.push_back(RenderView{ viewport.mRect, items });
             }
-            else if (!mWarnedNoCamera)
+
+            if (warnNoCamera && !mWarnedNoCamera)
             {
-                MIR_LOG_WARN("RenderSystem: no Camera entity in the world; nothing will be drawn");
+                MIR_LOG_WARN("RenderSystem: a viewport has no Camera entity in the world; nothing will be drawn for it");
                 mWarnedNoCamera = true;
             }
 
-            mRenderer.DrawFrame(mDrawItems);
+            mRenderer.DrawFrame(mRenderViews);
         }
 
     private:
@@ -76,8 +194,13 @@ namespace mir
         Query<const WorldTransform, const MeshRenderer> *mMeshQuery = nullptr;
         Query<const WorldTransform, const Camera> *mCameraQuery = nullptr;
 
-        // Rebuilt every frame but keeps its capacity to steady allocation,
-        std::vector<DrawItem> mDrawItems;
+        std::vector<Viewport> mViewports;
+
+        // Rebuilt every frame but kept around to steady allocation. One
+        // item list per viewport, indexed the same as mViewports; RenderView
+        // spans point into these, so they must outlive the DrawFrame call.
+        std::vector<std::vector<DrawItem>> mDrawItemsPerViewport;
+        std::vector<RenderView> mRenderViews;
 
         bool mWarnedNoCamera = false;
     };
