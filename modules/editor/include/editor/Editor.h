@@ -9,7 +9,9 @@
  */
 #pragma once
 
+#include <core/ecs/EngineMode.h>
 #include <core/platform/Surface.h>
+#include <editor/EditorCamera.h>
 #include <editor/panels/LogPanel.h>
 #include <editor/panels/ProjectSettingsPanel.h>
 #include <renderer/VulkanRenderer.h>
@@ -29,6 +31,9 @@ namespace mir
         New,
         Save,
         Load,
+        Play,
+        TogglePause,
+        Stop,
     };
 
     class Editor
@@ -52,16 +57,19 @@ namespace mir
         // Call once per frame, before DrawLayout or any editor drawing.
         void BeginFrame();
 
-        // Draws the editor shell and returns the File menu action picked this frame.
         // enableLayout = false disables editor
-        SceneMenuAction DrawLayout(bool enableLayout, InputMap &inputMap);
+        // `mode` drives the Play/Pause/Stop toolbar's labels and which of them are enabled
+        SceneMenuAction DrawLayout(bool enableLayout, InputMap &inputMap, const EngineModeState &mode);
 
-        // Returns draw data for VulkanRenderer::SetImGuiDrawData.
-        // BeginFrame is needed regardless of skipping layout
         ImDrawData *EndFrame();
 
         // The dockspace's central node, where the 3D scene shows through.
         VkRect2D SceneViewportRect() const { return mSceneViewportRect; }
+
+
+        void UpdateCamera(float dt);
+
+        EditorCamera &SceneCamera() { return mCamera; }
 
         bool IsInitialized() const { return mInitialized; }
 
@@ -70,6 +78,9 @@ namespace mir
 
     private:
         void DrawTitleBar();
+        // Returns Play/TogglePause/Stop if one of the toolbar's buttons was
+        // clicked this frame, else None.
+        SceneMenuAction DrawPlayControls(const EngineModeState &mode);
 
         bool mInitialized = false;
         bool mShowStyleEditor = false;
@@ -81,5 +92,6 @@ namespace mir
         std::vector<PixelRect> mTitleBarInteractiveRects;
         LogPanel mLogPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
+        EditorCamera mCamera;
     };
 }

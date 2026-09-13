@@ -4,7 +4,7 @@ The ECS, logging and asserts, executable-relative paths, and the surface contrac
 between a window and a renderer. It knows nothing about windows, graphics APIs or
 assets, and has to stay that way.
 
-`mir::core` · depends nothing engine-side; `glm` (public, in component headers), `spdlog` (private) · API `modules/core/include/core/` · maintainer Sumin Park · reviewed 2026-09-06
+`mir::core` · depends nothing engine-side; `glm` (public, in component headers), `spdlog` (private) · API `modules/core/include/core/` · maintainer Sumin Park · reviewed 2026-09-12
 
 ## Model
 
@@ -16,6 +16,15 @@ logging library in a public header. `fs/` resolves paths against the executable
 rather than the working directory, so a copied build tree still runs.
 `platform/` declares `ISurfaceProvider`, which lets a renderer take a drawing
 surface from something without knowing that it is a window.
+
+### Engine mode
+
+`EngineModeState`, a `World` resource, is `EngineMode{Edit, Play}` plus
+`PlayState{Running, Paused}` as its own axis — Play has a running/paused
+sub-state, Edit does not. Systems can check `IsSimulating(world)`/ `IsEditing`/`IsPlaying`/`IsPaused` to check if they need to run. The
+raw setters (`SetEngineMode`/`SetPlayState`) only flip the flags — they carry no
+World snapshot/restore of their own; see [scene.md](scene.md)'s `PlaySnapshot`
+for that.
 
 ### Storage
 
@@ -76,6 +85,7 @@ const ComponentOps &health = ComponentRegistry::Instance().RegisterRuntime("Heal
 | `CommandBuffer` | `ecs/CommandBuffer.h` | Deferred structural changes |
 | `ISystem`, `SystemScheduler` | `ecs/System.h`, `ecs/SystemScheduler.h` | Per-frame work, and running it by phase |
 | `ISurfaceProvider` | `platform/Surface.h` | Native handle plus dimensions |
+| `EngineMode`, `PlayState`, `EngineModeState` | `ecs/EngineMode.h` | Edit/Play and Play's Running/Paused sub-state, as a `World` resource |
 
 `TypeIdOf<T>()` returns three things. `seq` is process-local and is used directly
 as a signature bit position. `hash` is FNV-1a of the name, stable across runs,
@@ -187,6 +197,12 @@ an entity spawned in one `OnStart` is visible to the next phase's `OnStart`.
 **`World` is neither copyable nor movable.** Archetypes hold pointers back into
 it.
 
+**`ForEachAliveEntity` walks every live entity, not a query's matched rows.**
+It exists for whole-World operations that cannot assume anything about which
+components are present — `PlaySnapshot`'s capture/restore ([scene.md](scene.md))
+is the one caller. A `Query` would miss any entity outside the types it was
+built for; this walks `EntityPool` directly instead.
+
 **Logging is initialised in `main`, outside `App`**, so a construction failure
 inside `App` is still visible. `Trace` and `Debug` compile out in Release and are
 free to leave in hot paths.
@@ -204,6 +220,10 @@ Tests in `modules/core/tests/`: `Archetype`, `Query`, `CommandBuffer`,
 
 Logging and asserts have no tests of their own. Every other test exercises them,
 and their failure mode is loud.
+
+`EngineModeState` and `ForEachAliveEntity` have no tests in this module. The
+former is flag-flipping with nothing to assert on in isolation; the latter is
+exercised by `scene`'s `PlaySnapshot.tests.cpp`, its one real caller.
 
 Missing: parallelism, dependency ordering, change detection, component lifecycle
 hooks, and row migration when a script component's layout changes.
@@ -227,6 +247,14 @@ hooks, and row migration when a script component's layout changes.
    `World::AddComponent` directly, rather than it being convention.
 
 ## Changed
+
+*2026-09-12* — **`EngineModeState` and `World::ForEachAliveEntity` added.** Was:
+no notion of Edit vs. Play in the ECS itself, and no way to enumerate every
+entity independent of a query's component filter. Now: `EngineMode.h`'s
+resource plus free-function readers, and `ForEachAliveEntity`, both driven by
+the Play/Pause feature — a Play session needs to know it's running, and
+stopping one needs to destroy every entity Play touched, including ones no
+`LoadedScene` or query happens to track.
 
 *2026-09-05* — **Sparse sets dropped; a fieldless component is a tag.** Was: two
 storage models, opted into per type with `MIR_COMPONENT_SPARSE`. Now: archetype
