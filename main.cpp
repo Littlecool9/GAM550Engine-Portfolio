@@ -2,53 +2,80 @@
 #include <assets/AssetBlob.h>
 #include <assets/AssetCache.h>
 #include <assets/AssetId.h>
-#include <core/ecs/TransformHierarchy.h>
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
+#include <core/log/LogHistory.h>
 #include <renderer/Shapes.h>
-#include <renderer/components/Camera.h>
 #include <renderer/components/MeshRenderer.h>
-#include <scene/SceneAsset.h>
 #include <script/components/ScriptRef.h>
 
-#include <glm/gtc/quaternion.hpp>
 #include <nlohmann/json.hpp>
 
-#include <cstdio>
+#include <charconv>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
+#include <vector>
 
 namespace
 {
-    /// The subset of a `game.json` main.cpp needs to stand up an App. There
-    /// is no project *selection* yet - LoadGameProject is called with one
-    /// hardcoded path below - this only establishes what a project's on-disk
-    /// shape is: a games/<name>/ directory holding its own assets/, scenes/,
-    /// and a manifest naming both, mirroring the SOURCE_ROOTS convention
-    /// engine_cook_assets already documents (see cmake/Assets.cmake).
-    struct GameProject
+    /// What the command line asked for. Both are optional: no --game loads
+    /// engine.json's defaultGame, no --frames runs until the window closes.
+    struct LaunchOptions
     {
-        std::string mTitle = "MjolnirEngine";
-        std::string mAssetsRoot = "assets";
-        std::string mSceneDir = "scenes/default";
+        std::string mGameDir;
+        uint64_t mMaxFrames = 0;
     };
 
-    /// Falls back to GameProject{}'s defaults (with a logged reason) rather
-    /// than failing main() outright - a missing or malformed game.json is a
-    /// content problem, not a reason the engine shouldn't start.
-    GameProject LoadGameProject(const std::filesystem::path &path)
+    /// `[--game <dir>] [--frames <N>]`. Anything else is logged and fails,
+    /// so a mistyped flag can't quietly fall through to the default game.
+    std::optional<LaunchOptions> ParseLaunchOptions(int argc, char **argv)
     {
-        GameProject project;
+        LaunchOptions options;
+
+        for (int i = 1; i < argc; ++i)
+        {
+            const std::string_view arg = argv[i];
+            if (arg == "--game" && i + 1 < argc)
+            {
+                options.mGameDir = argv[++i];
+            }
+            else if (arg == "--frames" && i + 1 < argc)
+            {
+                const std::string_view value = argv[++i];
+                const auto [parsedEnd, ec] = std::from_chars(value.data(), value.data() + value.size(), options.mMaxFrames);
+                if (ec != std::errc{} || parsedEnd != value.data() + value.size() || options.mMaxFrames == 0)
+                {
+                    MIR_LOG_ERROR("--frames expects a positive integer, got '{}'", value);
+                    return std::nullopt;
+                }
+            }
+            else
+            {
+                MIR_LOG_ERROR("unrecognized argument '{}' (usage: [--game <dir>] [--frames <N>])", arg);
+                return std::nullopt;
+            }
+        }
+
+        return options;
+    }
+
+    /// engine.json's defaultGame, read from next to the executable - the
+    /// game to load when --game isn't given.
+    std::optional<std::string> ReadDefaultGame()
+    {
+        const std::filesystem::path path = mir::ExecutableDir() / "engine.json";
 
         std::ifstream in(path);
         if (!in)
         {
-            MIR_LOG_ERROR("LoadGameProject: could not open '{}', using defaults", path.string());
-            return project;
+            MIR_LOG_ERROR("no --game given and could not open '{}'", path.string());
+            return std::nullopt;
         }
 
         nlohmann::json json;
@@ -58,14 +85,136 @@ namespace
         }
         catch (const nlohmann::json::parse_error &e)
         {
-            MIR_LOG_ERROR("LoadGameProject: '{}' is not valid JSON ({}), using defaults", path.string(), e.what());
-            return project;
+            MIR_LOG_ERROR("'{}' is not valid JSON ({})", path.string(), e.what());
+            return std::nullopt;
         }
 
-        project.mTitle = json.value("title", project.mTitle);
-        project.mAssetsRoot = json.value("assetsRoot", project.mAssetsRoot);
-        project.mSceneDir = json.value("sceneDir", project.mSceneDir);
+        const auto it = json.find("defaultGame");
+        if (it == json.end() || !it->is_string() || it->get<std::string>().empty())
+        {
+            MIR_LOG_ERROR("no --game given and '{}' names no defaultGame", path.string());
+            return std::nullopt;
+        }
+
+        return it->get<std::string>();
+    }
+
+    /// Brings --game or defaultGame into the one form asset ids can be built
+    /// from. The cooker hashed "games/<name>/assets/...", so "games\<name>\",
+    /// "./games/<name>" and an absolute path into the run directory all have
+    /// to come out as "games/<name>". Nullopt (logged) for a directory outside
+    /// the run directory or not there at all.
+    std::optional<std::filesystem::path> NormalizeGameDir(const std::string &requested)
+    {
+        const std::filesystem::path &exeDir = mir::ExecutableDir();
+
+        std::filesystem::path dir = std::filesystem::path(requested).lexically_normal();
+        if (dir.is_absolute())
+            dir = dir.lexically_relative(exeDir.lexically_normal());
+
+        // lexically_normal keeps a trailing separator as an empty filename
+        if (!dir.empty() && dir.filename().empty())
+            dir = dir.parent_path();
+
+        if (dir.empty() || dir == "." || dir.has_root_path() || *dir.begin() == "..")
+        {
+            MIR_LOG_ERROR("game directory '{}' is not inside '{}'", requested, exeDir.string());
+            return std::nullopt;
+        }
+
+        std::error_code ec;
+        if (!std::filesystem::is_directory(exeDir / dir, ec))
+        {
+            MIR_LOG_ERROR("game directory '{}' does not exist", (exeDir / dir).string());
+            return std::nullopt;
+        }
+
+        return dir;
+    }
+
+    /// Everything main.cpp derives from a game directory. The paths inside
+    /// game.json are relative to that directory, so a game can be renamed or
+    /// copied without editing it.
+    struct GameProject
+    {
+        std::string mTitle = "MjolnirEngine";
+
+        // "<gameDir>/<assetsRoot>" exactly as the cooker hashed it into this
+        // game's asset ids, e.g. "games/<name>/assets" - not a disk path
+        std::string mAssetIdRoot;
+
+        std::filesystem::path mSceneDir;
+        std::filesystem::path mProjectSettingsPath;
+    };
+
+    /// Nullopt when `gameDir` has no game.json: that file is what makes a
+    /// directory a game (CMakeLists.txt discovers games the same way), and a
+    /// wrong --game should stop here rather than open an empty scene. A
+    /// game.json that fails to parse still loads, on the defaults below, with
+    /// a logged reason - a content problem, not a reason not to start.
+    std::optional<GameProject> LoadGameProject(const std::filesystem::path &gameDir)
+    {
+        const std::filesystem::path root = mir::ExecutableDir() / gameDir;
+        const std::filesystem::path manifestPath = root / "game.json";
+
+        std::ifstream in(manifestPath);
+        if (!in)
+        {
+            MIR_LOG_ERROR("LoadGameProject: no game.json in '{}', not a game directory", root.string());
+            return std::nullopt;
+        }
+
+        GameProject project;
+
+        // This default is repeated in CMakeLists.txt, which cooks the same root
+        std::string assetsRoot = "assets";
+        std::string sceneDir = "scenes/default";
+
+        nlohmann::json json;
+        try
+        {
+            in >> json;
+        }
+        catch (const nlohmann::json::parse_error &e)
+        {
+            MIR_LOG_ERROR("LoadGameProject: '{}' is not valid JSON ({}), using defaults", manifestPath.string(), e.what());
+        }
+
+        if (json.is_object())
+        {
+            project.mTitle = json.value("title", project.mTitle);
+            assetsRoot = json.value("assetsRoot", assetsRoot);
+            sceneDir = json.value("sceneDir", sceneDir);
+        }
+
+        // Normalized the way the cooker's NormalizeRoot is, so "assets/" and
+        // "./assets" produce the same ids as "assets"
+        std::string idRoot = (gameDir / assetsRoot).lexically_normal().generic_string();
+        while (!idRoot.empty() && idRoot.back() == '/')
+            idRoot.pop_back();
+
+        project.mAssetIdRoot = std::move(idRoot);
+        project.mSceneDir = root / sceneDir;
+        project.mProjectSettingsPath = root / "project_settings.json";
         return project;
+    }
+
+    /// --game if given, else engine.json's defaultGame. Every failure on the
+    /// way is logged where it happens.
+    std::optional<GameProject> ResolveGameProject(const LaunchOptions &options)
+    {
+        std::optional<std::string> requested = options.mGameDir;
+        if (options.mGameDir.empty())
+            requested = ReadDefaultGame();
+        if (!requested)
+            return std::nullopt;
+
+        const std::optional<std::filesystem::path> gameDir = NormalizeGameDir(*requested);
+        if (!gameDir)
+            return std::nullopt;
+
+        MIR_LOG_INFO("Loading game '{}'", gameDir->generic_string());
+        return LoadGameProject(*gameDir);
     }
 
     /// Loads a `.lua` asset by its cooked path and registers it with the
@@ -111,7 +260,7 @@ namespace
                     return;
 
                 const std::string name = ref.scriptName;
-                const std::string assetPath = project.mAssetsRoot + "/scripts/" + name + ".lua";
+                const std::string assetPath = project.mAssetIdRoot + "/scripts/" + name + ".lua";
 
                 if (!LoadScriptAsset(app, assetPath, name))
                 {
@@ -177,7 +326,7 @@ namespace
             {
                 if (renderer.mesh.IsNull() && renderer.meshName[0] != '\0')
                 {
-                    const std::string assetPath = project.mAssetsRoot + "/" + renderer.meshName;
+                    const std::string assetPath = project.mAssetIdRoot + "/" + renderer.meshName;
                     const mir::AssetId id = mir::MakeAssetId(assetPath);
 
                     if (auto it = meshCache.find(id.value); it != meshCache.end())
@@ -215,65 +364,41 @@ namespace
             });
     }
 
-    void BuildScene(mir::App &app, const GameProject &project)
+    /// Whether the log history (the buffer behind the editor's Output panel)
+    /// holds an error. It is a bounded ring, far larger than a smoke run logs.
+    bool AnyErrorLogged()
     {
-        mir::World &world = app.GetWorld();
-        mir::LoadedScene &scene = app.Scene();
-
-        const mir::MeshData cube = mir::MakeCube();
-        const mir::MeshHandle cubeMesh = app.Renderer().CreateMesh(cube.vertices, cube.indices);
-
-        const mir::Entity cubeEntity = mir::CreateSceneEntity(world, scene);
-        mir::AddTransform(world, cubeEntity, mir::Transform{glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(1.0f)});
-        mir::MeshRenderer cubeRenderer{.mesh = cubeMesh};
-        std::snprintf(cubeRenderer.meshName, sizeof(cubeRenderer.meshName), "meshes/cube.mesh.json");
-        world.AddComponent<mir::MeshRenderer>(cubeEntity, cubeRenderer);
-
-        const std::string spinAssetPath = project.mAssetsRoot + "/scripts/spin.lua";
-        if (LoadScriptAsset(app, spinAssetPath, "spin"))
+        for (const mir::LogEntry &entry : mir::LogHistory::Snapshot())
         {
-            const int32_t spinInstance = app.Scripts().CreateInstance("spin");
-            mir::ScriptRef ref{.instanceRef = spinInstance};
-            std::snprintf(ref.scriptName, sizeof(ref.scriptName), "spin");
-            world.AddComponent<mir::ScriptRef>(cubeEntity, ref);
+            if (entry.level == mir::LogLevel::Error || entry.level == mir::LogLevel::Critical)
+                return true;
         }
-        else
-        {
-            MIR_LOG_ERROR("BuildScene: could not load '{}' - cube will not spin", spinAssetPath);
-        }
-
-        const mir::MaterialHandle unlitMaterial = app.Renderer().CreateMaterial(mir::MaterialDesc{.shaderName = "unlit"});
-
-        const mir::Entity unlitCube = mir::CreateSceneEntity(world, scene);
-        mir::AddTransform(world, unlitCube, mir::Transform{glm::vec3(1.8f, 0.0f, 0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(0.5f)});
-        mir::MeshRenderer unlitRenderer{.mesh = cubeMesh, .material = unlitMaterial};
-        std::snprintf(unlitRenderer.meshName, sizeof(unlitRenderer.meshName), "meshes/cube.mesh.json");
-        std::snprintf(unlitRenderer.materialShader, sizeof(unlitRenderer.materialShader), "unlit");
-        world.AddComponent<mir::MeshRenderer>(unlitCube, unlitRenderer);
-
-        const mir::Entity camera = mir::CreateSceneEntity(world, scene);
-        mir::AddTransform(world, camera, mir::Transform{glm::vec3(0.0f, 0.0f, 5.0f)});
-        world.AddComponent<mir::Camera>(camera, mir::Camera{});
+        return false;
     }
 }
 
-int main()
+int main(int argc, char **argv)
 {
     // Logging lives outside App so early construction failures are still visible.
     mir::InitLog();
 
-    // Single hardcoded project for now - no discovery/switcher yet, see
-    // GameProject's comment. This is what "games/HelloWorld/game.json exists"
-    // actually buys today: naming its assets/scenes roots in one place
-    // instead of stringing "games/HelloWorld/..." through main.cpp by hand.
-    const GameProject project = LoadGameProject(mir::ExecutableDir() / "games/HelloWorld/game.json");
+    // Resolved before App exists: a bad argument or game directory exits
+    // without ever showing the splash.
+    const std::optional<LaunchOptions> options = ParseLaunchOptions(argc, argv);
+    const std::optional<GameProject> project = options ? ResolveGameProject(*options) : std::nullopt;
+    if (!project)
+    {
+        mir::FlushLog();
+        return 1;
+    }
 
     mir::App app;
 
     mir::AppDesc desc{};
-    desc.mTitle = project.mTitle.c_str();
-    desc.mSceneDir = project.mSceneDir;
-    desc.mProjectSettingsPath = "games/HelloWorld/project_settings.json";
+    desc.mTitle = project->mTitle.c_str();
+    desc.mSceneDir = project->mSceneDir;
+    desc.mProjectSettingsPath = project->mProjectSettingsPath;
+    desc.mMaxFrames = options->mMaxFrames;
 
     if (!app.Initialize(desc))
     {
@@ -281,23 +406,21 @@ int main()
         return -1;
     }
 
-    // A scene.json in mSceneDir means a previous run saved one - load it
-    // instead of the hardcoded demo scene. First run (or a deleted/moved
-    // scene dir) falls back to BuildScene so there's still something on
-    // screen; LoadScene leaves the (empty, from Initialize) scene alone
-    // when it fails, so this can't silently double up entities either way.
-    if (app.LoadScene())
+    // A game with no saved scene yet keeps the empty scene Initialize made.
+    // Checked here rather than left to LoadScene, which logs a missing
+    // scene.json as an error because from the File menu it is one.
+    std::error_code ec;
+    if (!std::filesystem::exists(project->mSceneDir / "scene.json", ec))
+    {
+        MIR_LOG_INFO("No scene.json in '{}', starting with an empty scene", project->mSceneDir.string());
+    }
+    else if (app.LoadScene())
     {
         app.Splash().SetProgress("Resolving scripts...", 0.93f);
-        ResolveSceneScripts(app, project);
+        ResolveSceneScripts(app, *project);
 
         app.Splash().SetProgress("Resolving meshes...", 0.97f);
-        ResolveSceneMeshes(app, project);
-    }
-    else
-    {
-        app.Splash().SetProgress("Building scene...", 0.95f);
-        BuildScene(app, project);
+        ResolveSceneMeshes(app, *project);
     }
 
     // Only now is startup actually done - close explicitly rather than
@@ -308,6 +431,10 @@ int main()
     app.Run();
     app.Shutdown();
 
+    // A bounded run is how the smoke tests drive this, and an error in the
+    // log fails one as surely as a crash. Unbounded runs exit 0 as before.
+    const int exitCode = (options->mMaxFrames != 0 && AnyErrorLogged()) ? 1 : 0;
+
     mir::FlushLog();
-    return 0;
+    return exitCode;
 }

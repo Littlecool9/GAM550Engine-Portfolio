@@ -31,6 +31,7 @@ while not ShouldClose:
     ScriptReloadWatcher::Poll
     SystemScheduler::Update            PreUpdate, Update, PostUpdate, Render
     ++frame
+    if mMaxFrames reached: RequestClose
 ```
 
 `App` contains no ImGui call and never builds a `DrawItem`. The editor produces a
@@ -66,7 +67,7 @@ Systems are registered on `app.Systems()` between `Initialize` and `Run`.
 
 | Type | Header | Role |
 |---|---|---|
-| `AppDesc` | `app/App.h` | Window size and title, Vulkan app name and validation, editor-layout gate, `dt` clamp, scene directory |
+| `AppDesc` | `app/App.h` | Window size and title, Vulkan app name and validation, editor-layout gate, `dt` clamp, frame limit, scene directory |
 | `App` | `app/App.h` | Owns the subsystems, runs the loop |
 
 Accessors: `GetWorld()`, `Systems()`, `Scripts()`, `ScriptReload()`, `Splash()`,
@@ -146,10 +147,12 @@ scenes save and load from the editor's File menu, and the scene renders.
 The renderer is a value member rather than a `unique_ptr`, because there is no
 interface to hold.
 
-No tests. `App` is composition, and its behaviour is a window opening, a device
-initialising and a loop running. The parts worth asserting — phase ordering,
-command buffer flushing, asset lookup, scene round-tripping — are tested where
-they live. A headless renderer is the prerequisite for testing anything here.
+No unit tests. `App` is composition, and its behaviour is a window opening, a
+device initialising and a loop running. The parts worth asserting — phase
+ordering, command buffer flushing, asset lookup, scene round-tripping — are
+tested where they live. A headless renderer is the prerequisite for unit testing
+anything here. Until then the `smoke.<game>` tests run the whole `App` for 120
+frames per game, through `mMaxFrames`, and fail on a crash or a logged error.
 
 ## Backlog
 
@@ -162,12 +165,13 @@ they live. A headless renderer is the prerequisite for testing anything here.
 4. **`Initialize` after `Shutdown`** is written to work — the sticky asset flag
    and the explicit resets exist for it — but nothing exercises it.
 5. One `App` per process is assumed everywhere, and nothing enforces it.
-6. **The runtime is still `HelloWorld` plus glue in `main.cpp`.** The
-   game-directory-loading executable that
-   [game-as-data](../architecture.md#principles) describes does not exist, which
-   is also why the name-to-handle resolve passes live in `main.cpp`.
 
 ## Changed
+
+*2026-09-14* — **`AppDesc::mMaxFrames`.** Was: `Run` ended only when someone
+closed the window, so nothing could drive the engine unattended. Now: after
+`mMaxFrames` frames `Run` calls `Window::RequestClose`, the same exit as the
+close button. `main.cpp`'s `--frames` sets it for the `smoke.<game>` tests.
 
 *2026-09-03* — **Drawing left `App::Run`.** Was: `CollectDrawInstances` and
 `DrawFrame` called by hand between scheduler phases, so draw-list assembly had no

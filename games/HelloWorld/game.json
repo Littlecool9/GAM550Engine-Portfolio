@@ -1,6 +1,6 @@
 {
     "name": "HelloWorld",
     "title": "MjolnirEngine - HelloWorld",
-    "assetsRoot": "games/HelloWorld/assets",
-    "sceneDir": "games/HelloWorld/scenes/default"
+    "assetsRoot": "assets",
+    "sceneDir": "scenes/default"
 }

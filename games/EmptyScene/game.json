@@ -1,0 +1,6 @@
+{
+    "name": "EmptyScene",
+    "title": "MjolnirEngine - EmptyScene",
+    "assetsRoot": "assets",
+    "sceneDir": "scenes/default"
+}

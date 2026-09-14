@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.26)
+cmake_minimum_required(VERSION 3.26)
 
 # Must come before project(): CMAKE_TOOLCHAIN_FILE is only honoured there.
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/VcpkgToolchain.cmake)
@@ -49,37 +49,78 @@ add_subdirectory(modules/window)
 
 add_subdirectory(tools/AssetCooker)
 
-add_executable(HelloWorld WIN32)
-target_sources(HelloWorld PRIVATE main.cpp)
+add_executable(MjolnirEngine WIN32)
+target_sources(MjolnirEngine PRIVATE main.cpp)
 
 if(MSVC)
-    set_target_properties(HelloWorld PROPERTIES LINK_FLAGS "/ENTRY:mainCRTStartup")
+    set_target_properties(MjolnirEngine PROPERTIES LINK_FLAGS "/ENTRY:mainCRTStartup")
 endif()
 
-engine_add_shaders(HelloWorld
+engine_add_shaders(MjolnirEngine
     SOURCE assets/shaders/triangle.slang
     ENTRIES vertexMain:vertex fragmentMain:fragment)
 
-engine_add_shaders(HelloWorld
+engine_add_shaders(MjolnirEngine
     SOURCE assets/shaders/unlit.slang
     ENTRIES vertexMain:vertex fragmentMain:fragment)
 
-engine_cook_assets(HelloWorld
-    SOURCE_ROOTS assets/ games/HelloWorld/assets/
+# A directory under games/ is a game when it has a game.json, the same rule
+# main.cpp applies at runtime. Adding a game, or editing a game.json, re-runs
+# configure.
+file(GLOB game_manifests CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/games/*/game.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${game_manifests})
+
+set(game_names "")
+set(game_asset_roots "")
+foreach(manifest IN LISTS game_manifests)
+    get_filename_component(game_dir "${manifest}" DIRECTORY)
+    get_filename_component(game_name "${game_dir}" NAME)
+    list(APPEND game_names "${game_name}")
+
+    file(READ "${manifest}" game_json)
+    string(JSON game_json_length ERROR_VARIABLE game_json_error LENGTH "${game_json}")
+    if(game_json_error)
+        message(WARNING "${manifest} is not valid JSON (${game_json_error}), cooking its default assets root")
+    endif()
+
+    # Same default as GameProject in main.cpp
+    string(JSON assets_root ERROR_VARIABLE assets_root_error GET "${game_json}" assetsRoot)
+    if(assets_root_error)
+        set(assets_root "assets")
+    endif()
+
+    # A game without assets is fine, but AssetCooker fails on a missing root.
+    # ABSOLUTE collapses "./" so the relative root hashes like main.cpp's.
+    get_filename_component(assets_abs "${game_dir}/${assets_root}" ABSOLUTE)
+    if(IS_DIRECTORY "${assets_abs}")
+        file(RELATIVE_PATH assets_rel "${CMAKE_SOURCE_DIR}" "${assets_abs}")
+        list(APPEND game_asset_roots "${assets_rel}")
+    endif()
+endforeach()
+
+engine_cook_assets(MjolnirEngine
+    SOURCE_ROOTS assets/ ${game_asset_roots}
     OUT_DIR ${CMAKE_BINARY_DIR}/cooked_assets)
 
-engine_copy_fonts(HelloWorld SOURCE_DIR fonts)
-engine_copy_branding(HelloWorld SOURCE_DIR branding)
+engine_copy_fonts(MjolnirEngine SOURCE_DIR fonts)
+engine_copy_branding(MjolnirEngine SOURCE_DIR branding)
 
-add_custom_command(TARGET HelloWorld POST_BUILD
+# A target of its own rather than POST_BUILD: POST_BUILD runs only when the
+# executable relinks, so a game added or edited without a code change never
+# reached the run directory. This runs on every build; the *_if_different
+# commands skip files that already match.
+add_custom_target(MjolnirEngine_copy_games
     COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
-            "${CMAKE_SOURCE_DIR}/games" "$<TARGET_FILE_DIR:HelloWorld>/games"
-    COMMENT "Copying game projects next to HelloWorld"
+            "${CMAKE_SOURCE_DIR}/games" "$<TARGET_FILE_DIR:MjolnirEngine>/games"
+    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/engine.json" "$<TARGET_FILE_DIR:MjolnirEngine>/engine.json"
+    COMMENT "Copying game projects and engine.json next to MjolnirEngine"
     VERBATIM)
+add_dependencies(MjolnirEngine MjolnirEngine_copy_games)
 
 find_package(nlohmann_json CONFIG REQUIRED)
 
-target_link_libraries(HelloWorld PRIVATE
+target_link_libraries(MjolnirEngine PRIVATE
     mir::app
     mir::assets
     mir::core
@@ -88,3 +129,17 @@ target_link_libraries(HelloWorld PRIVATE
     mir::script
     nlohmann_json::nlohmann_json
 )
+
+# One smoke test per game: start it, run a fixed number of frames, close the
+# window. main.cpp exits non-zero if anything was logged as an error, so a
+# broken game fails without crashing. Needs a GPU and a display; skip these
+# with `ctest -LE smoke`.
+if(BUILD_TESTING)
+    foreach(game_name IN LISTS game_names)
+        add_test(NAME smoke.${game_name}
+            COMMAND MjolnirEngine --game games/${game_name} --frames 120)
+        set_tests_properties(smoke.${game_name} PROPERTIES
+            LABELS smoke
+            TIMEOUT 120)
+    endforeach()
+endif()

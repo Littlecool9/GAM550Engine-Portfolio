@@ -40,6 +40,9 @@ namespace mir
 
         float mMaxDeltaSeconds = 0.25f;
 
+        // Run requests a close after this many frames; 0 runs until the window closes
+        uint64_t mMaxFrames = 0;
+
         // temp default path for scenes
         std::filesystem::path mSceneDir = "scenes/default";
 

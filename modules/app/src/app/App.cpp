@@ -229,6 +229,10 @@ namespace mir
             mScheduler.Update(context);
 
             ++mFrame;
+
+            // same path as the close button, so the loop and Shutdown see an ordinary exit
+            if (mDesc.mMaxFrames != 0 && mFrame >= mDesc.mMaxFrames)
+                mWindow->RequestClose();
         }
     }
 
