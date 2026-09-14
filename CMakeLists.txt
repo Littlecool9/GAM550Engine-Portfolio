@@ -142,4 +142,18 @@ if(BUILD_TESTING)
             LABELS smoke
             TIMEOUT 120)
     endforeach()
+
+    # HelloWorld -> EmptyScene -> HelloWorld mid-run, through App::OpenProject:
+    # the path Project > Open Project takes, minus the confirmation dialog.
+    # Coming back re-creates meshes and materials after a release.
+    if(EXISTS "${CMAKE_SOURCE_DIR}/games/HelloWorld/game.json"
+       AND EXISTS "${CMAKE_SOURCE_DIR}/games/EmptyScene/game.json")
+        add_test(NAME smoke.switch
+            COMMAND MjolnirEngine --game games/HelloWorld
+                    --switch-to games/EmptyScene --switch-to games/HelloWorld
+                    --frames 180)
+        set_tests_properties(smoke.switch PROPERTIES
+            LABELS smoke
+            TIMEOUT 120)
+    endif()
 endif()

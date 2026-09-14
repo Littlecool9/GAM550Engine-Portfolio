@@ -9,6 +9,8 @@
 
 #include <app/App.h>
 
+#include "SceneResolve.h"
+
 #include <core/EngineVersion.h>
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/DeferredAccess.h>
@@ -26,6 +28,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <system_error>
+#include <utility>
 
 namespace mir
 {
@@ -37,11 +42,8 @@ namespace mir
     bool App::Initialize(const AppDesc &desc)
     {
         mDesc = desc;
-
-        if (mDesc.mSceneDir.is_relative())
-            mDesc.mSceneDir = ExecutableDir() / mDesc.mSceneDir;
-        if (mDesc.mProjectSettingsPath.is_relative())
-            mDesc.mProjectSettingsPath = ExecutableDir() / mDesc.mProjectSettingsPath;
+        mProject = desc.mProject;
+        mNextProjectSwitch = 0;
 
         EnsureDpiAware();
 
@@ -57,7 +59,7 @@ namespace mir
         WindowDesc windowDesc{};
         windowDesc.mWidth = desc.mWidth;
         windowDesc.mHeight = desc.mHeight;
-        windowDesc.mTitle = desc.mTitle;
+        windowDesc.mTitle = mProject.mTitle.c_str();
         windowDesc.mMaximized = true;
         windowDesc.mCustomTitleBar = desc.mEnableEditorLayout;
         windowDesc.mStartHidden = true;
@@ -80,7 +82,7 @@ namespace mir
         }
 
         mSplash.SetProgress("Initializing editor...", 0.5f);
-        if (!mEditor.Initialize(*mWindow, mRenderer, mDesc.mProjectSettingsPath))
+        if (!mEditor.Initialize(*mWindow, mRenderer, mProject.mProjectSettingsPath))
         {
             MIR_LOG_ERROR("Editor initialization failed");
             mRenderer.Shutdown();
@@ -103,7 +105,7 @@ namespace mir
         // defers structural change
         mWorld.EmplaceResource<FrameCommands>(FrameCommands{&mCommands});
 
-        mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mDesc.mProjectSettingsPath));
+        mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mProject.mProjectSettingsPath));
         mWorld.EmplaceResource<InputState>();
 
         mScheduler.AddSystem<InputSystem>(SystemPhase::PreUpdate, *mWindow);
@@ -115,37 +117,110 @@ namespace mir
 
         mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
+        // Found once: a game added while running would still need a build to
+        // cook its assets, and the asset manifest is never re-read
+        mAvailableProjects = DiscoverGameProjects();
+        mProjectMenu.clear();
+        for (const GameProject &project : mAvailableProjects)
+            mProjectMenu.push_back(ProjectMenuEntry{project.mDir, project.mName});
+
         mSplash.SetProgress("Loading scene...", 0.9f);
         mScene = mir::NewScene("untitled");
+        LoadProjectScene();
 
         mWindow->Show();
 
         return true;
     }
 
+    bool App::OpenProject(const std::string &requestedDir)
+    {
+        if (!mInitialized)
+            return false;
+
+        // Resolved before anything is torn down, so a bad directory leaves the
+        // open game exactly as it was
+        std::optional<GameProject> project = ResolveGameProject(requestedDir);
+        if (!project.has_value())
+        {
+            MIR_LOG_ERROR("App::OpenProject: could not open '{}', '{}' stays open", requestedDir, mProject.mDir);
+            return false;
+        }
+
+        NewScene();
+
+        // The old game's scripts must not answer for the new one's; a script of
+        // the same name loads its own source when the new scene resolves
+        mScriptReloadWatcher.UnloadAll();
+
+        mProject = std::move(*project);
+        mWindow->SetTitle(mProject.mTitle);
+
+        // Assigned rather than re-emplaced, so references to the resource stay valid
+        mWorld.Resource<InputMap>() = InputMap::LoadFile(mProject.mProjectSettingsPath);
+        mEditor.SetProjectSettingsPath(mProject.mProjectSettingsPath);
+
+        LoadProjectScene();
+        return true;
+    }
+
     void App::NewScene(std::string name)
     {
-        UnloadScene(mWorld, mScene);
+        UnloadCurrentScene();
         mScene = mir::NewScene(std::move(name));
     }
 
     bool App::SaveScene()
     {
-        return mir::SaveScene(mWorld, mDesc.mSceneDir, mScene);
+        return mir::SaveScene(mWorld, mProject.mSceneDir, mScene);
     }
 
     bool App::LoadScene()
     {
-        // scene hardcoded at the moment
-        if (!std::filesystem::exists(mDesc.mSceneDir / "scene.json"))
+        if (!std::filesystem::exists(mProject.mSceneDir / "scene.json"))
         {
-            MIR_LOG_ERROR("App::LoadScene: no scene.json in '{}'", mDesc.mSceneDir.string());
+            MIR_LOG_ERROR("App::LoadScene: no scene.json in '{}'", mProject.mSceneDir.string());
             return false;
         }
 
-        UnloadScene(mWorld, mScene);
-        mScene = mir::LoadScene(mWorld, mDesc.mSceneDir);
+        UnloadCurrentScene();
+        mScene = mir::LoadScene(mWorld, mProject.mSceneDir);
+
+        // SceneIO restores only the names a scene file saves; these turn them
+        // back into this run's script instances and GPU handles
+        ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
+        ResolveSceneMeshes(mWorld, mRenderer, Assets(), mProject.mAssetIdRoot);
         return true;
+    }
+
+    void App::UnloadCurrentScene()
+    {
+        UnloadScene(mWorld, mScene);
+
+        // Only scene entities carry mesh and material handles, and they are gone
+        mRenderer.ReleaseSceneResources();
+    }
+
+    void App::LoadProjectScene()
+    {
+        std::error_code ec;
+        if (std::filesystem::exists(mProject.mSceneDir / "scene.json", ec))
+            LoadScene();
+        else
+            MIR_LOG_INFO("No scene.json in '{}', starting with an empty scene", mProject.mSceneDir.string());
+    }
+
+    void App::RunProjectSwitches()
+    {
+        const std::size_t count = mDesc.mProjectSwitches.size();
+        if (mDesc.mMaxFrames == 0 || mNextProjectSwitch >= count)
+            return;
+
+        const uint64_t dueFrame = mDesc.mMaxFrames * (mNextProjectSwitch + 1) / (count + 1);
+        if (mFrame < dueFrame)
+            return;
+
+        OpenProject(mDesc.mProjectSwitches[mNextProjectSwitch++]);
     }
 
     AssetCache *App::Assets()
@@ -202,7 +277,10 @@ namespace mir
 
             if (mWindow->Width() != 0 && mWindow->Height() != 0)
             {
-                switch (mEditor.DrawLayout(mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>()))
+                const EditorActions actions = mEditor.DrawLayout(
+                    mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mProjectMenu, mProject.mDir);
+
+                switch (actions.mScene)
                 {
                 case SceneMenuAction::New:
                     NewScene();
@@ -216,6 +294,9 @@ namespace mir
                 case SceneMenuAction::None:
                     break;
                 }
+
+                if (!actions.mOpenProject.empty())
+                    OpenProject(actions.mOpenProject);
             }
 
             mRenderer.SetImGuiDrawData(mEditor.EndFrame());
@@ -229,6 +310,8 @@ namespace mir
             mScheduler.Update(context);
 
             ++mFrame;
+
+            RunProjectSwitches();
 
             // same path as the close button, so the loop and Shutdown see an ordinary exit
             if (mDesc.mMaxFrames != 0 && mFrame >= mDesc.mMaxFrames)

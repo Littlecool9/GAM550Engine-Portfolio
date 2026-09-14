@@ -146,16 +146,17 @@ dispatch with isolated errors and independent state, `CommandBuffer`-deferred
 structural changes, and mtime-poll hot reload. All of it has been exercised end
 to end against the running app. LuaJIT is the shipped backend.
 
-Tests: `modules/script/tests/WorldBindings.tests.cpp`. Much of the rest was
-verified by hand rather than automated — independent per-entity state, a live
-edit reaching a running instance, and a deliberate error thrown from inside a
-`world:each` callback being caught and logged.
+Tests: `modules/script/tests/WorldBindings.tests.cpp`, and
+`ScriptReloadWatcher.tests.cpp` for `UnloadAll`. Much of the rest was verified by
+hand rather than automated — independent per-entity state, a live edit reaching a
+running instance, and a deliberate error thrown from inside a `world:each`
+callback being caught and logged.
 
 `ScriptRef.scriptName` exists so scene files can round-trip which script an
 entity runs. `instanceRef` is this run's live state and is deliberately not
-saved. Resolving the name back into an `instanceRef` after a scene load is a
-manual pass in `main.cpp`, `ResolveSceneScripts`, rather than something this
-module or `scene` does.
+saved. Resolving the name back into an `instanceRef` after a scene load is
+`ResolveSceneScripts`, a private pass in `app` that `App::LoadScene` runs, rather
+than something this module or `scene` does.
 
 ## Backlog
 
@@ -163,20 +164,24 @@ module or `scene` does.
    only a bare `World` and a `sol::state` — no window, no renderer. Binding
    round-trips, per-instance isolation, a deferred mutation issued from inside a
    callback, and the `Entity`-as-userdata precision case are all candidates.
-2. **A home for `ResolveSceneScripts` and `ResolveSceneMeshes`**, once a second
-   consumer would otherwise duplicate them.
-3. **`world:each` builds a fresh Lua table per matched entity per term, every
+2. **`world:each` builds a fresh Lua table per matched entity per term, every
    call**, even though the `RuntimeQuery` itself is now cached. Whether that
    allocation is worth avoiding is unmeasured.
-4. **No script-facing default for a native component's field**, the way
+3. **No script-facing default for a native component's field**, the way
    `NewInstanceData()` gives one for a script's own state. `world:add` with no
    fields table uses whatever `ComponentOps` registered, which is a C++-side
    decision a script cannot override per call site.
-5. Confirm the LuaJIT and plain-Lua swap stays a `vcpkg.json` entry plus one
+4. Confirm the LuaJIT and plain-Lua swap stays a `vcpkg.json` entry plus one
    CMake block, across a future sol2 upgrade that changes how it detects the
    flavour underneath.
 
 ## Changed
+
+*2026-09-14* — **`ScriptReloadWatcher::UnloadAll`.** Was: the watcher only ever
+gained scripts, so after another game opened, the previous game's scripts stayed
+loaded in the host and kept being polled. Now: `UnloadAll` unloads every tracked
+script from the host and stops watching it, and `App::OpenProject` calls it when
+it closes a game.
 
 *2026-09-05* — **Asset copying was fixed to run on an asset-only change.** Was: a
 `POST_BUILD` command in `cmake/Assets.cmake` that shared its target's up-to-date

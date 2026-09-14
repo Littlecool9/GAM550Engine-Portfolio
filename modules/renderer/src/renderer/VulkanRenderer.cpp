@@ -1162,6 +1162,45 @@ namespace mir
         mMaterials.clear();
     }
 
+    void VulkanRenderer::ReleaseSceneResources()
+    {
+        if (mDevice == VK_NULL_HANDLE)
+            return;
+
+        // frames still in flight may be drawing with these buffers and pipelines
+        vkDeviceWaitIdle(mDevice);
+
+        const std::size_t meshCount = mMeshes.size();
+        DestroyMeshes();
+
+        if (mDefaultMaterial.IsNull() || mDefaultMaterial.mIndex >= mMaterials.size())
+        {
+            const std::size_t materialCount = mMaterials.size();
+            DestroyMaterials();
+            MIR_LOG_INFO("Released {} meshes and {} materials", meshCount, materialCount);
+            return;
+        }
+
+        // The default material outlives every scene: DrawFrame falls back to
+        // it for any item without a material of its own.
+        const GpuMaterial defaultMaterial = mMaterials[mDefaultMaterial.mIndex];
+        std::size_t released = 0;
+        for (std::size_t i = 0; i < mMaterials.size(); ++i)
+        {
+            if (i == mDefaultMaterial.mIndex)
+                continue;
+            if (mMaterials[i].mPipeline != VK_NULL_HANDLE)
+                vkDestroyPipeline(mDevice, mMaterials[i].mPipeline, nullptr);
+            ++released;
+        }
+
+        mMaterials.clear();
+        mMaterials.push_back(defaultMaterial);
+        mDefaultMaterial = MaterialHandle{0, 0};
+
+        MIR_LOG_INFO("Released {} meshes and {} materials", meshCount, released);
+    }
+
     const VulkanRenderer::GpuMaterial *VulkanRenderer::FindMaterial(MaterialHandle handle) const
     {
         if (handle.IsNull() || handle.mIndex >= mMaterials.size())

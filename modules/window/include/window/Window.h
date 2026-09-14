@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 
 namespace mir
 {
@@ -55,6 +56,9 @@ namespace mir
         virtual bool HasCustomTitleBar() const { return false; }
         virtual const char *Title() const { return ""; }
 
+        // Replaces the title given at creation, e.g. when another game opens.
+        virtual void SetTitle(const std::string &title) {}
+
         virtual void SetTitleBarInteractiveRects(std::span<const PixelRect> rects) {}
 
         virtual void Minimize() {}
@@ -63,7 +67,7 @@ namespace mir
         virtual void RequestClose() {}
 
         virtual void Show() {}
-        
+
         virtual const RawInputSnapshot &RawInput() const
         {
             static const RawInputSnapshot kEmpty{};

@@ -8,6 +8,7 @@
  */
 #pragma once
 
+#include <app/GameProject.h>
 #include <core/ecs/CommandBuffer.h>
 #include <core/ecs/SystemScheduler.h>
 #include <core/ecs/World.h>
@@ -21,10 +22,13 @@
 #include <window/Splash.h>
 #include <window/Window.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace mir
 {
@@ -32,7 +36,6 @@ namespace mir
     {
         uint32_t mWidth = 1280;
         uint32_t mHeight = 720;
-        const char *mTitle = "MjolnirEngine";
         const char *mAppName = "MjolnirEngine";
         bool mEnableValidation = true;
 
@@ -43,11 +46,13 @@ namespace mir
         // Run requests a close after this many frames; 0 runs until the window closes
         uint64_t mMaxFrames = 0;
 
-        // temp default path for scenes
-        std::filesystem::path mSceneDir = "scenes/default";
+        // The game Initialize opens: window title, project settings and scene
+        GameProject mProject;
 
-        // Where the Project Settings window's Save button writes
-        std::filesystem::path mProjectSettingsPath = "project_settings.json";
+        // Test hook for bounded runs: game directories opened one after another,
+        // spread evenly across mMaxFrames, through the same OpenProject the
+        // editor's Project > Open Project menu uses
+        std::vector<std::string> mProjectSwitches;
     };
 
     class App
@@ -82,19 +87,43 @@ namespace mir
         // The scene currently in the World
         LoadedScene &Scene() { return mScene; }
 
+        // The game currently open
+        const GameProject &Project() const { return mProject; }
+
+        // Every game found next to the executable at startup
+        const std::vector<GameProject> &AvailableProjects() const { return mAvailableProjects; }
+
+        // Closes the open game and opens `requestedDir` (e.g. "games/EmptyScene"):
+        // its scene, scripts, GPU resources, input map and window title all
+        // switch over. False (logged) when the directory is not a game, in
+        // which case the open game is left exactly as it was.
+        bool OpenProject(const std::string &requestedDir);
+
         // Discards mScene's entities and replaces it with an empty one
         void NewScene(std::string name = "untitled");
 
-        // Writes Scene() to mSceneDir. False on I/O failure
+        // Writes Scene() to the open game's scene directory. False on I/O failure
         bool SaveScene();
 
-        // Discards mScene's entities and replaces it with mSceneDir's
-        // contents. False if mSceneDir has no scene.json to load.
+        // Discards mScene's entities and replaces them with the open game's
+        // saved scene, resolving its script and mesh names into live instances
+        // and GPU handles. False if the game has no scene.json to load.
         bool LoadScene();
 
     private:
         // context is rebuilt per tick
         SystemContext MakeContext(float dt);
+
+        // Unloads mScene - destroy hooks drop each entity's Lua instance - then
+        // frees the GPU meshes and materials nothing references any more
+        void UnloadCurrentScene();
+
+        // LoadScene when the open game has saved a scene; a new game without
+        // one keeps the empty scene, which is not an error
+        void LoadProjectScene();
+
+        // Opens the next of mDesc.mProjectSwitches once its frame has come
+        void RunProjectSwitches();
 
         SplashScreen mSplash;
         std::unique_ptr<Window> mWindow;
@@ -111,6 +140,10 @@ namespace mir
         LoadedScene mScene;
 
         AppDesc mDesc;
+        GameProject mProject;
+        std::vector<GameProject> mAvailableProjects;
+        std::vector<ProjectMenuEntry> mProjectMenu;
+        std::size_t mNextProjectSwitch = 0;
         double mElapsed = 0.0;
         uint64_t mFrame = 0;
 

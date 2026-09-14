@@ -97,8 +97,9 @@ Tests in `modules/scene/tests/SceneIO.tests.cpp`.
 
 Resolving names back into live handles after a load is not done here — a
 `ScriptRef.scriptName` into an `instanceRef`, or a mesh name into a `MeshHandle`.
-`main.cpp` does that, in `ResolveSceneScripts` and `ResolveSceneMeshes`, because
-it needs the renderer and the script host that this module does not link.
+`App::LoadScene` does that, through `ResolveSceneScripts` and
+`ResolveSceneMeshes` in `app`'s private `SceneResolve.cpp`, because it needs the
+renderer and the script host that this module does not link.
 
 ## Backlog
 
@@ -110,9 +111,7 @@ it needs the renderer and the script host that this module does not link.
 3. **Cross-scene references.** They need either a global id namespace or an
    explicit external-reference `FieldKind`, decided before any save file starts
    relying on today's silent-null behaviour.
-4. **A home for the resolve passes** currently in `main.cpp`, once a second
-   consumer would otherwise duplicate them.
-5. **Load is O(entities × registered components)** for the `Has` sweep. If that
+4. **Load is O(entities × registered components)** for the `Has` sweep. If that
    shows up in a profile on a large scene, have each entity file list its
    component names ahead of the blobs, so load can call `Find` per name instead
    of sweeping the whole registry per entity.

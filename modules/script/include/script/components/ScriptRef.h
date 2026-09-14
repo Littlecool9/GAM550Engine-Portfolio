@@ -17,7 +17,8 @@ namespace mir
         // not a runtime handle - unlike instanceRef, this is what a scene file
         // actually saves: instanceRef is only meaningful within one run's live
         // ScriptHost, so LoadScene re-derives it from this name instead of
-        // trying to restore the handle itself (see main.cpp's post-load pass).
+        // trying to restore the handle itself (see ResolveSceneScripts, run by
+        // App::LoadScene).
         char scriptName[kFieldStringCapacity] = {};
     };
 

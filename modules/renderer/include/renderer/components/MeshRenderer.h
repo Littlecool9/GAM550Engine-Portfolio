@@ -24,7 +24,7 @@ namespace mir
         // Runtime-only, like ScriptRef::instanceRef: a GPU upload handle from
         // this run's VulkanRenderer, meaningless after a restart. A scene
         // file stores meshName/materialShader instead (see below) and a
-        // post-load pass (main.cpp's ResolveSceneMeshes) turns those back
+        // post-load pass (ResolveSceneMeshes, run by App::LoadScene) turns those back
         // into these two - CreateMesh/CreateMaterial are what actually
         // upload, so nothing before that pass can fill them in.
         MeshHandle mesh;

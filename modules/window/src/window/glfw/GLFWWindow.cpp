@@ -183,6 +183,13 @@ namespace mir
         glfwSetWindowShouldClose(mHandle, GLFW_TRUE);
     }
 
+    void GLFWWindow::SetTitle(const std::string &title)
+    {
+        // mTitle first: the custom title bar draws Title(), not the OS caption
+        mTitle = title;
+        glfwSetWindowTitle(mHandle, mTitle.c_str());
+    }
+
     void GLFWWindow::Show()
     {
         glfwShowWindow(mHandle);

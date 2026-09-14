@@ -144,7 +144,7 @@ It is theme data, applied once by `editor` at startup.
 ```
 PollEvents                       close flag and framebuffer size refresh here
 dt = min(elapsed, mMaxDeltaSeconds)
-Editor::BeginFrame / DrawLayout / EndFrame -> ImDrawData*, SceneMenuAction
+Editor::BeginFrame / DrawLayout / EndFrame -> ImDrawData*, EditorActions (scene action, game to open)
 renderer.SetImGuiDrawData(...), renderer.SetSceneViewport(...)
 ScriptReloadWatcher::Poll        mtime check, throttled
 SystemScheduler::Update          PreUpdate, Update, PostUpdate, Render

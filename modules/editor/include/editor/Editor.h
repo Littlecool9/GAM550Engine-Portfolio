@@ -16,7 +16,9 @@
 #include <window/Window.h>
 
 #include <filesystem>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct ImDrawData;
@@ -29,6 +31,25 @@ namespace mir
         New,
         Save,
         Load,
+    };
+
+    // One game in the Project > Open Project menu
+    struct ProjectMenuEntry
+    {
+        // What the menu hands back to open it, e.g. "games/HelloWorld"
+        std::string mDir;
+
+        // What the menu shows
+        std::string mName;
+    };
+
+    // What the editor's menus asked for this frame
+    struct EditorActions
+    {
+        SceneMenuAction mScene = SceneMenuAction::None;
+
+        // Directory of the game to open, already confirmed; empty for none
+        std::string mOpenProject;
     };
 
     class Editor
@@ -45,6 +66,9 @@ namespace mir
         // `renderer`'s device and render target must already be created.
         bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath);
 
+        // Where the Project Settings window saves to, after another game opens.
+        void SetProjectSettingsPath(std::filesystem::path projectSettingsPath);
+
         // Must run before renderer.Shutdown() and before the window is
         // destroyed. No-op when not initialized.
         void Shutdown(VulkanRenderer &renderer);
@@ -52,9 +76,11 @@ namespace mir
         // Call once per frame, before DrawLayout or any editor drawing.
         void BeginFrame();
 
-        // Draws the editor shell and returns the File menu action picked this frame.
-        // enableLayout = false disables editor
-        SceneMenuAction DrawLayout(bool enableLayout, InputMap &inputMap);
+        // Draws the editor shell and returns what its menus asked for this frame.
+        // `projects` fills Project > Open Project and `currentProject` is the
+        // mDir of the open one. enableLayout = false disables editor
+        EditorActions DrawLayout(bool enableLayout, InputMap &inputMap,
+                                 std::span<const ProjectMenuEntry> projects, std::string_view currentProject);
 
         // Returns draw data for VulkanRenderer::SetImGuiDrawData.
         // BeginFrame is needed regardless of skipping layout
@@ -70,6 +96,8 @@ namespace mir
 
     private:
         void DrawTitleBar();
+        void DrawOpenProjectMenu(std::span<const ProjectMenuEntry> projects, std::string_view currentProject);
+        void DrawOpenProjectConfirm(EditorActions &actions);
 
         bool mInitialized = false;
         bool mShowStyleEditor = false;
@@ -81,5 +109,9 @@ namespace mir
         std::vector<PixelRect> mTitleBarInteractiveRects;
         LogPanel mLogPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
+
+        // Picked in Open Project, waiting on the confirmation dialog
+        ProjectMenuEntry mPendingProject;
+        bool mOpenConfirmRequested = false;
     };
 }

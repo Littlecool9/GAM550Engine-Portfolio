@@ -309,7 +309,8 @@ the values above. Input bindings save to `project_settings.json` next to
 Build. The root CMakeLists globs for `game.json`, so the build re-runs configure,
 cooks the game's `assetsRoot`, copies the game next to the executable, and
 registers a `smoke.mygame` test. Then run `MjolnirEngine --game games/mygame`,
-or set `defaultGame` in `engine.json`.
+set `defaultGame` in `engine.json`, or pick it in the editor under
+Project > Open Project, which lists every game found at startup by its `name`.
 
 A directory without `game.json` is refused at startup. A `sceneDir` with no
 `scene.json` yet starts an empty scene.
