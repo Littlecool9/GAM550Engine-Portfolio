@@ -75,9 +75,9 @@ Debug exit evidence rather than luck.
 bank resolves against, and loading a content bank first fails.
 
 **The bank path comes from `mir::ExecutableDir()`, never the working directory.**
-`ctest` runs from the build directory and `.vscode/launch.json` runs from the
-repository root, so a CWD-relative path passes the smoke tests and silently finds
-nothing under F5.
+`ctest` runs from the build directory while a VS Code F5 launch typically runs
+from the repository root, so a CWD-relative path passes the smoke tests and
+silently finds nothing under the debugger.
 
 **`RenderAudio()` runs once per frame, after `mScheduler.Update`.** Calls queued
 before it are processed that frame; anything posted after waits for the next one.
