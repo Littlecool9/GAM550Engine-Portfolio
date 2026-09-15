@@ -114,7 +114,7 @@ add_dependencies(MjolnirEngine MjolnirEngine_copy_games)
 
 add_custom_target(MjolnirEngine_copy_soundbanks
     COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
-            "${CMAKE_SOURCE_DIR}/modules/audio/WwiseProject/TestBank/GeneratedSoundBanks/Windows"
+            "${CMAKE_SOURCE_DIR}/modules/audio/banks"
             "$<TARGET_FILE_DIR:MjolnirEngine>/wwise"
     COMMENT "Copying Wwise SoundBanks next to MjolnirEngine"
     VERBATIM)

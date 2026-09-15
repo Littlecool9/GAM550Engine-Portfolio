@@ -19,10 +19,11 @@ manager, stream manager, low-level I/O, sound engine — and go down in exactly 
 reverse. That ordering is the whole reason this module exists as a unit rather
 than as calls scattered through `app`.
 
-Banks are authored in `modules/audio/WwiseProject/` and generated to
-`GeneratedSoundBanks/Windows/`. The build copies them next to the executable and
-the runtime resolves them from `mir::ExecutableDir()`, so a moved build folder
-still runs, matching how `assets`, `fonts` and `branding` already behave.
+Banks arrive as build artifacts. The Wwise authoring project does not live in
+this repository; generated `.bnk` files are committed to `modules/audio/banks/`,
+the build copies that directory next to the executable, and the runtime resolves
+it from `mir::ExecutableDir()`, so a moved build folder still runs, matching how
+`assets`, `fonts` and `branding` already behave.
 
 Today this is a harness, not an audio system. One hardcoded listener and one
 hardcoded emitter exist so that playback can be proven end to end; there is no
@@ -143,7 +144,8 @@ config mapping has never been exercised.
 5. **A codec library** once any sound leaves PCM conversion. Wwise defaults to
    Vorbis, and a Vorbis bank plays silently with no error when
    `AkVorbisDecoder` is not linked.
-6. **Trim the authoring project.** `WwiseProject/Originals/` carries about 6.7 MB
-   of iZotope factory impulse responses that the project template copied in and
-   nothing references, and `.cache/` regenerates from `Originals/` so it does not
-   belong in version control.
+6. **Settle where the authoring project lives.** It was removed from this
+   repository, so `banks/` is currently a pair of binaries nobody can regenerate
+   without rebuilding the Wwise project from scratch. Its own repository, shared
+   storage, or back here once the content settles are all defensible; what would
+   decide it is whether anyone outside the engine programmers edits audio.

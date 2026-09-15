@@ -1,6 +1,0 @@
-Event	ID	Name			Wwise Object Path	Notes
-	2175541914	Play_chargeDown			\Default Work Unit\Play_chargeDown	
-
-In Memory Audio	ID	Name	Audio source file		Wwise Object Path	Notes	Data Size
-	821269953	chargeDown	.cache\3B\{3B03E081-BA02-0B9B-16BD-A5CAFCEED388}.wem		\Containers\Default Work Unit\chargeDown		994044
-
