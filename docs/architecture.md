@@ -79,6 +79,7 @@ the pieces depend on each other.
 | `assets` | Cooked blobs, manifest, cache | [assets.md](modules/assets.md) |
 | `scene` | Scene save and load | [scene.md](modules/scene.md) |
 | `script` | Lua embedding and ECS bindings | [script.md](modules/script.md) |
+| `audio` | Wwise lifetime and the per-frame pump | [audio.md](modules/audio.md) |
 | `editor` | ImGui context, backends and the editor shell | [editor.md](modules/editor.md) |
 | `editortheme` | Theme data only | [editortheme.md](modules/editortheme.md) |
 | `app` | Composition root and the frame loop | [app.md](modules/app.md) |

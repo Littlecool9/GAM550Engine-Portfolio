@@ -16,6 +16,9 @@ set (CMAKE_CXX_EXTENSIONS OFF)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.json")
 
+#line for wwise
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+#end
 include(cmake/EnginePlatform.cmake)
 include(cmake/EngineModule.cmake)
 include(cmake/Shaders.cmake)
@@ -32,7 +35,7 @@ if(BUILD_TESTING)
 endif()
 
 add_subdirectory(third_party)
-
+add_subdirectory(modules/audio)
 add_subdirectory(modules/app)
 add_subdirectory(modules/assets)
 add_subdirectory(modules/core)
@@ -109,11 +112,21 @@ add_custom_target(MjolnirEngine_copy_games
     VERBATIM)
 add_dependencies(MjolnirEngine MjolnirEngine_copy_games)
 
+add_custom_target(MjolnirEngine_copy_soundbanks
+    COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
+            "${CMAKE_SOURCE_DIR}/modules/audio/banks"
+            "$<TARGET_FILE_DIR:MjolnirEngine>/wwise"
+    COMMENT "Copying Wwise SoundBanks next to MjolnirEngine"
+    VERBATIM)
+add_dependencies(MjolnirEngine MjolnirEngine_copy_soundbanks)
+
+
 find_package(nlohmann_json CONFIG REQUIRED)
 
 target_link_libraries(MjolnirEngine PRIVATE
     mir::app
     mir::assets
+    mir::audio
     mir::core
     mir::input
     mir::scene
