@@ -59,7 +59,7 @@ The folder tree is in the [README](../README.md#folder-structure). This is how
 the pieces depend on each other.
 
 ```
-                 HelloWorld (main.cpp)
+               MjolnirEngine (main.cpp)
                          |
                         app
       +--------+---------+--------+--------+--------+
@@ -144,7 +144,7 @@ It is theme data, applied once by `editor` at startup.
 ```
 PollEvents                       close flag and framebuffer size refresh here
 dt = min(elapsed, mMaxDeltaSeconds)
-Editor::BeginFrame / DrawLayout / EndFrame -> ImDrawData*, SceneMenuAction
+Editor::BeginFrame / DrawLayout / EndFrame -> ImDrawData*, EditorActions (scene action, game to open)
 renderer.SetImGuiDrawData(...), renderer.SetSceneViewport(...)
 ScriptReloadWatcher::Poll        mtime check, throttled
 SystemScheduler::Update          PreUpdate, Update, PostUpdate, Render
@@ -168,6 +168,10 @@ A source file under a cooked root is read by `tools/AssetCooker` at build time.
 The cooker writes one blob per file, named by its `AssetId`, plus a manifest. The
 build copies both next to the executable, and `AssetCache::Load(id)` reads them
 at runtime.
+
+The cooked roots are the engine's `assets/` plus each game's `assetsRoot`. The
+root CMakeLists reads those from every `games/*/game.json` at configure time, so
+adding a game adds its assets without touching CMake.
 
 An `AssetId` is the FNV-1a 64 hash of the source path relative to the repository
 root. That is why `engine_cook_assets` rejects an absolute cook root: the root
@@ -216,10 +220,15 @@ table. See [script.md](modules/script.md).
    a premultiplied push constant.
 5. Linux sources exist, but there is no Linux preset. macOS fails at configure.
 6. No CI. Tests are run by hand.
-7. The runtime is still `HelloWorld` plus glue in `main.cpp`, not the
-   game-directory-loading executable that [game-as-data](#principles) describes.
 
 ## Changed
+
+*2026-09-14* — **The runtime loads a game directory.** Was: a `HelloWorld`
+executable whose `main.cpp` hard-coded `games/HelloWorld` paths and built a demo
+scene when none was saved. Now: `MjolnirEngine --game <dir>`, defaulting to
+`defaultGame` in `engine.json`. Paths in `game.json` are relative to the game, a
+directory without `game.json` is refused, and the root CMakeLists cooks every
+game's assets and registers a `smoke.<game>` test for it.
 
 *2026-09-03* — **`RenderSystem` replaced hand-driven drawing.** Was: `App::Run`
 called `CollectDrawInstances` and `DrawFrame` by hand between scheduler phases,

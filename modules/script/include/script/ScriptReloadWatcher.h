@@ -32,7 +32,6 @@ namespace mir
         }
 
         void Track(std::string scriptName, AssetId id);
-
         void Poll(AssetCache *cache, float dt);
 
     private:

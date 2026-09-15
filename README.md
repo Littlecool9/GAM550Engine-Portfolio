@@ -11,10 +11,11 @@ that directory, so changing a game needs no rebuild.
 ## Folder structure
 
 ```
-CMakeLists.txt        root build: module list, HelloWorld target
+CMakeLists.txt        root build: module list, MjolnirEngine target, game discovery
 CMakePresets.json     Debug / Release, the only supported configure path
 vcpkg.json            dependency manifest
-main.cpp              HelloWorld entry point
+engine.json           defaultGame, loaded when --game is not given
+main.cpp              MjolnirEngine entry point: loads one game directory
 
 cmake/                build helpers
   EngineModule.cmake    engine_add_module, engine_add_module_tests
@@ -40,8 +41,10 @@ modules/              one static library each, mir::<name>
 
 games/                one directory per game — no C++
   HelloWorld/
+    game.json             title, assetsRoot, sceneDir, relative to the game
     assets/               meshes and Lua scripts, cooked separately
     scenes/               scene.json plus one file per entity
+  EmptyScene/           a game with an empty scene, for the smoke test
 
 tools/                AssetCooker, new_module.ps1, new_file.ps1
 templates/            what the scaffolding scripts stamp out

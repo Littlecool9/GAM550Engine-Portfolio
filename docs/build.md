@@ -86,10 +86,14 @@ VS Code:
 
 1. `Ctrl+Shift+P` → **CMake: Select Configure Preset** → `Debug` / `Release`
 2. `F7` to build
-3. `Ctrl+Shift+P` → **CMake: Set Launch/Debug Target** → `HelloWorld`
+3. `Ctrl+Shift+P` → **CMake: Set Launch/Debug Target** → `MjolnirEngine`
 4. `Ctrl+F5` to run, `F5` to debug
 
 After the first time, `F7` then `F5`.
+
+With no arguments, `MjolnirEngine` loads the game named by `defaultGame` in
+`engine.json`. To run another one, pass `--game games/<name>`, for example
+through `args` in `.vscode/launch.json`.
 
 Terminal, from a Developer PowerShell (or after `vcvars64.bat`):
 
@@ -145,6 +149,26 @@ regex, so `-R "archetype"` runs every case with that word in its name.
 
 In the Testing panel the same thing is a click on one case or one file.
 
+### Smoke tests
+
+Every game with a `game.json` gets a `smoke.<game>` test. It runs
+`MjolnirEngine --game games/<game> --frames 120`, which closes the window after
+120 frames and exits non-zero if anything was logged as an error.
+
+`smoke.switch` restarts from HelloWorld into EmptyScene and back — what
+Project > Open Project does, minus the dialog. `--switch-to <dir>` asks for the
+restart halfway through `--frames`. The next process gets the other half and the
+remaining `--switch-to` entries, and in a `--frames` run each process waits for
+the next one and exits with its code.
+
+They open a real window, so they need a GPU and a display. `-L smoke` runs only
+them, `-LE smoke` skips them:
+
+```
+ctest --test-dir builds/windows-msvc-debug -L smoke --output-on-failure
+ctest --test-dir builds/windows-msvc-debug -LE smoke --output-on-failure
+```
+
 ### How it is wired
 
 Catch2 v3, one test executable per module, built under the `BUILD_TESTING`
@@ -154,7 +178,9 @@ option. That option is `ON` by default, which is why a plain build produces them
 becomes its own CTest case and a failure names the behaviour that broke.
 
 `core`, `assets`, `input`, `scene`, `script` and `window` have tests. `renderer`
-and `editor` need a device and a display, and are verified by running the engine.
+and `editor` need a device and a display, and are verified by running the engine,
+which the smoke tests do once per game. The root CMakeLists registers those with
+plain `add_test`, one per `games/*/game.json`.
 
 There is no aggregate `tests` target. To build the test executables without the
 games, list them:
@@ -180,7 +206,7 @@ More info: [extending.md](extending.md).
 
 ## Verify
 
-`HelloWorld` opens a window and renders the scene, `ctest` is all green, and
+`MjolnirEngine` opens HelloWorld and renders the scene, `ctest` is all green, and
 `logs/engine.log` has trace output.
 
 ## Troubleshooting

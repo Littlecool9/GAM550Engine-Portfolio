@@ -63,7 +63,7 @@ namespace mir
         virtual void RequestClose() {}
 
         virtual void Show() {}
-        
+
         virtual const RawInputSnapshot &RawInput() const
         {
             static const RawInputSnapshot kEmpty{};

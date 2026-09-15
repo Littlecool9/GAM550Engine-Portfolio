@@ -42,6 +42,9 @@ namespace mir
     // Sometimes need manual flush
     void FlushLog();
 
+    // Closes the log file for another process; logging is off until InitLog again
+    void ShutdownLog();
+
     namespace detail
     {
         bool ShouldLog(LogLevel level);

@@ -1,5 +1,6 @@
 engine_add_module_tests(core
     Paths.tests.cpp
+    Process.tests.cpp
     LogHistory.tests.cpp
     Archetype.tests.cpp
     Query.tests.cpp

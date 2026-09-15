@@ -1,8 +1,8 @@
 # editor
 
 The ImGui context and backend lifecycle, and the Slate editor shell — dockspace,
-default panel layout, Debug menu. It is the only place in the engine that calls
-`ImGui::*` or `ImGui_Impl*`.
+default panel layout, the File, Project and Debug menus. It is the only place in
+the engine that calls `ImGui::*` or `ImGui_Impl*`.
 
 `mir::editor` · depends `mir::renderer`, `mir::window` (public); `mir::core`, `mir::editortheme`, `imgui`, `iconfontcppheaders` (private) · API `modules/editor/include/editor/` · maintainer Sumin Park · reviewed 2026-09-12
 
@@ -14,8 +14,9 @@ default panel layout, Debug menu. It is the only place in the engine that calls
 mEditor.BeginFrame();                                   // the ImGui NewFrame trio
 
 if (windowVisible)
-    Act(mEditor.DrawLayout(mDesc.mEnableEditorLayout,   // New / Save / Load / Play / TogglePause / Stop, or None
-                            world.Resource<InputMap>(), world.Resource<EngineModeState>()));
+    Act(mEditor.DrawLayout(mDesc.mEnableEditorLayout,   // EditorActions
+                           world.Resource<InputMap>(), world.Resource<EngineModeState>(),
+                           projectMenu, currentProject));
 
 mRenderer.SetImGuiDrawData(mEditor.EndFrame());         // ImGui::Render, hand off draw data
 mRenderSystem.SetViewportRect(0, mEditor.SceneViewportRect());
@@ -27,17 +28,25 @@ if (IsEditing(world))                                   // Play shows the World'
 }
 ```
 
-`DrawLayout` returns the `SceneMenuAction` the File menu or the Play/Pause/Stop
-toolbar picked this frame. The editor decides what was asked for and `App`
-decides what it means, so this module never touches `SceneIO`, `PlaySnapshot`
-or the `World`'s entities — `EngineModeState` is read-only here, just to draw
-the toolbar's current label.
+`DrawLayout` returns `EditorActions`: the `SceneMenuAction` the File menu or the
+Play/Pause/Stop toolbar picked this frame, and the directory of a game picked
+under Project > Open Project and confirmed. The editor decides what was asked for
+and `App` decides what it means, so this module never touches `SceneIO`,
+`PlaySnapshot`, a `GameProject` or the `World`'s entities — `EngineModeState` is
+read-only here, just to draw the toolbar's current label.
+
+Project > Open Project lists the `ProjectMenuEntry` values `App` passes in — each
+game's name, with its directory in the shortcut column — and ticks the one whose
+directory is `currentProject`. Picking another opens a modal warning that the
+editor restarts with that game and that unsaved scene changes will be lost. Only
+its Open button puts the directory into `EditorActions::mOpenProject`; `App`
+does the restart.
 
 `DrawLayout(true)` builds the dockspace once. It splits into left, right and
 bottom with `DockBuilderSplitNode`, keeps the centre undocked through
 `ImGuiDockNodeFlags_PassthruCentralNode`, docks `Hierarchy`, `Inspector` and
-`Output` into the splits, draws a Play/Pause/Stop toolbar strip and the `Debug`
-menu bar, and optionally the Style Editor.
+`Output` into the splits, draws a Play/Pause/Stop toolbar strip and the menu bar,
+and optionally the Style Editor and Project Settings windows.
 
 Passing `false` skips all of that and resets `SceneViewportRect()` to zero
 extent, which the renderer reads as "use the full swapchain". An ImGui context
@@ -60,7 +69,8 @@ bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path 
 void Shutdown(VulkanRenderer &renderer);
 
 void BeginFrame();
-SceneMenuAction DrawLayout(bool enableLayout, InputMap &inputMap, const EngineModeState &mode);
+EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, const EngineModeState &mode,
+                         std::span<const ProjectMenuEntry> projects, std::string_view currentProject);
 ImDrawData *EndFrame();
 
 VkRect2D SceneViewportRect() const;
@@ -73,6 +83,8 @@ EditorCamera &SceneCamera();
 | Type | Header | Role |
 |---|---|---|
 | `SceneMenuAction` | `editor/Editor.h` | `None`/`New`/`Save`/`Load`/`Play`/`TogglePause`/`Stop` |
+| `ProjectMenuEntry` | `editor/Editor.h` | `{mDir, mName}` for one game in Open Project |
+| `EditorActions` | `editor/Editor.h` | `{mScene, mOpenProject}`, what the menus and toolbar asked for this frame |
 | `EditorCamera` | `editor/EditorCamera.h` | Free-fly scene camera, position + yaw/pitch, outside the `World` |
 
 `LogPanel`, in `src/editor/panels/LogPanel.cpp`, renders `core`'s `LogHistory`
@@ -93,6 +105,10 @@ source. There is no compiler or runtime check for it.
 
 **The rect is only valid within or after `DrawLayout(true)` in the same frame.**
 
+**The Open Project dialog is opened after the menu bar ends, not from the menu
+item.** `OpenPopup` and `BeginPopupModal` have to run under the same ID stack.
+Called from inside the menu, `OpenPopup` opens a popup that nothing ever draws.
+
 **Destruction order is load-bearing.** `App` declares `Editor` right after
 `mRenderer` and before `mWorld`, so the ImGui Vulkan backend tears down before
 `VulkanRenderer::Shutdown()` and the GLFW backend before `mWindow` dies.
@@ -101,9 +117,9 @@ source. There is no compiler or runtime check for it.
 rather than reach into a `VulkanRenderer&` it was never given.
 
 **`Editor` is a class rather than free functions**, because it carries state
-across calls — the viewport rect, the Style Editor toggle, and whether it is
-initialised. As free functions those would be out-parameters threaded through
-every call.
+across calls — the viewport rect, the Style Editor toggle, the game waiting on
+the confirmation dialog, and whether it is initialised. As free functions those
+would be out-parameters threaded through every call.
 
 Fonts are Inter for body text and Font Awesome 6 for icons, merged into one atlas
 and rescaled for the window's `ContentScale()`.
@@ -125,18 +141,21 @@ reaching `App::SaveScene()` directly.
 
 ## State
 
-*As of 2026-09-12.* One fixed layout: `Hierarchy` left, `Inspector` right,
+*As of 2026-09-14.* One fixed layout: `Hierarchy` left, `Inspector` right,
 `Output` bottom, a Play/Pause/Stop toolbar strip, and the scene showing through
 the passthru centre. It is built once and left alone, persisted only through
-ImGui's own `imgui.ini` next to the executable.
+ImGui's own `imgui.ini` next to the executable, which also carries it across an
+Open Project restart.
 
-`Output` is wired to `LogHistory` through `LogPanel`.
+`Output` is wired to `LogHistory` through `LogPanel`. Its history starts empty in
+the process an Open Project restart launches.
 
 `EditorCamera` flies and looks in Edit mode; `App` stops feeding it input and
 switches viewport 0 to the World's default camera in Play (see
 [app.md](app.md)).
 
-No tests. It needs a device and a display.
+No tests. It needs a device and a display. `smoke.switch` covers the restart that
+Open Project asks for, but not the menu or the dialog themselves.
 
 ## Backlog
 
@@ -154,6 +173,12 @@ No tests. It needs a device and a display.
    second panel; nothing calls it yet.
 
 ## Changed
+
+*2026-09-14* — **Project > Open Project.** Was: `DrawLayout` returned a bare
+`SceneMenuAction`, and the Project menu held only Project Settings. Now: it
+returns `EditorActions`, which adds a game directory picked from the Open Project
+submenu and confirmed in a modal. `App` passes the list in and restarts into the
+picked game, so this module still knows nothing about games.
 
 *2026-09-12* — **File menu greyed out during Play.** Was: New/Save/Load stayed
 clickable regardless of mode, and `App` (see [app.md](app.md)) silently

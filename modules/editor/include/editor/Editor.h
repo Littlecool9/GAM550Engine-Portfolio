@@ -18,7 +18,9 @@
 #include <window/Window.h>
 
 #include <filesystem>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct ImDrawData;
@@ -34,6 +36,25 @@ namespace mir
         Play,
         TogglePause,
         Stop,
+    };
+
+    // One game in Project > Open Project
+    struct ProjectMenuEntry
+    {
+        // e.g. "games/HelloWorld"
+        std::string mDir;
+
+        // shown in the menu
+        std::string mName;
+    };
+
+    // What the menus asked for this frame
+    struct EditorActions
+    {
+        SceneMenuAction mScene = SceneMenuAction::None;
+
+        // confirmed game directory to open; empty for none
+        std::string mOpenProject;
     };
 
     class Editor
@@ -57,9 +78,11 @@ namespace mir
         // Call once per frame, before DrawLayout or any editor drawing.
         void BeginFrame();
 
+        // Draws the editor shell and returns what the menus asked for this frame.
         // enableLayout = false disables editor
         // `mode` drives the Play/Pause/Stop toolbar's labels and which of them are enabled
-        SceneMenuAction DrawLayout(bool enableLayout, InputMap &inputMap, const EngineModeState &mode);
+        EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, const EngineModeState &mode,
+                                 std::span<const ProjectMenuEntry> projects, std::string_view currentProject);
 
         ImDrawData *EndFrame();
 
@@ -78,6 +101,9 @@ namespace mir
 
     private:
         void DrawTitleBar();
+        void DrawOpenProjectMenu(std::span<const ProjectMenuEntry> projects, std::string_view currentProject);
+        void DrawOpenProjectConfirm(EditorActions &actions);
+
         // Returns Play/TogglePause/Stop if one of the toolbar's buttons was
         // clicked this frame, else None.
         SceneMenuAction DrawPlayControls(const EngineModeState &mode);
@@ -93,5 +119,9 @@ namespace mir
         LogPanel mLogPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
         EditorCamera mCamera;
+
+        // waiting on the confirm dialog
+        ProjectMenuEntry mPendingProject;
+        bool mOpenConfirmRequested = false;
     };
 }

@@ -8,6 +8,7 @@
  */
 #pragma once
 
+#include <app/GameProject.h>
 #include <core/ecs/CommandBuffer.h>
 #include <core/ecs/SystemScheduler.h>
 #include <core/ecs/World.h>
@@ -27,7 +28,7 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
+#include <vector>
 
 namespace mir
 {
@@ -47,11 +48,14 @@ namespace mir
 
         float mMaxDeltaSeconds = 0.25f;
 
-        // Path to the project's game.json, relative to the executable
-        std::filesystem::path mProjectPath;
+        // 0: run until the window closes
+        uint64_t mMaxFrames = 0;
 
-        // Where the Project Settings window's Save button writes
-        std::filesystem::path mProjectSettingsPath = "project_settings.json";
+        // the game Initialize opens
+        GameProject mProject;
+
+        // test hook: RequestOpenProject this halfway through mMaxFrames; empty for none
+        std::string mSwitchProjectTo;
     };
 
     class App
@@ -86,15 +90,27 @@ namespace mir
         // The scene currently in the World
         LoadedScene &Scene() { return mScene; }
 
+        // The game currently open
+        const GameProject &Project() const { return mProject; }
+
+        // Games found at startup
+        const std::vector<GameProject> &AvailableProjects() const { return mAvailableProjects; }
+
+        // Validates the game and closes the window; main.cpp then relaunches into it.
+        // False (logged) if it is not a game.
+        bool RequestOpenProject(const std::string &requestedDir);
+
+        // The game RequestOpenProject accepted, if any
+        const std::optional<GameProject> &ProjectToOpen() const { return mProjectToOpen; }
+
         // Discards mScene's entities and replaces it with an empty one
         void NewScene(std::string name = "untitled");
 
-        // Writes Scene() to mSceneDir. False on I/O failure
+        // Writes Scene() to the game's scene directory. False on I/O failure
         bool SaveScene();
 
+        // Replaces Scene() with the game's saved scene and resolves it. False without a scene.json
         bool LoadScene();
-
-        bool LoadScriptAsset(std::string_view assetPath, std::string_view scriptName);
 
         // Edit -> Play
         void PlayScene();
@@ -109,8 +125,14 @@ namespace mir
         // context is rebuilt per tick
         SystemContext MakeContext(float dt);
 
-        void ResolveSceneMeshes();
-        void ResolveSceneScripts();
+        // UnloadScene, then free the GPU resources
+        void UnloadCurrentScene();
+
+        // LoadScene if the game has a scene.json
+        void LoadProjectScene();
+
+        // the mSwitchProjectTo test hook
+        void RunSwitchHook();
 
         SplashScreen mSplash;
         std::unique_ptr<Window> mWindow;
@@ -130,10 +152,11 @@ namespace mir
         LoadedScene mScene;
 
         AppDesc mDesc;
-
-        std::filesystem::path mSceneDir;
-        std::string mAssetsRoot;
-
+        GameProject mProject;
+        std::vector<GameProject> mAvailableProjects;
+        std::vector<ProjectMenuEntry> mProjectMenu;
+        std::optional<GameProject> mProjectToOpen;
+        bool mSwitchHookFired = false;
         double mElapsed = 0.0;
         uint64_t mFrame = 0;
 

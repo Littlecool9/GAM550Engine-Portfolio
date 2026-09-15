@@ -79,6 +79,10 @@ namespace mir
 // kNullMaterial means default material
         MaterialHandle CreateMaterial(const MaterialDesc &desc);
 
+        // Destroys all meshes and materials but the default material. Old handles
+        // are invalid and their indices get reused: call only after a scene unload.
+        void ReleaseSceneResources();
+
         VkExtent2D SwapchainExtent() const { return mSwapchainExtent; }
 
         void DrawFrame(std::span<const RenderView> views);

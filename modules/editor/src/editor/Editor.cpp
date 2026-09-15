@@ -21,6 +21,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <utility>
 
 namespace mir
 {
@@ -202,16 +203,73 @@ namespace mir
         return action;
     }
 
-    SceneMenuAction Editor::DrawLayout(bool enableLayout, InputMap &inputMap, const EngineModeState &mode)
+    void Editor::DrawOpenProjectMenu(std::span<const ProjectMenuEntry> projects, std::string_view currentProject)
     {
-        SceneMenuAction sceneAction = SceneMenuAction::None;
+        if (!ImGui::BeginMenu("Open Project", !projects.empty()))
+            return;
+
+        for (const ProjectMenuEntry &project : projects)
+        {
+            // ID by directory: names may repeat
+            ImGui::PushID(project.mDir.c_str());
+
+            const bool isCurrent = project.mDir == currentProject;
+            if (ImGui::MenuItem(project.mName.c_str(), project.mDir.c_str(), isCurrent) && !isCurrent)
+            {
+                mPendingProject = project;
+                mOpenConfirmRequested = true;
+            }
+
+            ImGui::PopID();
+        }
+
+        ImGui::EndMenu();
+    }
+
+    void Editor::DrawOpenProjectConfirm(EditorActions &actions)
+    {
+        constexpr const char *kPopupId = "Open Project##Confirm";
+
+        // outside the menu: OpenPopup needs the same ID stack as BeginPopupModal
+        if (mOpenConfirmRequested)
+        {
+            ImGui::OpenPopup(kPopupId);
+            mOpenConfirmRequested = false;
+        }
+
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (!ImGui::BeginPopupModal(kPopupId, nullptr,
+                                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+            return;
+
+        ImGui::Text("Open \"%s\"?", mPendingProject.mName.c_str());
+        ImGui::TextDisabled("The editor restarts with this game.");
+        ImGui::TextDisabled("Unsaved changes to the current scene will be lost.");
+        ImGui::Spacing();
+
+        if (ImGui::Button("Open"))
+        {
+            actions.mOpenProject = mPendingProject.mDir;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            ImGui::CloseCurrentPopup();
+
+        ImGui::EndPopup();
+    }
+
+    EditorActions Editor::DrawLayout(bool enableLayout, InputMap &inputMap, const EngineModeState &mode,
+                                     std::span<const ProjectMenuEntry> projects, std::string_view currentProject)
+    {
+        EditorActions actions;
 
         if (enableLayout)
         {
             if (mWindow->HasCustomTitleBar())
                 DrawTitleBar();
 
-            sceneAction = DrawPlayControls(mode);
+            actions.mScene = DrawPlayControls(mode);
 
             const ImGuiID dockspaceId = ImGui::DockSpaceOverViewport(
                 0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
@@ -259,11 +317,11 @@ namespace mir
                     ImGui::BeginDisabled(mode.mMode == EngineMode::Play);
 
                     if (ImGui::MenuItem("New Scene"))
-                        sceneAction = SceneMenuAction::New;
+                        actions.mScene = SceneMenuAction::New;
                     if (ImGui::MenuItem("Save Scene"))
-                        sceneAction = SceneMenuAction::Save;
+                        actions.mScene = SceneMenuAction::Save;
                     if (ImGui::MenuItem("Load Scene"))
-                        sceneAction = SceneMenuAction::Load;
+                        actions.mScene = SceneMenuAction::Load;
 
                     ImGui::EndDisabled();
                     ImGui::EndMenu();
@@ -271,6 +329,7 @@ namespace mir
                 if (ImGui::BeginMenu("Project"))
                 {
                     ImGui::MenuItem("Project Settings", nullptr, &mShowProjectSettings);
+                    DrawOpenProjectMenu(projects, currentProject);
                     ImGui::EndMenu();
                 }
                 if (ImGui::BeginMenu("Debug"))
@@ -280,6 +339,8 @@ namespace mir
                 }
                 ImGui::EndMainMenuBar();
             }
+
+            DrawOpenProjectConfirm(actions);
 
             if (mShowStyleEditor)
             {
@@ -306,7 +367,7 @@ namespace mir
             mSceneViewportRect = VkRect2D{};
         }
 
-        return sceneAction;
+        return actions;
     }
 
     ImDrawData *Editor::EndFrame()

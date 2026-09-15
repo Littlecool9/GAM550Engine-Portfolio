@@ -13,6 +13,9 @@
 
 namespace mir
 {
+    // Full path of the running executable; empty if unknown
+    const std::filesystem::path &ExecutablePath();
+
     const std::filesystem::path &ExecutableDir();
 
     std::filesystem::path ShaderPath(std::string_view name);

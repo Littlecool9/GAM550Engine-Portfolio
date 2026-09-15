@@ -9,8 +9,8 @@
 
 #include <app/App.h>
 
-#include <assets/AssetBlob.h>
-#include <assets/AssetId.h>
+#include "SceneResolve.h"
+
 #include <core/EngineVersion.h>
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/DeferredAccess.h>
@@ -23,91 +23,18 @@
 #include <input/InputSystem.h>
 #include <renderer/ComponentRegistration.h>
 #include <renderer/RenderSystem.h>
-#include <renderer/Shapes.h>
-#include <renderer/components/MeshRenderer.h>
 #include <scene/SceneIO.h>
 #include <script/ComponentRegistration.h>
 #include <script/ScriptSystem.h>
-#include <script/components/ScriptRef.h>
-
-#include <glm/vec3.hpp>
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <chrono>
-#include <fstream>
-#include <unordered_map>
+#include <filesystem>
+#include <system_error>
+#include <utility>
 
 namespace mir
 {
-    namespace
-    {
-
-        struct GameProject
-        {
-            std::string mTitle = "MjolnirEngine";
-            std::string mAssetsRoot = "assets";
-            std::filesystem::path mSceneDir = "scenes/default";
-        };
-
-        GameProject LoadGameProject(const std::filesystem::path &path)
-        {
-            GameProject project;
-
-            std::ifstream in(path);
-            if (!in)
-            {
-                MIR_LOG_ERROR("LoadGameProject: could not open '{}', using defaults", path.string());
-                return project;
-            }
-
-            nlohmann::json json;
-            try
-            {
-                in >> json;
-            }
-            catch (const nlohmann::json::parse_error &e)
-            {
-                MIR_LOG_ERROR("LoadGameProject: '{}' is not valid JSON ({}), using defaults", path.string(), e.what());
-                return project;
-            }
-
-            project.mTitle = json.value("title", project.mTitle);
-            project.mAssetsRoot = json.value("assetsRoot", project.mAssetsRoot);
-            project.mSceneDir = json.value("sceneDir", project.mSceneDir.string());
-            return project;
-        }
-
-        std::optional<MeshData> ParseMeshAsset(std::string_view text, std::string_view assetPath)
-        {
-            nlohmann::json json;
-            try
-            {
-                json = nlohmann::json::parse(text);
-            }
-            catch (const nlohmann::json::parse_error &e)
-            {
-                MIR_LOG_ERROR("ParseMeshAsset: '{}' is not valid JSON ({})", assetPath, e.what());
-                return std::nullopt;
-            }
-
-            MeshData mesh;
-            for (const auto &v : json.value("vertices", nlohmann::json::array()))
-            {
-                Vertex vertex{};
-                const auto &p = v.at("position");
-                const auto &c = v.at("color");
-                const auto &n = v.at("normal");
-                vertex.pos = glm::vec3(p.at(0).get<float>(), p.at(1).get<float>(), p.at(2).get<float>());
-                vertex.color = glm::vec3(c.at(0).get<float>(), c.at(1).get<float>(), c.at(2).get<float>());
-                vertex.normal = glm::vec3(n.at(0).get<float>(), n.at(1).get<float>(), n.at(2).get<float>());
-                mesh.vertices.push_back(vertex);
-            }
-            mesh.indices = json.value("indices", std::vector<uint32_t>{});
-            return mesh;
-        }
-    }
-
     App::~App()
     {
         Shutdown();
@@ -116,19 +43,9 @@ namespace mir
     bool App::Initialize(const AppDesc &desc)
     {
         mDesc = desc;
-
-        std::filesystem::path projectPath = mDesc.mProjectPath;
-        if (projectPath.is_relative())
-            projectPath = ExecutableDir() / projectPath;
-        const GameProject project = LoadGameProject(projectPath);
-
-        mSceneDir = project.mSceneDir;
-        mAssetsRoot = project.mAssetsRoot;
-
-        if (mSceneDir.is_relative())
-            mSceneDir = ExecutableDir() / mSceneDir;
-        if (mDesc.mProjectSettingsPath.is_relative())
-            mDesc.mProjectSettingsPath = ExecutableDir() / mDesc.mProjectSettingsPath;
+        mProject = desc.mProject;
+        mProjectToOpen.reset();
+        mSwitchHookFired = false;
 
         EnsureDpiAware();
 
@@ -144,7 +61,7 @@ namespace mir
         WindowDesc windowDesc{};
         windowDesc.mWidth = desc.mWidth;
         windowDesc.mHeight = desc.mHeight;
-        windowDesc.mTitle = project.mTitle.c_str();
+        windowDesc.mTitle = mProject.mTitle.c_str();
         windowDesc.mMaximized = true;
         windowDesc.mCustomTitleBar = desc.mEnableEditorLayout;
         windowDesc.mStartHidden = true;
@@ -167,7 +84,7 @@ namespace mir
         }
 
         mSplash.SetProgress("Initializing editor...", 0.5f);
-        if (!mEditor.Initialize(*mWindow, mRenderer, mDesc.mProjectSettingsPath))
+        if (!mEditor.Initialize(*mWindow, mRenderer, mProject.mProjectSettingsPath))
         {
             MIR_LOG_ERROR("Editor initialization failed");
             mRenderer.Shutdown();
@@ -190,7 +107,7 @@ namespace mir
         // defers structural change
         mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
 
-        mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mDesc.mProjectSettingsPath));
+        mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mProject.mProjectSettingsPath));
         mWorld.EmplaceResource<InputState>();
         mWorld.EmplaceResource<EngineModeState>();
 
@@ -203,11 +120,39 @@ namespace mir
 
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
+        // scanned once: a new game needs a build to cook its assets anyway
+        mAvailableProjects = DiscoverGameProjects();
+        mProjectMenu.clear();
+        for (const GameProject &project : mAvailableProjects)
+            mProjectMenu.push_back(ProjectMenuEntry{project.mDir, project.mName});
+
         mSplash.SetProgress("Loading scene...", 0.9f);
         mScene = mir::NewScene("untitled");
+        LoadProjectScene();
 
         mWindow->Show();
 
+        return true;
+    }
+
+    bool App::RequestOpenProject(const std::string &requestedDir)
+    {
+        if (!mInitialized)
+            return false;
+
+        // validate before closing; not ResolveGameProject, which logs "Loading game"
+        const std::optional<std::filesystem::path> gameDir = NormalizeGameDir(requestedDir);
+        std::optional<GameProject> project = gameDir.has_value() ? LoadGameProject(*gameDir) : std::nullopt;
+        if (!project.has_value())
+        {
+            MIR_LOG_ERROR("App::RequestOpenProject: '{}' is not a game, '{}' stays open", requestedDir, mProject.mDir);
+            return false;
+        }
+
+        // one game per process: main.cpp relaunches after Run returns
+        MIR_LOG_INFO("Closing '{}' to open '{}'", mProject.mDir, project->mDir);
+        mProjectToOpen = std::move(project);
+        mWindow->RequestClose();
         return true;
     }
 
@@ -219,7 +164,7 @@ namespace mir
             return;
         }
 
-        UnloadScene(mWorld, mScene);
+        UnloadCurrentScene();
         mScene = mir::NewScene(std::move(name));
     }
 
@@ -231,7 +176,7 @@ namespace mir
             return false;
         }
 
-        return mir::SaveScene(mWorld, mSceneDir, mScene);
+        return mir::SaveScene(mWorld, mProject.mSceneDir, mScene);
     }
 
     bool App::LoadScene()
@@ -242,109 +187,19 @@ namespace mir
             return false;
         }
 
-        // scene hardcoded at the moment
-        if (!std::filesystem::exists(mSceneDir / "scene.json"))
+        if (!std::filesystem::exists(mProject.mSceneDir / "scene.json"))
         {
-            MIR_LOG_ERROR("App::LoadScene: no scene.json in '{}'", mSceneDir.string());
+            MIR_LOG_ERROR("App::LoadScene: no scene.json in '{}'", mProject.mSceneDir.string());
             return false;
         }
 
-        UnloadScene(mWorld, mScene);
-        mScene = mir::LoadScene(mWorld, mSceneDir);
+        UnloadCurrentScene();
+        mScene = mir::LoadScene(mWorld, mProject.mSceneDir);
 
-        ResolveSceneScripts();
-        ResolveSceneMeshes();
-
+        // saved names to script instances and GPU handles
+        ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
+        ResolveSceneMeshes(mWorld, mRenderer, Assets(), mProject.mAssetIdRoot);
         return true;
-    }
-
-    bool App::LoadScriptAsset(std::string_view assetPath, std::string_view scriptName)
-    {
-        AssetCache *cache = Assets();
-        if (cache == nullptr)
-            return false;
-
-        const AssetId id = MakeAssetId(assetPath);
-        const AssetBlobView *blob = cache->Load(id);
-        if (blob == nullptr)
-            return false;
-
-        if (!mScriptHost.LoadScriptSource(scriptName, AsStringView(*blob)))
-            return false;
-
-        mScriptReloadWatcher.Track(std::string(scriptName), id);
-        return true;
-    }
-
-    void App::ResolveSceneScripts()
-    {
-        mWorld.GetOrCreateQuery<ScriptRef>().ForEach(
-            [this](Entity, ScriptRef &ref)
-            {
-                if (ref.instanceRef >= 0 || ref.scriptName[0] == '\0')
-                    return;
-
-                const std::string name = ref.scriptName;
-                const std::string assetPath = mAssetsRoot + "/scripts/" + name + ".lua";
-
-                if (!LoadScriptAsset(assetPath, name))
-                {
-                    MIR_LOG_ERROR("ResolveSceneScripts: could not load '{}' for script '{}'", assetPath, name);
-                    return;
-                }
-
-                ref.instanceRef = mScriptHost.CreateInstance(name);
-            });
-    }
-
-    void App::ResolveSceneMeshes()
-    {
-        AssetCache *cache = Assets();
-
-        std::unordered_map<uint64_t, MeshHandle> meshCache;
-        std::unordered_map<std::string, MaterialHandle> materialCache;
-
-        mWorld.GetOrCreateQuery<MeshRenderer>().ForEach(
-            [&](Entity, MeshRenderer &renderer)
-            {
-                if (renderer.mesh.IsNull() && renderer.meshName[0] != '\0')
-                {
-                    const std::string assetPath = mAssetsRoot + "/" + renderer.meshName;
-                    const AssetId id = MakeAssetId(assetPath);
-
-                    if (auto it = meshCache.find(id.value); it != meshCache.end())
-                    {
-                        renderer.mesh = it->second;
-                    }
-                    else if (cache != nullptr)
-                    {
-                        if (const AssetBlobView *blob = cache->Load(id); blob != nullptr)
-                        {
-                            if (auto mesh = ParseMeshAsset(AsStringView(*blob), assetPath))
-                            {
-                                renderer.mesh = mRenderer.CreateMesh(mesh->vertices, mesh->indices);
-                                meshCache.emplace(id.value, renderer.mesh);
-                            }
-                        }
-                        else
-                        {
-                            MIR_LOG_ERROR("ResolveSceneMeshes: could not load '{}'", assetPath);
-                        }
-                    }
-                }
-
-                if (renderer.material.IsNull() && renderer.materialShader[0] != '\0')
-                {
-                    const std::string shaderName = renderer.materialShader;
-                    if (auto it = materialCache.find(shaderName); it != materialCache.end())
-                        renderer.material = it->second;
-                    else
-                        renderer.material = materialCache
-                        .emplace(shaderName, mRenderer.CreateMaterial(
-                            MaterialDesc{ .shaderName = shaderName }))
-                        .first->second;
-                }
-            });
     }
 
     void App::PlayScene()
@@ -368,8 +223,11 @@ namespace mir
 
         mScene = RestoreWorld(mWorld, mPlaySnapshot);
 
-        ResolveSceneScripts();
-        ResolveSceneMeshes();
+        // Play's entities are gone and the restored ones hold no handles yet
+        mRenderer.ReleaseSceneResources();
+
+        ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
+        ResolveSceneMeshes(mWorld, mRenderer, Assets(), mProject.mAssetIdRoot);
 
         SetEngineMode(mWorld, EngineMode::Edit);
         SetPlayState(mWorld, PlayState::Running);
@@ -381,6 +239,36 @@ namespace mir
             return;
 
         SetPlayState(mWorld, IsPaused(mWorld) ? PlayState::Running : PlayState::Paused);
+    }
+
+    void App::UnloadCurrentScene()
+    {
+        UnloadScene(mWorld, mScene);
+
+        // no scene entity holds a mesh or material handle now
+        mRenderer.ReleaseSceneResources();
+    }
+
+    void App::LoadProjectScene()
+    {
+        std::error_code ec;
+        if (std::filesystem::exists(mProject.mSceneDir / "scene.json", ec))
+            LoadScene();
+        else
+            MIR_LOG_INFO("No scene.json in '{}', starting with an empty scene", mProject.mSceneDir.string());
+    }
+
+    void App::RunSwitchHook()
+    {
+        if (mSwitchHookFired || mDesc.mSwitchProjectTo.empty() || mDesc.mMaxFrames == 0)
+            return;
+
+        if (mFrame < mDesc.mMaxFrames / 2)
+            return;
+
+        // once, even if it fails
+        mSwitchHookFired = true;
+        RequestOpenProject(mDesc.mSwitchProjectTo);
     }
 
     AssetCache *App::Assets()
@@ -437,8 +325,11 @@ namespace mir
 
             if (mWindow->Width() != 0 && mWindow->Height() != 0)
             {
-                switch (mEditor.DrawLayout(mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(),
-                    mWorld.Resource<EngineModeState>()))
+                const EditorActions actions = mEditor.DrawLayout(
+                    mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<EngineModeState>(),
+                    mProjectMenu, mProject.mDir);
+
+                switch (actions.mScene)
                 {
                 case SceneMenuAction::New:
                     NewScene();
@@ -461,6 +352,9 @@ namespace mir
                 case SceneMenuAction::None:
                     break;
                 }
+
+                if (!actions.mOpenProject.empty())
+                    RequestOpenProject(actions.mOpenProject);
             }
 
             mRenderer.SetImGuiDrawData(mEditor.EndFrame());
@@ -486,6 +380,12 @@ namespace mir
             mScheduler.Update(context);
 
             ++mFrame;
+
+            RunSwitchHook();
+
+            // same exit path as the close button
+            if (mDesc.mMaxFrames != 0 && mFrame >= mDesc.mMaxFrames)
+                mWindow->RequestClose();
         }
     }
 

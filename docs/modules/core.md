@@ -85,6 +85,9 @@ const ComponentOps &health = ComponentRegistry::Instance().RegisterRuntime("Heal
 | `CommandBuffer` | `ecs/CommandBuffer.h` | Deferred structural changes |
 | `ISystem`, `SystemScheduler` | `ecs/System.h`, `ecs/SystemScheduler.h` | Per-frame work, and running it by phase |
 | `ISurfaceProvider` | `platform/Surface.h` | Native handle plus dimensions |
+| `LaunchProcess`, `QuoteCommandLineArgument` | `platform/Process.h` | Start a process and optionally wait for its exit code; Windows argument quoting |
+| `ExecutableDir`, `ExecutablePath` | `fs/Paths.h` | The running executable's directory and full path |
+| `InitLog`, `FlushLog`, `ShutdownLog` | `log/Log.h` | Logger lifetime; `ShutdownLog` releases the log file for another process |
 | `EngineMode`, `PlayState`, `EngineModeState` | `ecs/EngineMode.h` | Edit/Play and Play's Running/Paused sub-state, as a `World` resource |
 
 `TypeIdOf<T>()` returns three things. `seq` is process-local and is used directly
@@ -216,7 +219,7 @@ with named field access, and script-declared component types.
 
 Tests in `modules/core/tests/`: `Archetype`, `Query`, `CommandBuffer`,
 `Resources`, `Transform`, `TransformHierarchy`, `System`, `ComponentRegistry`,
-`RuntimeQuery`, `Paths`.
+`RuntimeQuery`, `Paths`, `Process`.
 
 Logging and asserts have no tests of their own. Every other test exercises them,
 and their failure mode is loud.
@@ -247,6 +250,14 @@ hooks, and row migration when a script component's layout changes.
    `World::AddComponent` directly, rather than it being convention.
 
 ## Changed
+
+*2026-09-14* — **Starting processes, and handing the log file over.** Was: `core`
+could say where the executable lives but not start another one, and the log file
+stayed open until the process exited. Now: `ExecutablePath`,
+`LaunchProcess` with Windows argument quoting in `platform/Process.h`, and
+`ShutdownLog`. The editor's Open Project restarts into another game with them,
+because the component registry and the type-id counter are process-wide and a
+new process is the only clean slate.
 
 *2026-09-12* — **`EngineModeState` and `World::ForEachAliveEntity` added.** Was:
 no notion of Edit vs. Play in the ECS itself, and no way to enumerate every

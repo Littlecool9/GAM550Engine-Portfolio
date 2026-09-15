@@ -31,7 +31,8 @@ within the one swapchain image, not separate offscreen render targets.
 
 Game code never calls Vulkan. It calls `CreateMesh` and `CreateMaterial` once at
 scene-build time, stores the returned handles on a `MeshRenderer` component, and
-`RenderSystem` takes over from there every frame after.
+`RenderSystem` takes over from there every frame after. When `App` unloads that
+scene, `ReleaseSceneResources` frees them all again, except the default material.
 
 The module targets Vulkan 1.3 and rejects any device below it. That removes a
 lot of code: there are no render passes and no framebuffers, since
@@ -45,6 +46,7 @@ bool Initialize(const RendererDesc &desc);   // takes an ISurfaceProvider, never
 
 MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
 MaterialHandle CreateMaterial(const MaterialDesc &desc);
+void ReleaseSceneResources();                // every mesh and material but the default
 
 void DrawFrame(std::span<const RenderView> views);
 void SetClearColor(const glm::vec4 &color);
@@ -101,6 +103,13 @@ Everything is created at scene-build time anyway, before the loop starts.
 **An invalid material falls back to the default** rather than failing the draw,
 so one bad handle does not blank the frame.
 
+**`ReleaseSceneResources` is all or nothing, and the caller vouches for the
+handles.** It waits for the device to go idle, destroys every mesh and every
+material except the default, and the next `CreateMesh` or `CreateMaterial` reuses
+index 0. Mesh generations are not bumped, so a handle kept across the call names
+whatever is created next in its slot, with no error. `App` calls it only right
+after unloading a scene, when no `MeshRenderer` is left.
+
 **`RenderSystem` runs in `Render` because `TransformPropagateSystem` runs in
 `PostUpdate`.** Placed any earlier, it would draw the previous frame's matrices.
 
@@ -155,8 +164,9 @@ No tests. Everything here needs a device, and the module is verified by running.
 1. **Descriptor sets and uniform buffers.** The view-projection is premultiplied
    on the CPU into each `DrawItem`'s push constant, which caps what else can
    travel with a draw call at the 128-byte guaranteed minimum.
-2. **A destroy path for meshes and materials.** Everything uploaded lives until
-   `Shutdown()`.
+2. **Per-handle destroy for meshes and materials.** `ReleaseSceneResources` frees
+   everything at once. Nothing can free a single mesh, and a stale handle is not
+   detected.
 3. **Draw-item sorting and batching.** There is one pipeline bind per item today,
    so a frame scales with the number of distinct materials rather than with draw
    count.
@@ -172,6 +182,12 @@ No tests. Everything here needs a device, and the module is verified by running.
    Play session.
 
 ## Changed
+
+*2026-09-14* — **Scene resources can be released.** Was: every mesh and pipeline
+lived until `Shutdown()`, so each scene load and each Play session's Stop
+uploaded another copy. Now: `ReleaseSceneResources` destroys all of them except
+the default material, and `App` calls it whenever scene entities are discarded:
+New, Load and Stop.
 
 *2026-09-12* — **`RenderSystem` gained a viewport list, replacing one implicit
 whole-window view.** Was: `VulkanRenderer::SetSceneViewport`/`AspectRatio`

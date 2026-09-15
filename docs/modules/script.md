@@ -153,9 +153,9 @@ edit reaching a running instance, and a deliberate error thrown from inside a
 
 `ScriptRef.scriptName` exists so scene files can round-trip which script an
 entity runs. `instanceRef` is this run's live state and is deliberately not
-saved. Resolving the name back into an `instanceRef` after a scene load is a
-manual pass in `main.cpp`, `ResolveSceneScripts`, rather than something this
-module or `scene` does.
+saved. Resolving the name back into an `instanceRef` after a scene load is
+`ResolveSceneScripts`, a private pass in `app` that `App::LoadScene` runs, rather
+than something this module or `scene` does.
 
 ## Backlog
 
@@ -163,16 +163,14 @@ module or `scene` does.
    only a bare `World` and a `sol::state` — no window, no renderer. Binding
    round-trips, per-instance isolation, a deferred mutation issued from inside a
    callback, and the `Entity`-as-userdata precision case are all candidates.
-2. **A home for `ResolveSceneScripts` and `ResolveSceneMeshes`**, once a second
-   consumer would otherwise duplicate them.
-3. **`world:each` builds a fresh Lua table per matched entity per term, every
+2. **`world:each` builds a fresh Lua table per matched entity per term, every
    call**, even though the `RuntimeQuery` itself is now cached. Whether that
    allocation is worth avoiding is unmeasured.
-4. **No script-facing default for a native component's field**, the way
+3. **No script-facing default for a native component's field**, the way
    `NewInstanceData()` gives one for a script's own state. `world:add` with no
    fields table uses whatever `ComponentOps` registered, which is a C++-side
    decision a script cannot override per call site.
-5. Confirm the LuaJIT and plain-Lua swap stays a `vcpkg.json` entry plus one
+4. Confirm the LuaJIT and plain-Lua swap stays a `vcpkg.json` entry plus one
    CMake block, across a future sol2 upgrade that changes how it detects the
    flavour underneath.
 

@@ -14,4 +14,8 @@ target_link_libraries(engine_app
             nlohmann_json::nlohmann_json
 )
 
-target_sources(engine_app PRIVATE src/app/App.cpp)
+target_sources(engine_app PRIVATE
+    src/app/App.cpp
+    src/app/GameProject.cpp
+    src/app/SceneResolve.cpp
+)

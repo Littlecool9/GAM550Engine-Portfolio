@@ -11,7 +11,7 @@ own.
    `powershell -NoProfile -File tools/new_module.ps1 -Name input`
 2. It creates `modules/<name>/` with `include/`, `src/` and a CMakeLists calling
    `engine_add_module(<name>)`, registers the subdirectory, and links
-   `mir::<name>` into `HelloWorld`.
+   `mir::<name>` into `MjolnirEngine`.
 3. Fill in the CMakeLists with your sources and dependencies. The next section
    is a complete one.
 4. Add a file before configuring. CMake cannot build a library with no sources,
@@ -223,7 +223,7 @@ If the module has no tests yet, gate the subdirectory in its CMakeLists with
 Write a `.slang` file under `assets/shaders/`, then declare it:
 
 ```cmake
-engine_add_shaders(HelloWorld
+engine_add_shaders(MjolnirEngine
     SOURCE assets/shaders/triangle.slang
     ENTRIES vertexMain:vertex fragmentMain:fragment)
 ```
@@ -261,12 +261,14 @@ if (AssetCache *cache = app.Assets())
 `Assets()` returns `nullptr` when there is no manifest. Handle that rather than
 asserting on it.
 
-A new cook root:
+A game's assets root is cooked without any of this, see
+[Add a game](#add-a-game). Any other root joins `SOURCE_ROOTS` in the root
+CMakeLists:
 
 ```cmake
-engine_cook_assets(MyGame
-    SOURCE_ROOTS games/mygame/assets/
-    OUT_DIR ${CMAKE_BINARY_DIR}/mygame_cooked)
+engine_cook_assets(MjolnirEngine
+    SOURCE_ROOTS assets/ ${game_asset_roots} tools/mytool/assets/
+    OUT_DIR ${CMAKE_BINARY_DIR}/cooked_assets)
 ```
 
 `SOURCE_ROOTS` has to be **relative to the repository root**. An absolute path is
@@ -276,6 +278,43 @@ For a typed asset, add a type tag and a content version in `AssetBlob.h`, teach
 `tools/AssetCooker/main.cpp` to recognise the extension and emit that tag, then
 bump the content version whenever the layout changes. That bump is what forces a
 recook instead of a silent mismatch at load.
+
+## Add a game
+
+A game is a directory under `games/` with a `game.json`. It needs no C++ and no
+CMake:
+
+```
+games/mygame/
+  game.json
+  assets/              optional, cooked when present
+  scenes/default/      optional, written by File → Save
+```
+
+```json
+{
+    "name": "mygame",
+    "title": "MjolnirEngine - mygame",
+    "assetsRoot": "assets",
+    "sceneDir": "scenes/default"
+}
+```
+
+`assetsRoot` and `sceneDir` are relative to the game directory, and default to
+the values above. Input bindings save to `project_settings.json` next to
+`game.json`. Scene files name meshes and scripts relative to `assetsRoot`, so
+`meshes/cube.mesh.json` loads the asset whose id is the hash of
+`games/mygame/assets/meshes/cube.mesh.json`.
+
+Build. The root CMakeLists globs for `game.json`, so the build re-runs configure,
+cooks the game's `assetsRoot`, copies the game next to the executable, and
+registers a `smoke.mygame` test. Then run `MjolnirEngine --game games/mygame`,
+set `defaultGame` in `engine.json`, or pick it in the editor under
+Project > Open Project, which lists every game found at startup by its `name`
+and restarts the editor into the one you pick.
+
+A directory without `game.json` is refused at startup. A `sceneDir` with no
+`scene.json` yet starts an empty scene.
 
 ## Add a script to an entity
 

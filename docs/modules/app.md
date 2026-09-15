@@ -5,7 +5,7 @@ other module exists. It contains no gameplay and no subsystem of its own, and it
 is not a framework — there is no registry, no service locator, and no virtual
 `Game` to subclass.
 
-`mir::app` · depends `mir::core`, `assets`, `window`, `renderer`, `editor`, `scene`, `script`, all public; `nlohmann_json` (private) · API `modules/app/include/app/` · maintainer Sumin Park · reviewed 2026-09-12
+`mir::app` · depends `mir::core`, `assets`, `window`, `renderer`, `editor`, `scene`, `script`, all public; `input`, `nlohmann_json` private · API `modules/app/include/app/` · maintainer Sumin Park · reviewed 2026-09-12
 
 ## Model
 
@@ -17,14 +17,6 @@ what makes teardown correct, so declaration order in `App.h` is load-bearing
 rather than cosmetic. Adding a subsystem means editing `App`, which forces a
 decision about where it belongs in that order.
 
-`Initialize` resolves the project before anything else — the window needs a
-title before it exists. `AppDesc::mProjectPath` names a `game.json`; a private
-`GameProject`/`LoadGameProject` in `App.cpp` parses it into a window title and
-two private members, `mSceneDir` and `mAssetsRoot`, that `SaveScene`,
-`LoadScene` and the resolve passes below all read. A missing or malformed
-`game.json` falls back to `GameProject{}`'s defaults, logged, rather than
-failing `Initialize`.
-
 `Run` is a plain loop with no fixed timestep.
 
 ```
@@ -33,7 +25,7 @@ while not ShouldClose:
     PollEvents                         close flag and size refresh here
     dt = min(elapsed, mMaxDeltaSeconds)
     Editor::BeginFrame
-    Editor::DrawLayout -> SceneMenuAction    New/Save/Load/Play/TogglePause/Stop acted on here
+    Editor::DrawLayout -> EditorActions      New/Save/Load/Play/TogglePause/Stop and Open Project acted on here
     renderer.SetImGuiDrawData(Editor::EndFrame())
     renderSystem.SetViewportRect(0, Editor::SceneViewportRect())
     if IsEditing(world):                     viewport 0's camera, only in Edit
@@ -44,6 +36,8 @@ while not ShouldClose:
     ScriptReloadWatcher::Poll
     SystemScheduler::Update            PreUpdate, Update, PostUpdate, Render
     ++frame
+    halfway through mMaxFrames, if mSwitchProjectTo: RequestOpenProject
+    if mMaxFrames reached: RequestClose
 ```
 
 `App` contains no ImGui call and never builds a `DrawItem`. The editor produces a
@@ -54,15 +48,43 @@ A `SystemContext` is rebuilt every tick rather than stored. It bundles reference
 to the world and command buffer with the values that change each frame, so
 keeping one around would only be a stale copy.
 
+`App` has one game open for its whole life, a `GameProject` from
+`app/GameProject.h`: the game's directory and name, its window title, the asset
+id root its scene names resolve under, its scene directory and its
+`project_settings.json`. `Initialize` opens `AppDesc::mProject` and loads its
+scene.
+
+Switching games is a restart. `RequestOpenProject(dir)` only checks the directory
+and asks the window to close; `main.cpp` relaunches the executable with
+`--game <dir>` once `Run` and `Shutdown` have returned.
+
+```
+Project > Open Project, confirmed -> App::RequestOpenProject(dir)
+    NormalizeGameDir, LoadGameProject      not a game: logged, keep running
+    mProjectToOpen = game, Window::RequestClose
+Run returns, Shutdown                      imgui.ini written, device and window gone
+main.cpp: ShutdownLog, LaunchProcess(ExecutablePath(), --game dir)
+next process: the ordinary startup path
+```
+
+`LoadScene` runs the two resolve passes in `src/app/SceneResolve.cpp` after
+`SceneIO` loads, which is what turns saved script and mesh names back into live
+instances and GPU handles. They are private to this module: the unload, release,
+load, resolve order only holds while `App` is the one calling them.
+
 ```cpp
 mir::InitLog();                 // outside App: early failures must still log
+
+std::optional<mir::GameProject> project = mir::ResolveGameProject("games/HelloWorld");
+if (!project)
+    return 1;
 
 mir::App app;
 
 mir::AppDesc desc{};
-desc.mProjectPath = "games/HelloWorld/game.json";
+desc.mProject = *project;
 
-if (!app.Initialize(desc))
+if (!app.Initialize(desc))      // loads the game's scene too
 {
     mir::FlushLog();
     return -1;
@@ -70,6 +92,8 @@ if (!app.Initialize(desc))
 
 app.Run();
 app.Shutdown();                 // idempotent; the destructor would do it too
+
+// app.ProjectToOpen() set: relaunch with --game, as main.cpp does
 mir::FlushLog();
 ```
 
@@ -90,30 +114,34 @@ TogglePause()  // Running <-> Paused. No-op outside Play.
 `StopScene` calls `ScriptSystem::StopAllScripts` (giving every started script
 its `OnStop`, a Unity-style cleanup hook) *before* calling
 `PlaySnapshot::RestoreWorld`, since the World those scripts ran in is about to
-be destroyed wholesale. It then resolves scripts and meshes again, same as
-`LoadScene` — `RestoreWorld`'s entities come from `LoadScene` under the hood,
+be destroyed wholesale. It then releases the Play session's GPU resources and
+resolves scripts and meshes again, same as `LoadScene` — `RestoreWorld`'s entities come from `LoadScene` under the hood,
 with the same only-names-round-trip gap.
 
 ## API
 
 | Type | Header | Role |
 |---|---|---|
-| `AppDesc` | `app/App.h` | Window size, Vulkan app name and validation, editor-layout gate, `dt` clamp, project path |
-| `App` | `app/App.h` | Owns the subsystems, runs the loop |
+| `AppDesc` | `app/App.h` | Window size, Vulkan app name and validation, editor-layout gate, `dt` clamp, frame limit, the game to open, a scripted game switch for tests |
+| `App` | `app/App.h` | Owns the subsystems, runs the loop, takes a request to open another game |
+| `GameProject` | `app/GameProject.h` | `{mDir, mName, mTitle, mAssetIdRoot, mSceneDir, mProjectSettingsPath}` for one game directory |
 
-`AppDesc::mProjectPath` replaces what used to be separately caller-set window
-title/scene-directory/assets-root fields; see Model. `mAppName` is the one
-project-shaped-looking field that stays caller-set — it is the Vulkan instance
-name, engine-level, and nothing user-facing ever sees it.
+`app/GameProject.h` also declares `ReadDefaultGame`, `NormalizeGameDir`,
+`LoadGameProject`, `ResolveGameProject` (normalize, then load) and
+`DiscoverGameProjects` (every `games/*/game.json` next to the executable).
+
+`mAppName` stays caller-set even though each game has its own title — it is the
+Vulkan instance name, engine-level, and nothing user-facing ever sees it.
 
 Accessors: `GetWorld()`, `Systems()`, `Scripts()`, `ScriptReload()`, `Splash()`,
-`Assets()` and `Scene()`. `Renderer()` is marked a temporary seam, because
-`Renderer.h` is still an empty abstraction placeholder.
+`Assets()`, `Scene()`, `Project()`, `AvailableProjects()` and `ProjectToOpen()`.
+`Renderer()` is marked a temporary seam, because `Renderer.h` is still an empty
+abstraction placeholder.
 
 Scene control is `NewScene(name)`, `SaveScene()` and `LoadScene()`, each of which
-replaces whatever `Scene()` currently holds. `LoadScriptAsset(assetPath,
-scriptName)` is public because game bootstrap code needs it too, not just the
-internal resolve passes.
+replaces whatever `Scene()` currently holds. `NewScene`, `LoadScene` and
+`StopScene` release the discarded entities' GPU meshes and materials. Game
+control is `RequestOpenProject(dir)`, and the switch itself is a restart.
 
 ### Ownership and order
 
@@ -125,6 +153,7 @@ internal resolve passes.
 | `mEditor` | after the renderer | before it | its Vulkan backend needs a live device, its GLFW backend a live window |
 | `mCommands` | before `mWorld` | after it | outlives the world it records against |
 | `mWorld`, `mScheduler`, `mScriptHost`, `mScene` | with `App` | with `App` | no external resources |
+| `mProject`, `mAvailableProjects`, `mProjectToOpen` | with `App` | with `App` | plain data |
 | `mAssetManifest` | first `Assets()` | after the cache | owns the parsed manifest |
 | `mAssetCache` | with the manifest | before it | holds a raw pointer into it |
 
@@ -142,15 +171,11 @@ them without a lookup.
 A `LoadedScene` file (see [scene.md](scene.md)) round-trips a `MeshRenderer`'s
 `meshName`/`materialShader` and a `ScriptRef`'s `scriptName` — strings, not the
 live `MeshHandle`/`instanceRef` `RenderSystem`/`ScriptSystem` actually need.
-`ResolveSceneMeshes`/`ResolveSceneScripts`, private to `App`, turn one into the
-other by asset id, and run at the end of both places entities come from a
-`LoadedScene` file: `LoadScene()` and `StopScene()` (via `PlaySnapshot::
+`ResolveSceneMeshes`/`ResolveSceneScripts` turn one into the other by asset id
+under the game's `mAssetIdRoot`, and run at the end of both places entities come
+from a `LoadedScene` file: `LoadScene()` and `StopScene()` (via `PlaySnapshot::
 RestoreWorld`). Neither call site can skip them independently — both live
 inside the same two methods.
-
-This lives in `App`, not `main.cpp`, because it needs `Assets()`/`Renderer()`/
-`Scripts()`, all of which `App` already owns, and `mAssetsRoot` is config data
-of the same shape as `mSceneDir` — not a policy that differs per game.
 
 ## Rules
 
@@ -170,6 +195,24 @@ is the documented style, and forgetting it is not a leak.
 **Systems stop before subsystems die.** `Shutdown` runs `Stop` first, so `OnStop`
 still sees a live world. The renderer and window are already on their way out by
 then, so touching them from `OnStop` is not supported.
+
+**Switching games restarts the process.** The component registry, the counter
+behind every component's signature bit, the Lua VM and the asset cache are all
+process-wide. Only a new process opens a game without the last one's leftovers:
+script-spawned entities, Lua globals, `world:declare`d component types.
+`RequestOpenProject` tears nothing down itself.
+
+**`RequestOpenProject` checks before it closes.** A directory that is not a game
+logs an error and returns `false`, and the open game keeps running. It does not
+use `ResolveGameProject`, whose "Loading game" line would claim a load that
+happens in the next process.
+
+**Unloading a scene does not call `OnStop`.** New and Load destroy the scene's
+entities, and `ScriptSystem`'s destroy hook only drops each Lua instance.
+
+**The game list is read once.** `DiscoverGameProjects` runs in `Initialize`. A
+game added while the engine runs would still need a build to cook its assets, and
+the asset manifest is never re-read.
 
 **`Assets()` may return `nullptr`, and the failure is sticky.** With no manifest,
 the disk is not re-checked every frame. `Shutdown` clears the flag so a later
@@ -209,32 +252,27 @@ camera then, not the editor one — silently fly the (invisible) editor camera
 off somewhere, surfacing only later when Stop reverts viewport 0 to wherever
 that ended up.
 
-**`mSceneDir`/`mAssetsRoot` are private, not `AppDesc` fields.** They are
-derived from `mDesc.mProjectPath`, not caller config — a project switch would
-need to re-resolve both together, so nothing outside `Initialize` should set
-one without the other.
-
 **`NewScene`/`SaveScene`/`LoadScene` refuse while Play is running.** These can corrupt the current scene. Both `Editor` and app will opt out.
 
 ## State
 
-*As of 2026-09-12.* The loop runs, the scheduler ticks, scripts drive entities,
-scenes save and load from the editor's File menu, and the scene renders.
-Play/Pause/Stop work end to end: a Play session can be entered, its World
-mutations discarded on Stop via `PlaySnapshot`, and resumed indefinitely.
-
-`main.cpp` is down to setting `AppDesc::mProjectPath` and calling
-`LoadScene()` — `BuildScene` (an in-code fallback scene) is gone, since
-`games/HelloWorld/scenes/default/scene.json` is checked into the repo and
-`LoadScene()` always succeeds on a fresh clone.
+*As of 2026-09-14.* The loop runs, the scheduler ticks, scripts drive entities,
+scenes save and load from the editor's File menu, Project > Open Project restarts
+into another game, and the scene renders. Play/Pause/Stop work end to end: a
+Play session can be entered, its World mutations discarded on Stop via
+`PlaySnapshot`, and resumed indefinitely.
 
 The renderer is a value member rather than a `unique_ptr`, because there is no
 interface to hold.
 
-No tests. `App` is composition, and its behaviour is a window opening, a device
-initialising and a loop running. The parts worth asserting — phase ordering,
-command buffer flushing, asset lookup, scene round-tripping — are tested where
-they live. A headless renderer is the prerequisite for testing anything here.
+No unit tests. `App` is composition, and its behaviour is a window opening, a
+device initialising and a loop running. The parts worth asserting — phase
+ordering, command buffer flushing, asset lookup, scene round-tripping — are
+tested where they live. A headless renderer is the prerequisite for unit testing
+anything here. Until then the `smoke.<game>` tests run the whole `App` for 120
+frames per game through `mMaxFrames`, and `smoke.switch` restarts from one game
+into another twice through `mSwitchProjectTo`. All of them fail on a crash or a
+logged error.
 
 ## Backlog
 
@@ -247,17 +285,32 @@ they live. A headless renderer is the prerequisite for testing anything here.
 4. **`Initialize` after `Shutdown`** is written to work — the sticky asset flag
    and the explicit resets exist for it — but nothing exercises it.
 5. One `App` per process is assumed everywhere, and nothing enforces it.
-6. **No project switching yet.** `AppDesc::mProjectPath` and the private
-   `GameProject` resolution set up for it (see Model), but nothing calls the
-   resolution a second time after `Initialize`.
-7. **A second viewport for Play+Paused**, showing the editor camera alongside
+6. **A second viewport for Play+Paused**, showing the editor camera alongside
    the game view. `RenderSystem::AddViewport` exists (see
    [renderer.md](renderer.md)); nothing calls it yet.
-8. **No World diffing for Play/Stop** — `PlaySnapshot` destroys and reloads
+7. **No World diffing for Play/Stop** — `PlaySnapshot` destroys and reloads
    every entity rather than diffing what changed, which is simple but not
    cheap for a large scene.
 
 ## Changed
+
+*2026-09-14* — **The game is chosen at launch, and switching games restarts.**
+Was: `AppDesc::mProjectPath` named `games/HelloWorld/game.json`, parsed by a
+private `GameProject` in `App.cpp`, so opening another game meant editing
+`main.cpp`. Now: `GameProject` is public in `app/GameProject.h`, `main.cpp`
+picks the game from `--game` or `engine.json` and passes it as
+`AppDesc::mProject`, and the resolve passes are free functions in
+`src/app/SceneResolve.cpp`. Project > Open Project calls `RequestOpenProject`,
+and `main.cpp` relaunches with `--game`.
+
+An in-process switch was built first and dropped. Script-spawned entities, Lua
+globals and script-declared component types all outlived it, and clearing each
+one would have meant reaching into `core` for every process-wide singleton.
+
+*2026-09-14* — **`AppDesc::mMaxFrames`.** Was: `Run` ended only when someone
+closed the window, so nothing could drive the engine unattended. Now: after
+`mMaxFrames` frames `Run` calls `Window::RequestClose`, the same exit as the
+close button. `main.cpp`'s `--frames` sets it for the `smoke.<game>` tests.
 
 *2026-09-12* — **`NewScene`/`SaveScene`/`LoadScene` refuse while Play is
 running.** Was: nothing stopped any of the three from running mid-Play — Save

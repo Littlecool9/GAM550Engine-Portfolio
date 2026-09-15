@@ -110,10 +110,11 @@ Tests in `modules/scene/tests/SceneIO.tests.cpp` and
 
 Resolving names back into live handles after a load is not done here — a
 `ScriptRef.scriptName` into an `instanceRef`, or a mesh name into a `MeshHandle`.
-`App` does that (`ResolveSceneScripts`/`ResolveSceneMeshes`, see
-[app.md](app.md)), because it needs the renderer and the script host that this
-module does not link — and because `App` is the one place both of this
-module's load paths (`LoadScene`, `RestoreWorld`) converge.
+`App` does that, through `ResolveSceneScripts` and `ResolveSceneMeshes` in
+`app`'s private `SceneResolve.cpp` (see [app.md](app.md)), because it needs the
+renderer and the script host that this module does not link — and because `App`
+is the one place both of this module's load paths (`LoadScene`, `RestoreWorld`)
+converge.
 
 ## Backlog
 

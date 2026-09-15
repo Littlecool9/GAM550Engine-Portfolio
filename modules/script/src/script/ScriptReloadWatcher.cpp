@@ -22,7 +22,6 @@ namespace mir
     {
         mTracked[std::move(scriptName)] = TrackedScript{id};
     }
-
     void ScriptReloadWatcher::Poll(AssetCache *cache, float dt)
     {
         if (cache == nullptr || mTracked.empty())
