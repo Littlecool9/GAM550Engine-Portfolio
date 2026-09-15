@@ -84,6 +84,7 @@ const ComponentOps &health = ComponentRegistry::Instance().RegisterRuntime("Heal
 | `ComponentRegistry`, `FieldDesc` | `ecs/ComponentRegistry.h`, `ecs/ComponentFields.h` | Name to erased ops; one named, typed value |
 | `CommandBuffer` | `ecs/CommandBuffer.h` | Deferred structural changes |
 | `ISystem`, `SystemScheduler` | `ecs/System.h`, `ecs/SystemScheduler.h` | Per-frame work, and running it by phase |
+| `FixedTimestep` | `ecs/FixedTimestep.h` | Frame time to `FixedUpdate` substeps: leftover carries, per-frame cap, bounded backlog |
 | `ISurfaceProvider` | `platform/Surface.h` | Native handle plus dimensions |
 | `LaunchProcess`, `QuoteCommandLineArgument` | `platform/Process.h` | Start a process and optionally wait for its exit code; Windows argument quoting |
 | `ExecutableDir`, `ExecutablePath` | `fs/Paths.h` | The running executable's directory and full path |

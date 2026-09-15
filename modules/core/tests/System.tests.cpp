@@ -251,3 +251,103 @@ TEST_CASE("The context carries frame timing through to systems", "[ecs][system]"
     REQUIRE(timing.deltas == std::vector<float>{0.5f});
     REQUIRE(timing.frames == std::vector<uint64_t>{7});
 }
+
+TEST_CASE("FixedUpdate runs after Update and before PostUpdate", "[ecs][system]")
+{
+    World world;
+    CommandBuffer commands;
+    SystemScheduler scheduler;
+    Recorder recorder;
+
+    // registered out of phase order on purpose
+    scheduler.AddSystem<TagSystem>(SystemPhase::Render, recorder, 5);
+    scheduler.AddSystem<TagSystem>(SystemPhase::FixedUpdate, recorder, 3);
+    scheduler.AddSystem<TagSystem>(SystemPhase::PreUpdate, recorder, 1);
+    scheduler.AddSystem<TagSystem>(SystemPhase::PostUpdate, recorder, 4);
+    scheduler.AddSystem<TagSystem>(SystemPhase::Update, recorder, 2);
+
+    SystemContext context{world, commands};
+    scheduler.Start(context);
+    scheduler.Update(context, 1, 1.0f / 60.0f);
+    scheduler.Stop(context);
+
+    REQUIRE(recorder.started == std::vector<int>{1, 2, 3, 4, 5});
+    REQUIRE(recorder.updated == std::vector<int>{1, 2, 3, 4, 5});
+    REQUIRE(recorder.stopped == std::vector<int>{5, 4, 3, 2, 1});
+}
+
+TEST_CASE("FixedUpdate runs once per substep, every other phase once per frame", "[ecs][system]")
+{
+    World world;
+    CommandBuffer commands;
+    SystemScheduler scheduler;
+    Recorder recorder;
+
+    scheduler.AddSystem<TagSystem>(SystemPhase::PreUpdate, recorder, 1);
+    scheduler.AddSystem<TagSystem>(SystemPhase::Update, recorder, 2);
+    scheduler.AddSystem<TagSystem>(SystemPhase::FixedUpdate, recorder, 3);
+    scheduler.AddSystem<TagSystem>(SystemPhase::PostUpdate, recorder, 4);
+    scheduler.AddSystem<TagSystem>(SystemPhase::Render, recorder, 5);
+
+    SystemContext context{world, commands};
+    scheduler.Start(context);
+
+    scheduler.Update(context, 3, 1.0f / 60.0f);
+    scheduler.Update(context, 0, 1.0f / 60.0f);
+
+    // frame 1: three substeps; frame 2: shorter than a step, yet Render still runs
+    REQUIRE(recorder.updated == std::vector<int>{1, 2, 3, 3, 3, 4, 5, 1, 2, 4, 5});
+}
+
+TEST_CASE("FixedUpdate flushes commands after every substep", "[ecs][system]")
+{
+    World world;
+    CommandBuffer commands;
+    SystemScheduler scheduler;
+
+    scheduler.AddSystem<SpawnSystem>(SystemPhase::FixedUpdate);
+    CountSystem &fixedCounter = scheduler.AddSystem<CountSystem>(SystemPhase::FixedUpdate);
+    CountSystem &postCounter = scheduler.AddSystem<CountSystem>(SystemPhase::PostUpdate);
+
+    SystemContext context{world, commands};
+    scheduler.Start(context);
+
+    scheduler.Update(context, 2, 1.0f / 60.0f);
+
+    // the first substep's spawn is already there in the second
+    REQUIRE(fixedCounter.seen == std::vector<std::size_t>{0, 1});
+    // and both are there by PostUpdate
+    REQUIRE(postCounter.seen == std::vector<std::size_t>{2});
+}
+
+TEST_CASE("FixedUpdate gets the fixed step as dt, other phases keep the frame dt", "[ecs][system]")
+{
+    World world;
+    CommandBuffer commands;
+    SystemScheduler scheduler;
+
+    class DeltaSystem final : public ISystem
+    {
+    public:
+        void OnUpdate(SystemContext &context) override { deltas.push_back(context.dt); }
+
+        std::vector<float> deltas;
+    };
+
+    DeltaSystem &updateSystem = scheduler.AddSystem<DeltaSystem>(SystemPhase::Update);
+    DeltaSystem &fixedSystem = scheduler.AddSystem<DeltaSystem>(SystemPhase::FixedUpdate);
+    DeltaSystem &postSystem = scheduler.AddSystem<DeltaSystem>(SystemPhase::PostUpdate);
+
+    SystemContext context{world, commands};
+    scheduler.Start(context);
+
+    context.dt = 0.05f;
+    scheduler.Update(context, 2, 0.02f);
+
+    REQUIRE(updateSystem.deltas == std::vector<float>{0.05f});
+    REQUIRE(fixedSystem.deltas == std::vector<float>{0.02f, 0.02f});
+    REQUIRE(postSystem.deltas == std::vector<float>{0.05f});
+
+    // the caller's context keeps the frame dt
+    REQUIRE(context.dt == 0.05f);
+}

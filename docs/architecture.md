@@ -139,7 +139,7 @@ It is theme data, applied once by `editor` at startup.
 
 ### A frame
 
-`App::Run` is a plain loop with no fixed timestep.
+`App::Run` is a variable-dt loop; only the `FixedUpdate` phase steps at a fixed rate.
 
 ```
 PollEvents                       close flag and framebuffer size refresh here
@@ -147,17 +147,20 @@ dt = min(elapsed, mMaxDeltaSeconds)
 Editor::BeginFrame / DrawLayout / EndFrame -> ImDrawData*, EditorActions (scene action, game to open)
 renderer.SetImGuiDrawData(...), renderer.SetSceneViewport(...)
 ScriptReloadWatcher::Poll        mtime check, throttled
-SystemScheduler::Update          PreUpdate, Update, PostUpdate, Render
+FixedTimestep::Advance(dt)       substeps this frame, mFixedDeltaSeconds each, at most mMaxFixedSteps
+SystemScheduler::Update          PreUpdate, Update, FixedUpdate x substeps, PostUpdate, Render
 ```
 
 Ordering between features is expressed as a phase, never as registration order.
 
-`ScriptSystem` runs in `PreUpdate`. `TransformPropagateSystem` runs in
-`PostUpdate`. `RenderSystem` runs in `Render`, after both, so every
-`WorldTransform` it reads is already current for the frame being drawn.
+`ScriptSystem` runs in `PreUpdate`. `FixedUpdate` is for physics and its sync
+back to `Transform`; it runs zero or more times a frame with the fixed step as
+`dt`. `TransformPropagateSystem` runs in `PostUpdate`, after it. `RenderSystem`
+runs in `Render`, after all of them, so every `WorldTransform` it reads is
+already current for the frame being drawn.
 
-The scheduler flushes the command buffer at each phase boundary, never in the
-middle of a system.
+The scheduler flushes the command buffer at each phase boundary and after each
+`FixedUpdate` substep, never in the middle of a system.
 
 `RenderSystem` holds a `VulkanRenderer&` passed to its constructor. The renderer
 is not published as a world resource, which keeps it out of reach of scripts.

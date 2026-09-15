@@ -14,6 +14,7 @@
 #include "core/log/Assert.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -59,19 +60,32 @@ namespace mir
         }
 
         // call systems in the order of phase -> registrated order
-        // buffer is flushed after every phase
-        void Update(SystemContext &context)
+        // buffer is flushed after every phase, and after every FixedUpdate substep
+        // FixedUpdate runs fixedSteps times with dt = fixedDt; every other phase runs once with context.dt
+        void Update(SystemContext &context, uint32_t fixedSteps, float fixedDt)
         {
             MIR_ASSERT(mStarted, "SystemScheduler::Update: Start was never called");
 
+            const std::size_t fixedPhase = Index(SystemPhase::FixedUpdate);
+
             for (std::size_t phase = 0; phase < kPhaseCount; ++phase)
             {
-                for (const std::unique_ptr<ISystem> &system : mPhases[phase])
-                    system->OnUpdate(context);
+                if (phase != fixedPhase)
+                {
+                    RunPhase(phase, context);
+                    continue;
+                }
 
-                context.commands.Flush(context.world);
+                SystemContext fixedContext = context;
+                fixedContext.dt = fixedDt;
+                for (uint32_t step = 0; step < fixedSteps; ++step)
+                    RunPhase(phase, fixedContext);
             }
         }
+
+        // every phase once, FixedUpdate included, all with context.dt
+        // for tests and callers without a fixed clock; App passes its substeps
+        void Update(SystemContext &context) { Update(context, 1, context.dt); }
 
         // reverse of Start
         void Stop(SystemContext &context)
@@ -116,6 +130,15 @@ namespace mir
         static constexpr std::size_t kPhaseCount = static_cast<std::size_t>(SystemPhase::kCount);
 
         static constexpr std::size_t Index(SystemPhase phase) { return static_cast<std::size_t>(phase); }
+
+        // one pass over a phase, then flush
+        void RunPhase(std::size_t phase, SystemContext &context)
+        {
+            for (const std::unique_ptr<ISystem> &system : mPhases[phase])
+                system->OnUpdate(context);
+
+            context.commands.Flush(context.world);
+        }
 
         std::vector<std::unique_ptr<ISystem>> mPhases[kPhaseCount];
         bool mStarted = false;
