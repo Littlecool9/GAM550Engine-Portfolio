@@ -382,7 +382,7 @@ namespace mir
 
 
             audio::Update();
-            //
+            
             ++mFrame;
 
             RunSwitchHook();
@@ -406,7 +406,7 @@ namespace mir
 
 
         audio::Terminate();
-        //
+        
         mScheduler.Reset();
 
         // Cache before manifest
