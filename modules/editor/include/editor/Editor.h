@@ -9,7 +9,9 @@
  */
 #pragma once
 
+#include <core/ecs/EngineMode.h>
 #include <core/platform/Surface.h>
+#include <editor/EditorCamera.h>
 #include <editor/panels/LogPanel.h>
 #include <editor/panels/ProjectSettingsPanel.h>
 #include <renderer/VulkanRenderer.h>
@@ -31,6 +33,9 @@ namespace mir
         New,
         Save,
         Load,
+        Play,
+        TogglePause,
+        Stop,
     };
 
     // One game in Project > Open Project
@@ -75,15 +80,19 @@ namespace mir
 
         // Draws the editor shell and returns what the menus asked for this frame.
         // enableLayout = false disables editor
-        EditorActions DrawLayout(bool enableLayout, InputMap &inputMap,
+        // `mode` drives the Play/Pause/Stop toolbar's labels and which of them are enabled
+        EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, const EngineModeState &mode,
                                  std::span<const ProjectMenuEntry> projects, std::string_view currentProject);
 
-        // Returns draw data for VulkanRenderer::SetImGuiDrawData.
-        // BeginFrame is needed regardless of skipping layout
         ImDrawData *EndFrame();
 
         // The dockspace's central node, where the 3D scene shows through.
         VkRect2D SceneViewportRect() const { return mSceneViewportRect; }
+
+
+        void UpdateCamera(float dt);
+
+        EditorCamera &SceneCamera() { return mCamera; }
 
         bool IsInitialized() const { return mInitialized; }
 
@@ -95,6 +104,10 @@ namespace mir
         void DrawOpenProjectMenu(std::span<const ProjectMenuEntry> projects, std::string_view currentProject);
         void DrawOpenProjectConfirm(EditorActions &actions);
 
+        // Returns Play/TogglePause/Stop if one of the toolbar's buttons was
+        // clicked this frame, else None.
+        SceneMenuAction DrawPlayControls(const EngineModeState &mode);
+
         bool mInitialized = false;
         bool mShowStyleEditor = false;
         bool mShowProjectSettings = false;
@@ -105,6 +118,7 @@ namespace mir
         std::vector<PixelRect> mTitleBarInteractiveRects;
         LogPanel mLogPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
+        EditorCamera mCamera;
 
         // waiting on the confirm dialog
         ProjectMenuEntry mPendingProject;

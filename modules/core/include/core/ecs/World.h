@@ -58,7 +58,7 @@ namespace mir
     {
         inline uint32_t NextResourceId()
         {
-            static std::atomic<uint32_t> counter{0};
+            static std::atomic<uint32_t> counter{ 0 };
             return counter.fetch_add(1, std::memory_order_relaxed);
         }
 
@@ -87,8 +87,7 @@ namespace mir
         public:
             template <typename... Args>
             explicit ResourceHolder(Args &&...args) : mValue(std::forward<Args>(args)...)
-            {
-            }
+            {}
 
             T mValue;
         };
@@ -117,14 +116,14 @@ namespace mir
                 mRecords.resize(entity.mIndex + 1);
 
             // no defer needed
-            mRecords[entity.mIndex] = EntityRecord{mEmptyArchetype, mEmptyArchetype->AddRow(entity)};
+            mRecords[entity.mIndex] = EntityRecord{ mEmptyArchetype, mEmptyArchetype->AddRow(entity) };
             return entity;
         }
 
         // registers a hook to run before entity destroy
         void AddDestroyHook(void (*fn)(World &, Entity, void *), void *user = nullptr)
         {
-            const EntityDestroyHook hook{fn, user};
+            const EntityDestroyHook hook{ fn, user };
             for (const EntityDestroyHook &existing : mDestroyHooks)
             {
                 if (existing == hook)
@@ -136,7 +135,7 @@ namespace mir
 
         void RemoveDestroyHook(void (*fn)(World &, Entity, void *), void *user = nullptr)
         {
-            const EntityDestroyHook hook{fn, user};
+            const EntityDestroyHook hook{ fn, user };
             std::erase(mDestroyHooks, hook);
         }
 
@@ -170,6 +169,17 @@ namespace mir
 
         bool IsAlive(Entity entity) const { return mPool.IsAlive(entity); }
 
+        template <typename Fn>
+        void ForEachAliveEntity(Fn &&fn) const
+        {
+            for (uint32_t i = 0; i < static_cast<uint32_t>(mRecords.size()); ++i)
+            {
+                const Entity entity{ i, mPool.GenerationOf(i) };
+                if (mPool.IsAlive(entity))
+                    fn(entity);
+            }
+        }
+
         // Structual changes forbidden while Query is iterating
         bool IsIterating() const { return mQueryIterationDepth > 0; }
 
@@ -186,7 +196,7 @@ namespace mir
         // bumps every time new archetype component is added
         std::size_t Generation() const { return mArchetypeGeneration; }
 
-#pragma region Typed operations
+    #pragma region Typed operations
         template <typename T>
         bool Has(Entity entity) const
         {
@@ -198,8 +208,8 @@ namespace mir
         T *GetComponent(Entity entity)
         {
             static_assert(!kIsTagComponent<T>,
-                          "World::GetComponent: T is a tag - it has no fields, so there is nothing to "
-                          "read. Use Has<T> instead.");
+                "World::GetComponent: T is a tag - it has no fields, so there is nothing to "
+                "read. Use Has<T> instead.");
 
             if (!mPool.IsAlive(entity))
                 return nullptr;
@@ -213,8 +223,8 @@ namespace mir
         const T *GetComponent(Entity entity) const
         {
             static_assert(!kIsTagComponent<T>,
-                          "World::GetComponent: T is a tag - it has no fields, so there is nothing to "
-                          "read. Use Has<T> instead.");
+                "World::GetComponent: T is a tag - it has no fields, so there is nothing to "
+                "read. Use Has<T> instead.");
 
             if (!mPool.IsAlive(entity))
                 return nullptr;
@@ -230,8 +240,8 @@ namespace mir
         {
             MIR_ASSERT_COMPONENT(T);
             static_assert(!kIsTagComponent<T>,
-                          "World::AddComponent: T is a tag - there is no value to store and no reference "
-                          "to return. Use AddTag<T>(entity).");
+                "World::AddComponent: T is a tag - there is no value to store and no reference "
+                "to return. Use AddTag<T>(entity).");
 
             MIR_ASSERT(mPool.IsAlive(entity), "World::AddComponent: entity is not alive");
             if (T *existing = GetComponent<T>(entity))
@@ -248,7 +258,7 @@ namespace mir
             // no column is made for tag but saved inside Archetype's signature
             MIR_ASSERT_COMPONENT(T);
             static_assert(kIsTagComponent<T>,
-                          "World::AddTag: T has fields, so it needs a value. Use AddComponent<T>.");
+                "World::AddTag: T has fields, so it needs a value. Use AddComponent<T>.");
 
             MIR_ASSERT(mPool.IsAlive(entity), "World::AddTag: entity is not alive");
             MIR_ASSERT(!Has<T>(entity), "World::AddTag: entity already has this tag");
@@ -266,9 +276,9 @@ namespace mir
 
             RemoveTableComponent<T>(entity);
         }
-#pragma endregion
+    #pragma endregion
 
-#pragma region Type-Erased Operations
+    #pragma region Type-Erased Operations
 
         void *GetRaw(Entity entity, TypeId type)
         {
@@ -314,13 +324,13 @@ namespace mir
 
             RemoveTableComponentRaw(entity, type);
         }
-#pragma endregion
+    #pragma endregion
 
         template <typename T, typename... Args>
         T &EmplaceResource(Args &&...args)
         {
             static_assert(std::is_same_v<T, std::remove_cvref_t<T>>,
-                          "World::EmplaceResource: T must be a plain value type, not a reference or cv-qualified");
+                "World::EmplaceResource: T must be a plain value type, not a reference or cv-qualified");
 
             auto holder = std::make_unique<detail::ResourceHolder<T>>(std::forward<Args>(args)...);
             T &value = holder->mValue;
@@ -408,9 +418,9 @@ namespace mir
         void AssertSafeToMutate([[maybe_unused]] const char *what) const
         {
             MIR_ASSERT(mQueryIterationDepth == 0,
-                       "World::{}: structural change while a Query is iterating. Record it into a "
-                       "CommandBuffer instead - see World::IsIterating",
-                       what);
+                "World::{}: structural change while a Query is iterating. Record it into a "
+                "CommandBuffer instead - see World::IsIterating",
+                what);
         }
 
         void *AddTableComponentRaw(Entity entity, TypeId type, uint32_t size, uint32_t align, const void *value)
@@ -424,8 +434,8 @@ namespace mir
 
             // tags only live in signature of archetype, no column creation
             Archetype &target = size == 0
-                                    ? GetOrCreateAdded(signature, *from.archetype)
-                                    : GetOrCreateAdded(signature, *from.archetype, ComponentColumn(type, size, align));
+                ? GetOrCreateAdded(signature, *from.archetype)
+                : GetOrCreateAdded(signature, *from.archetype, ComponentColumn(type, size, align));
 
             const uint32_t row = target.AddRow(entity);
             CopySharedColumns(*from.archetype, from.row, target, row);
@@ -435,16 +445,16 @@ namespace mir
             {
                 ComponentColumn *column = target.FindColumn(type);
                 MIR_CHECK(column != nullptr,
-                          "World::AddTableComponentRaw: \"{}\" was registered with size {}, but the target "
-                          "archetype has no column for it - it was added as a tag elsewhere.",
-                          type.name, size);
+                    "World::AddTableComponentRaw: \"{}\" was registered with size {}, but the target "
+                    "archetype has no column for it - it was added as a tag elsewhere.",
+                    type.name, size);
 
                 slot = column->GetComponent(row);
                 std::memcpy(slot, value, size);
             }
 
             RemoveRow(*from.archetype, from.row);
-            mRecords[entity.mIndex] = EntityRecord{&target, row};
+            mRecords[entity.mIndex] = EntityRecord{ &target, row };
             return slot;
         }
 
@@ -462,7 +472,7 @@ namespace mir
             CopySharedColumns(*from.archetype, from.row, target, row);
 
             RemoveRow(*from.archetype, from.row);
-            mRecords[entity.mIndex] = EntityRecord{&target, row};
+            mRecords[entity.mIndex] = EntityRecord{ &target, row };
         }
 
         template <typename T>

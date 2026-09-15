@@ -2,6 +2,7 @@
 
 #include <script/IScriptHost.h>
 
+#include <core/ecs/EngineMode.h>
 #include <core/log/Log.h>
 
 #include <exception>
@@ -32,6 +33,9 @@ namespace mir
 
     void ScriptSystem::OnUpdate(SystemContext &context)
     {
+        if (!IsSimulating(context.world))
+            return;
+
         mQuery->ForEach(
             [&](Entity entity, ScriptRef &ref)
             {
@@ -41,16 +45,20 @@ namespace mir
                 if (!ref.started)
                 {
                     RunIsolated(entity, "OnStart", [&]
-                                { mHost.CallOnStart(context.world, context.commands, entity, ref.instanceRef); });
+                        {
+                            mHost.CallOnStart(context.world, context.commands, entity, ref.instanceRef);
+                        });
                     ref.started = true;
                 }
 
                 RunIsolated(entity, "OnUpdate", [&]
-                            { mHost.CallOnUpdate(context.world, context.commands, entity, ref.instanceRef, context.dt); });
+                    {
+                        mHost.CallOnUpdate(context.world, context.commands, entity, ref.instanceRef, context.dt);
+                    });
             });
     }
 
-    void ScriptSystem::OnStop(SystemContext &context)
+    void ScriptSystem::StopAllScripts(SystemContext &context)
     {
         mQuery->ForEach(
             [&](Entity entity, ScriptRef &ref)
@@ -59,9 +67,18 @@ namespace mir
                     return;
 
                 RunIsolated(entity, "OnStop", [&]
-                            { mHost.CallOnStop(context.world, context.commands, entity, ref.instanceRef); });
-            });
+                    {
+                        mHost.CallOnStop(context.world, context.commands, entity, ref.instanceRef);
+                    });
 
+                // Reset so a later Play session calls OnStart again.
+                ref.started = false;
+            });
+    }
+
+    void ScriptSystem::OnStop(SystemContext &context)
+    {
+        StopAllScripts(context);
         context.world.RemoveDestroyHook(&ScriptSystem::OnEntityDestroyed, this);
     }
 

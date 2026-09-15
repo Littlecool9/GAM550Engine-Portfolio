@@ -23,12 +23,13 @@ namespace mir
     {
     public:
         explicit ScriptSystem(IScriptHost &host) : mHost(host)
-        {
-        }
+        {}
 
         void OnStart(SystemContext &context) override;
         void OnUpdate(SystemContext &context) override;
         void OnStop(SystemContext &context) override;
+
+        void StopAllScripts(SystemContext &context);
 
     private:
         static void OnEntityDestroyed(World &world, Entity entity, void *user);

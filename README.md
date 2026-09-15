@@ -24,7 +24,6 @@ cmake/                build helpers
   Assets.cmake          asset cooking
   Fonts.cmake           font copying
   Branding.cmake        icon and splash copying
-  VcpkgToolchain.cmake  resolves vcpkg from VCPKG_ROOT
 
 modules/              one static library each, mir::<name>
   core/                 ECS, logging, paths, the surface contract

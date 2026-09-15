@@ -27,13 +27,13 @@ namespace mir
             {
                 const uint32_t index = mFreeList.front();
                 mFreeList.pop_front();
-                return Entity{index, mGenerations[index]};
+                return Entity{ index, mGenerations[index] };
             }
 
             const uint32_t index = static_cast<uint32_t>(mGenerations.size());
             MIR_ASSERT(index != Entity::kNullIndex, "EntityPool::Create: entity index space exhausted");
             mGenerations.push_back(0);
-            return Entity{index, 0};
+            return Entity{ index, 0 };
         }
 
         void Destroy(Entity entity)
@@ -50,6 +50,9 @@ namespace mir
         }
 
         uint32_t Capacity() const { return static_cast<uint32_t>(mGenerations.size()); }
+
+        // For reconstructing the live Entity at a given index
+        uint32_t GenerationOf(uint32_t index) const { return mGenerations[index]; }
 
     private:
         std::vector<uint32_t> mGenerations; // per index, bumped on Destroy

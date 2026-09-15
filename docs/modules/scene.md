@@ -3,7 +3,7 @@
 Saves and loads a scene as data. It owns the save-file identity, `StableId`, and
 the three-pass load. It owns no runtime state and no authoring UI.
 
-`mir::scene` · depends `mir::core` (public); `nlohmann_json` (private) · API `modules/scene/include/scene/` · maintainer Sumin Park · reviewed 2026-09-06
+`mir::scene` · depends `mir::core` (public); `nlohmann_json` (private) · API `modules/scene/include/scene/` · maintainer Sumin Park · reviewed 2026-09-12
 
 ## Model
 
@@ -34,6 +34,15 @@ non-`EntityRef` field, building the `StableId` to `Entity` map. Then resolve eve
 `parent` through that map via `SetParent`. Then patch the recorded `EntityRef`
 fields.
 
+`PlaySnapshot` is `SaveScene`/`LoadScene` reused for a second purpose: a
+whole-World capture and restore around a Play session, rather than an
+author's save file. `CaptureWorld` builds a throwaway `LoadedScene` covering
+every entity `World::ForEachAliveEntity` finds — not just ones some other
+`LoadedScene` tracks — and saves it to a fixed scratch directory. `RestoreWorld`
+destroys every entity currently alive, then `LoadScene`s that directory back,
+returning the fresh `LoadedScene` identity (new `Entity` handles) for the
+caller to adopt.
+
 ## API
 
 | Type | Header | Role |
@@ -42,6 +51,7 @@ fields.
 | `LoadedScene` | `scene/SceneAsset.h` | `{mName, std::map<StableId, Entity>, mNextId}` |
 | `NewScene`, `AllocateStableId`, `CreateSceneEntity` | `scene/SceneAsset.h` | Authoring entry points |
 | `SaveScene`, `LoadScene`, `UnloadScene` | `scene/SceneIO.h` | Directory in, directory out, scoped destroy |
+| `PlaySnapshot`, `CaptureWorld`, `RestoreWorld` | `scene/PlaySnapshot.h` | Whole-World capture/restore around a Play session, built on `SaveScene`/`LoadScene` |
 
 `CreateSceneEntity` is the one call an editor's "add entity" needs, so allocation
 and registration cannot happen for one without the other.
@@ -90,16 +100,21 @@ The entity filename carries a name for humans, but the loader trusts only the
 
 ## State
 
-*As of 2026-09-06.* Save, load and unload work end to end, including the generic
-field-table round trip and the `EntityRef` patch pass.
+*As of 2026-09-12.* Save, load and unload work end to end, including the generic
+field-table round trip and the `EntityRef` patch pass. `PlaySnapshot` builds on
+the same load/save, tested directly against a live `World` (mutate after
+capture, restore, check it reverted) rather than through files.
 
-Tests in `modules/scene/tests/SceneIO.tests.cpp`.
+Tests in `modules/scene/tests/SceneIO.tests.cpp` and
+`modules/scene/tests/PlaySnapshot.tests.cpp`.
 
 Resolving names back into live handles after a load is not done here — a
 `ScriptRef.scriptName` into an `instanceRef`, or a mesh name into a `MeshHandle`.
-`App::LoadScene` does that, through `ResolveSceneScripts` and
-`ResolveSceneMeshes` in `app`'s private `SceneResolve.cpp`, because it needs the
-renderer and the script host that this module does not link.
+`App` does that, through `ResolveSceneScripts` and `ResolveSceneMeshes` in
+`app`'s private `SceneResolve.cpp` (see [app.md](app.md)), because it needs the
+renderer and the script host that this module does not link — and because `App`
+is the one place both of this module's load paths (`LoadScene`, `RestoreWorld`)
+converge.
 
 ## Backlog
 
@@ -117,6 +132,13 @@ renderer and the script host that this module does not link.
    of sweeping the whole registry per entity.
 
 ## Changed
+
+*2026-09-12* — **`PlaySnapshot` added, and the resolve-pass home question
+resolved.** Was: `SaveScene`/`LoadScene` had one caller (`App::LoadScene`), and
+this doc's backlog asked where `ResolveSceneScripts`/`ResolveSceneMeshes`
+should live once a second caller existed. Now: `RestoreWorld` is that second
+caller (Play→Edit), and both routes converge on `App`, which resolves names
+back into handles after either one.
 
 *2026-09-03* — **`EntityRef` fields stopped being written as bytes.** Was: the
 generic path would have written every `FieldDesc` value directly, and an

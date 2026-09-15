@@ -4,7 +4,7 @@ The whole Vulkan path — instance through swapchain, meshes, materials, depth a
 per-frame recording — plus the render-facing components and the one system that
 drives it from the ECS.
 
-`mir::renderer` · depends `mir::core`, `volk`, `glm` (public); `VMA`, `imgui` (private) · API `modules/renderer/include/renderer/` · maintainer Sumin Park · reviewed 2026-09-06
+`mir::renderer` · depends `mir::core`, `volk`, `glm` (public); `VMA`, `imgui` (private) · API `modules/renderer/include/renderer/` · maintainer Sumin Park · reviewed 2026-09-12
 
 ## Model
 
@@ -14,9 +14,20 @@ depth image per frame, an uploaded-mesh table, a pipeline-per-material table, an
 frame pacing on a timeline semaphore with `kFramesInFlight = 2`.
 
 `RenderSystem` is the only thing connecting the ECS to it. It is an `ISystem` in
-`SystemPhase::Render` holding a `VulkanRenderer&`. Each frame it takes the first
-`Camera` it finds, builds one view-projection matrix, builds one `DrawItem` per
-`(WorldTransform, MeshRenderer)` pair, and calls `DrawFrame`.
+`SystemPhase::Render` holding a `VulkanRenderer&`, and it owns a list of
+`Viewport`s. Viewport 0 always exists(whole window, first `Camera` found),
+and can add more with `AddViewPort`.
+
+Each frame, for every viewport, `RenderSystem` resolves a camera (a specific
+World `Entity` via `SetViewportCamera`, an externally-owned one via
+`SetExternalCamera`, or that same first-match `Camera` as a fallback), builds
+one view-projection matrix scaled to that viewport's own rect, builds one
+`DrawItem` per `(WorldTransform, MeshRenderer)` pair, and packages the result as
+a `RenderView`. All of a frame's `RenderView`s go to `VulkanRenderer::DrawFrame`
+together.
+
+`VulkanRenderer` draws every `RenderView` inside one render pass, swapping only the viewport/scissor rect between them (`RecordView`). This is split-screen-style clipping
+within the one swapchain image, not separate offscreen render targets.
 
 Game code never calls Vulkan. It calls `CreateMesh` and `CreateMaterial` once at
 scene-build time, stores the returned handles on a `MeshRenderer` component, and
@@ -37,11 +48,10 @@ MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t
 MaterialHandle CreateMaterial(const MaterialDesc &desc);
 void ReleaseSceneResources();                // every mesh and material but the default
 
-void DrawFrame(std::span<const DrawItem> items);
+void DrawFrame(std::span<const RenderView> views);
 void SetClearColor(const glm::vec4 &color);
 void SetImGuiDrawData(ImDrawData *drawData);
-void SetSceneViewport(VkRect2D rect);        // zero extent = full swapchain
-float AspectRatio() const;                   // follows the scene viewport once one is set
+VkExtent2D SwapchainExtent() const; 
 
 bool InitImGuiVulkanBackend();               // called by editor, not App or game code
 void ShutdownImGuiVulkanBackend();
@@ -49,11 +59,22 @@ void ShutdownImGuiVulkanBackend();
 void Shutdown();
 ```
 
+```cpp
+// RenderSystem
+ViewportId AddViewport(VkRect2D rect);
+void RemoveViewport(ViewportId id);          // viewport 0 cannot be removed
+void SetViewportRect(ViewportId id, VkRect2D rect);
+void SetViewportCamera(ViewportId id, Entity camera);           // a World camera
+void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera &camera); // one the World doesn't own
+```
+
 | Type | Header | Role |
 |---|---|---|
 | `Vertex`, `MeshHandle` | `renderer/Mesh.h` | `{pos, color, normal}`; a `{index, generation}` handle |
 | `MaterialDesc`, `MaterialHandle` | `renderer/Material.h` | `{shaderName, cullMode, polygonMode}`; `kNullMaterial` means the default |
 | `DrawItem` | `renderer/Renderer.h` | `{mesh, model, normalMatrix, tint, material}` |
+| `RenderView` | `renderer/VulkanRenderer.h` | `{rect, items}` — one camera's `DrawItem`s, clipped to a screen rect |
+| `Viewport`, `ViewportId` | `renderer/RenderSystem.h` | `RenderSystem`'s per-viewport state: rect plus a World `Entity`, an external camera, or neither (fallback) |
 | `MeshRenderer`, `Camera` | `renderer/components/` | Handles, and `fovY`/`near`/`far`, declared here rather than in `core` |
 | `RenderSystem` | `renderer/RenderSystem.h` | The ECS-to-renderer bridge, `SystemPhase::Render` |
 | `Shapes.h` | `renderer/Shapes.h` | `MakeCube()` and friends — plain vectors, no Vulkan |
@@ -96,20 +117,42 @@ after unloading a scene, when no `MeshRenderer` is left.
 resource. A resource would be reachable from any script-bound system, and there
 is no access-control story for that yet.
 
-**`SetSceneViewport` clips the scene pass**, clamped to the swapchain, so the
-editor's docked panels are never painted over.
+**`RenderSystem` owns the viewport list, not `Editor` or `App`.** Viewport
+mechanics — shared meshes/materials/pipeline binds across every view, per-view
+culling later, render-target lifetime — are a rendering concern, and a shipped
+game with split-screen or a security-camera-in-a-monitor needs multiple
+viewports with zero editor code compiled in. `Editor` is a caller of the API
+(it calls `AddViewport`/`SetViewportRect` for its own scene panel), never the
+owner of the list.
 
-ImGui's draw data composites on top afterwards, unclipped, because ImGui manages
-its own per-window clip rects. `editor` is the only caller.
+**Each `RenderView`'s rect clips its own viewport/scissor**, clamped to the
+swapchain, so the editor's docked panels are never painted over and one
+viewport's geometry never bleeds into another's rect.
+
+ImGui's draw data composites on top afterwards, unclipped and after every
+`RenderView`, because ImGui manages its own per-window clip rects. `editor` is
+the only caller.
+
+**A viewport's camera resolves in this order: external, then a specific
+`Entity`, then the first `Camera` found.** `SetExternalCamera` is for a camera
+the World doesn't own, such as the editor's free-fly camera — its transform is
+a raw `glm::mat4`, not a `WorldTransform`, because `WorldTransform`'s matrix is
+resolver-only and unconstructable outside the ECS hierarchy resolve.
+`SetViewportCamera(id, kNullEntity)` clears both and falls back to the
+first-match `Camera`, which is how a viewport hands itself back to whatever the
+World considers its default camera.
 
 **RenderDoc object naming is applied under validation**, and shaders are built
 `-g -O0` unconditionally, so a capture shows Slang source.
 
 ## State
 
-*As of 2026-09-06.* Working: instance through swapchain, swapchain recreation on
-resize, meshes, materials, depth, camera, ImGui compositing, and scene-viewport
-clipping.
+*As of 2026-09-12.* Working: instance through swapchain, swapchain recreation on
+resize, meshes, materials, depth, ImGui compositing, and a `RenderSystem`
+viewport list — one viewport by default, more via `AddViewport`, each with its
+own rect and camera resolution, all drawn in one pass. `App` currently uses only
+viewport 0, feeding it the editor's free-fly camera in Edit mode and falling
+back to the World's default camera in Play.
 
 `Renderer.h` is still an empty abstraction placeholder, so `App` names
 `VulkanRenderer` directly.
@@ -133,13 +176,32 @@ No tests. Everything here needs a device, and the module is verified by running.
    configurations write to a path that carries no configuration component.
 6. **A real renderer interface.** It is the prerequisite for a headless mode, and
    therefore for testing anything in this module or in `app`.
+7. **A second viewport actually on screen at once.** The mechanism (`AddViewport`)
+   exists and is tested by `App` using only viewport 0; nothing yet adds a second
+   one for, say, an editor-camera view alongside the game view during a paused
+   Play session.
 
 ## Changed
 
 *2026-09-14* — **Scene resources can be released.** Was: every mesh and pipeline
-lived until `Shutdown()`, so each scene reload or game switch uploaded another
-copy. Now: `ReleaseSceneResources` destroys all of them except the default
-material, and `App` calls it whenever it unloads a scene.
+lived until `Shutdown()`, so each scene load and each Play session's Stop
+uploaded another copy. Now: `ReleaseSceneResources` destroys all of them except
+the default material, and `App` calls it whenever scene entities are discarded:
+New, Load and Stop.
+
+*2026-09-12* — **`RenderSystem` gained a viewport list, replacing one implicit
+whole-window view.** Was: `VulkanRenderer::SetSceneViewport`/`AspectRatio`
+tracked one clip rect renderer-side, and `RenderSystem` always drew the first
+`Camera` found into it. Now: `RenderSystem` owns `std::vector<Viewport>`
+(`AddViewport`/`SetViewportRect`/`SetViewportCamera`/`SetExternalCamera`),
+`VulkanRenderer::DrawFrame` takes `std::span<const RenderView>` and draws each
+into its own rect within one pass (`RecordView`), and `SwapchainExtent()`
+replaces `AspectRatio()` since aspect is now per-viewport.
+
+Driven by wanting multiple simultaneous camera views (an editor camera and a
+game camera, later split-screen) without duplicating render state per view —
+the renderer is the one place that can share meshes/materials/pipeline binds
+across all of them, so it, not `Editor` or `App`, needed to own the list.
 
 *2026-09-03* — **Render-facing components moved from `core` to `renderer`.** Was:
 `TriangleRenderer`, a tag in `core`, with `App` driving the draw by hand. Now:

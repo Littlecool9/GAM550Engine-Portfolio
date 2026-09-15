@@ -16,6 +16,7 @@
 #include <assets/AssetManifest.h>
 #include <editor/Editor.h>
 #include <renderer/VulkanRenderer.h>
+#include <scene/PlaySnapshot.h>
 #include <scene/SceneAsset.h>
 #include <script/ScriptHost.h>
 #include <script/ScriptReloadWatcher.h>
@@ -31,10 +32,15 @@
 
 namespace mir
 {
+    class RenderSystem;
+    class ScriptSystem;
+
     struct AppDesc
     {
         uint32_t mWidth = 1280;
         uint32_t mHeight = 720;
+
+        // Vulkan instance name. Engine-level, not project data
         const char *mAppName = "MjolnirEngine";
         bool mEnableValidation = true;
 
@@ -106,6 +112,15 @@ namespace mir
         // Replaces Scene() with the game's saved scene and resolves it. False without a scene.json
         bool LoadScene();
 
+        // Edit -> Play
+        void PlayScene();
+
+        // Play -> Edit
+        void StopScene();
+
+        // Toggles Running/Paused. No-op outside Play.
+        void TogglePause();
+
     private:
         // context is rebuilt per tick
         SystemContext MakeContext(float dt);
@@ -129,8 +144,11 @@ namespace mir
 
         World mWorld;
         SystemScheduler mScheduler;
+        RenderSystem *mRenderSystem = nullptr;
+        ScriptSystem *mScriptSystem = nullptr;
+        PlaySnapshot mPlaySnapshot;
         ScriptHost mScriptHost;
-        ScriptReloadWatcher mScriptReloadWatcher{mScriptHost};
+        ScriptReloadWatcher mScriptReloadWatcher{ mScriptHost };
         LoadedScene mScene;
 
         AppDesc mDesc;

@@ -5,7 +5,7 @@ other module exists. It contains no gameplay and no subsystem of its own, and it
 is not a framework — there is no registry, no service locator, and no virtual
 `Game` to subclass.
 
-`mir::app` · depends `mir::core`, `assets`, `window`, `renderer`, `editor`, `scene`, `script`, all public; `input`, `nlohmann_json` private · API `modules/app/include/app/` · maintainer Sumin Park · reviewed 2026-09-06
+`mir::app` · depends `mir::core`, `assets`, `window`, `renderer`, `editor`, `scene`, `script`, all public; `input`, `nlohmann_json` private · API `modules/app/include/app/` · maintainer Sumin Park · reviewed 2026-09-12
 
 ## Model
 
@@ -25,9 +25,14 @@ while not ShouldClose:
     PollEvents                         close flag and size refresh here
     dt = min(elapsed, mMaxDeltaSeconds)
     Editor::BeginFrame
-    Editor::DrawLayout -> EditorActions      New / Save / Load and Open Project acted on here
+    Editor::DrawLayout -> EditorActions      New/Save/Load/Play/TogglePause/Stop and Open Project acted on here
     renderer.SetImGuiDrawData(Editor::EndFrame())
-    renderer.SetSceneViewport(Editor::SceneViewportRect())
+    renderSystem.SetViewportRect(0, Editor::SceneViewportRect())
+    if IsEditing(world):                     viewport 0's camera, only in Edit
+        Editor::UpdateCamera(dt)
+        renderSystem.SetExternalCamera(0, Editor::SceneCamera())
+    else:
+        renderSystem.SetViewportCamera(0, null)   falls back to the World's own Camera
     ScriptReloadWatcher::Poll
     SystemScheduler::Update            PreUpdate, Update, PostUpdate, Render
     ++frame
@@ -94,6 +99,25 @@ mir::FlushLog();
 
 Systems are registered on `app.Systems()` between `Initialize` and `Run`.
 
+### Play, Pause, Stop
+
+`EngineModeState` (see [core.md](core.md)) is a `World` resource; `App` is the
+only thing that flips it. `PlayScene`/`StopScene`/`TogglePause` are the three
+transitions, wired to the editor toolbar through `SceneMenuAction` today.
+
+```cpp
+PlayScene()    // Edit -> Play. Captures the World first (PlaySnapshot).
+StopScene()    // Play -> Edit. Stops every started script, then restores the capture.
+TogglePause()  // Running <-> Paused. No-op outside Play.
+```
+
+`StopScene` calls `ScriptSystem::StopAllScripts` (giving every started script
+its `OnStop`, a Unity-style cleanup hook) *before* calling
+`PlaySnapshot::RestoreWorld`, since the World those scripts ran in is about to
+be destroyed wholesale. It then releases the Play session's GPU resources and
+resolves scripts and meshes again, same as `LoadScene` — `RestoreWorld`'s entities come from `LoadScene` under the hood,
+with the same only-names-round-trip gap.
+
 ## API
 
 | Type | Header | Role |
@@ -106,15 +130,18 @@ Systems are registered on `app.Systems()` between `Initialize` and `Run`.
 `LoadGameProject`, `ResolveGameProject` (normalize, then load) and
 `DiscoverGameProjects` (every `games/*/game.json` next to the executable).
 
+`mAppName` stays caller-set even though each game has its own title — it is the
+Vulkan instance name, engine-level, and nothing user-facing ever sees it.
+
 Accessors: `GetWorld()`, `Systems()`, `Scripts()`, `ScriptReload()`, `Splash()`,
 `Assets()`, `Scene()`, `Project()`, `AvailableProjects()` and `ProjectToOpen()`.
 `Renderer()` is marked a temporary seam, because `Renderer.h` is still an empty
 abstraction placeholder.
 
 Scene control is `NewScene(name)`, `SaveScene()` and `LoadScene()`, each of which
-replaces whatever `Scene()` currently holds. `NewScene` and `LoadScene` both
-release the discarded scene's GPU meshes and materials. Game control is
-`RequestOpenProject(dir)`, and the switch itself is a restart.
+replaces whatever `Scene()` currently holds. `NewScene`, `LoadScene` and
+`StopScene` release the discarded entities' GPU meshes and materials. Game
+control is `RequestOpenProject(dir)`, and the switch itself is a restart.
 
 ### Ownership and order
 
@@ -134,6 +161,21 @@ The manifest and cache pair is the one real aliasing hazard, and it is handled
 twice. Declaration order makes implicit destruction correct, and `Shutdown` also
 calls `reset()` on them explicitly in the same order, because `Initialize` may
 follow.
+
+`mRenderSystem`/`mScriptSystem` are non-owning — `AddSystem<T>` returns a `T&`
+into `mScheduler`'s storage, captured here so `Run` and `StopScene` can reach
+them without a lookup.
+
+### Resolving names back into handles
+
+A `LoadedScene` file (see [scene.md](scene.md)) round-trips a `MeshRenderer`'s
+`meshName`/`materialShader` and a `ScriptRef`'s `scriptName` — strings, not the
+live `MeshHandle`/`instanceRef` `RenderSystem`/`ScriptSystem` actually need.
+`ResolveSceneMeshes`/`ResolveSceneScripts` turn one into the other by asset id
+under the game's `mAssetIdRoot`, and run at the end of both places entities come
+from a `LoadedScene` file: `LoadScene()` and `StopScene()` (via `PlaySnapshot::
+RestoreWorld`). Neither call site can skip them independently — both live
+inside the same two methods.
 
 ## Rules
 
@@ -197,11 +239,28 @@ The `if (!mWindow)` branch after `Window::Create` is currently unreachable,
 because the GLFW backend aborts through `MIR_CHECK` instead of returning null.
 See [window.md](window.md).
 
+**`PlayScene`/`StopScene`/`TogglePause` are the only way `EngineModeState`
+changes.** `StopScene` calls `StopAllScripts` before `RestoreWorld` runs,
+never after — the World those scripts ran in still has to exist for
+`CallOnStop` to mean anything, and `RestoreWorld` destroys it wholesale a
+moment later.
+
+**Viewport 0's camera is mode-gated, not just fed unconditionally.**
+`Editor::UpdateCamera` only runs in Edit. Feeding it in Play would let a
+right-drag meant to look around the game view — viewport 0 shows the World's
+camera then, not the editor one — silently fly the (invisible) editor camera
+off somewhere, surfacing only later when Stop reverts viewport 0 to wherever
+that ended up.
+
+**`NewScene`/`SaveScene`/`LoadScene` refuse while Play is running.** These can corrupt the current scene. Both `Editor` and app will opt out.
+
 ## State
 
-*As of 2026-09-06.* The loop runs, the scheduler ticks, scripts drive entities,
+*As of 2026-09-14.* The loop runs, the scheduler ticks, scripts drive entities,
 scenes save and load from the editor's File menu, Project > Open Project restarts
-into another game, and the scene renders.
+into another game, and the scene renders. Play/Pause/Stop work end to end: a
+Play session can be entered, its World mutations discarded on Stop via
+`PlaySnapshot`, and resumed indefinitely.
 
 The renderer is a value member rather than a `unique_ptr`, because there is no
 interface to hold.
@@ -221,20 +280,28 @@ logged error.
    prerequisite for any test in this module, and for making `Editor` optional.
 2. **No fixed timestep**, so physics-style systems have no stable substep.
    Undecided whether that belongs in the scheduler or in the loop.
-3. **No input, no pause, no frame limiter**, and no window-event handling beyond
-   the renderer re-querying size.
+3. **No frame limiter**, and no window-event handling beyond the renderer
+   re-querying size.
 4. **`Initialize` after `Shutdown`** is written to work — the sticky asset flag
    and the explicit resets exist for it — but nothing exercises it.
 5. One `App` per process is assumed everywhere, and nothing enforces it.
+6. **A second viewport for Play+Paused**, showing the editor camera alongside
+   the game view. `RenderSystem::AddViewport` exists (see
+   [renderer.md](renderer.md)); nothing calls it yet.
+7. **No World diffing for Play/Stop** — `PlaySnapshot` destroys and reloads
+   every entity rather than diffing what changed, which is simple but not
+   cheap for a large scene.
 
 ## Changed
 
-*2026-09-14* — **`App` owns its game, and switching games restarts.** Was:
-`main.cpp` resolved one game at startup and ran the scene resolve passes itself,
-so a game could only be chosen at launch, and File > Load Scene left the loaded
-scene's meshes and scripts unresolved. Now: `GameProject` and the resolve passes
-live in this module and `LoadScene` resolves every time. Project > Open Project
-calls `RequestOpenProject`, and `main.cpp` relaunches with `--game`.
+*2026-09-14* — **The game is chosen at launch, and switching games restarts.**
+Was: `AppDesc::mProjectPath` named `games/HelloWorld/game.json`, parsed by a
+private `GameProject` in `App.cpp`, so opening another game meant editing
+`main.cpp`. Now: `GameProject` is public in `app/GameProject.h`, `main.cpp`
+picks the game from `--game` or `engine.json` and passes it as
+`AppDesc::mProject`, and the resolve passes are free functions in
+`src/app/SceneResolve.cpp`. Project > Open Project calls `RequestOpenProject`,
+and `main.cpp` relaunches with `--game`.
 
 An in-process switch was built first and dropped. Script-spawned entities, Lua
 globals and script-declared component types all outlived it, and clearing each
@@ -244,6 +311,56 @@ one would have meant reaching into `core` for every process-wide singleton.
 closed the window, so nothing could drive the engine unattended. Now: after
 `mMaxFrames` frames `Run` calls `Window::RequestClose`, the same exit as the
 close button. `main.cpp`'s `--frames` sets it for the `smoke.<game>` tests.
+
+*2026-09-12* — **`NewScene`/`SaveScene`/`LoadScene` refuse while Play is
+running.** Was: nothing stopped any of the three from running mid-Play — Save
+would overwrite the authored scene file with Play's live mutations, and
+New/Load would desync `mPlaySnapshot` from the World it was captured from, so
+a later Stop silently restored stale content instead of erroring. Now: each
+checks `IsPlaying(mWorld)` first and no-ops with a logged warning; `Editor`'s
+File menu also greys the same three items out for the same reason (see
+[editor.md](editor.md)).
+
+*2026-09-12* — **`AppDesc` takes a project path instead of pre-resolved
+fields.** Was: `main.cpp` parsed `game.json` into a `GameProject` and copied
+three fields (`mTitle`, `mSceneDir`, `mAssetsRoot`) into `AppDesc` by hand.
+Now: `AppDesc::mProjectPath` names the `game.json`, and `App::Initialize`
+resolves it internally into a private `GameProject` (moved from `main.cpp`)
+and two private members. `main.cpp` shrank to setting one path.
+
+Manual field-copying at the call site is exactly the shape of thing that
+silently drifts — a second executable would have to re-derive the same three
+fields correctly by hand, with nothing enforcing it stayed in sync. It also
+sets up project switching: a future `SwitchProject(path)` re-runs the same
+internal resolution `Initialize` does, rather than requiring the switcher to
+re-derive and repackage fields externally.
+
+*2026-09-12* — **`ResolveSceneMeshes`/`ResolveSceneScripts` moved from
+`main.cpp` into `App`.** Was: `main.cpp` called them once, by hand, right
+after its one `LoadScene()` call — so when `PlaySnapshot::RestoreWorld`
+became a second caller of the same load path, it silently inherited the load
+but not the resolve, and Stop left the viewport blank (null mesh handles,
+unresolved script instances).
+
+Neither function is policy that varies per game — same mechanism, every game,
+parameterized by `mAssetsRoot` — so they moved to where `LoadScene()` and
+`RestoreWorld()` both already live, closing the gap structurally: nothing can
+call the load path without the resolve step now, because they're the same
+call.
+
+*2026-09-12* — **Play, Pause and Stop added.** `PlayScene`/`StopScene`/
+`TogglePause` flip `EngineModeState` (see [core.md](core.md)), with
+`PlaySnapshot` (see [scene.md](scene.md)) capturing the World before Play and
+restoring it on Stop, and `ScriptSystem::StopAllScripts` giving every started
+script its `OnStop` first. Wired to a toolbar in `Editor` (see
+[editor.md](editor.md)).
+
+*2026-09-12* — **Scene-viewport wiring moved from the renderer to
+`RenderSystem`.** Was: `App::Run` called `renderer.SetSceneViewport(...)`
+directly. Now: `mRenderSystem->SetViewportRect(0, ...)`, since `RenderSystem`
+owns the viewport list (see [renderer.md](renderer.md#changed)). `App` also now
+picks that same viewport's camera each frame — the editor's free-fly camera in
+Edit mode, the World's default `Camera` in Play.
 
 *2026-09-03* — **Drawing left `App::Run`.** Was: `CollectDrawInstances` and
 `DrawFrame` called by hand between scheduler phases, so draw-list assembly had no

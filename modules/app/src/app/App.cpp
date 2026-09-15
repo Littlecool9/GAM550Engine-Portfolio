@@ -14,6 +14,7 @@
 #include <core/EngineVersion.h>
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/DeferredAccess.h>
+#include <core/ecs/EngineMode.h>
 #include <core/ecs/TransformHierarchy.h>
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
@@ -48,11 +49,11 @@ namespace mir
 
         EnsureDpiAware();
 
-        if (!mSplash.Show({.mEngineName = desc.mAppName,
+        if (!mSplash.Show({ .mEngineName = desc.mAppName,
                            .mVersion = kEngineVersion,
                            .mCopyright = kEngineCopyright,
                            .mStatus = "Creating window...",
-                           .mProgress = 0.0f}))
+                           .mProgress = 0.0f }))
         {
             MIR_LOG_WARN("Splash screen failed to show, continuing without it");
         }
@@ -73,9 +74,9 @@ namespace mir
         }
 
         mSplash.SetProgress("Initializing renderer...", 0.2f);
-        if (!mRenderer.Initialize({.window = mWindow.get(),
+        if (!mRenderer.Initialize({ .window = mWindow.get(),
                                    .appName = desc.mAppName,
-                                   .enableValidation = desc.mEnableValidation}))
+                                   .enableValidation = desc.mEnableValidation }))
         {
             MIR_LOG_ERROR("Renderer initialization failed");
             mWindow.reset();
@@ -104,19 +105,20 @@ namespace mir
         RegisterScriptComponents();
 
         // defers structural change
-        mWorld.EmplaceResource<FrameCommands>(FrameCommands{&mCommands});
+        mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
 
         mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mProject.mProjectSettingsPath));
         mWorld.EmplaceResource<InputState>();
+        mWorld.EmplaceResource<EngineModeState>();
 
         mScheduler.AddSystem<InputSystem>(SystemPhase::PreUpdate, *mWindow);
 
-        mScheduler.AddSystem<ScriptSystem>(SystemPhase::PreUpdate, mScriptHost);
+        mScriptSystem = &mScheduler.AddSystem<ScriptSystem>(SystemPhase::PreUpdate, mScriptHost);
 
         // should be before any other system in PostUpdate
         mScheduler.AddSystem<TransformPropagateSystem>(SystemPhase::PostUpdate);
 
-        mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
+        mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
         // scanned once: a new game needs a build to cook its assets anyway
         mAvailableProjects = DiscoverGameProjects();
@@ -156,17 +158,35 @@ namespace mir
 
     void App::NewScene(std::string name)
     {
+        if (IsPlaying(mWorld))
+        {
+            MIR_LOG_WARN("App::NewScene: ignored while Play is running (Stop first)");
+            return;
+        }
+
         UnloadCurrentScene();
         mScene = mir::NewScene(std::move(name));
     }
 
     bool App::SaveScene()
     {
+        if (IsPlaying(mWorld))
+        {
+            MIR_LOG_WARN("App::SaveScene: ignored while Play is running (Stop first)");
+            return false;
+        }
+
         return mir::SaveScene(mWorld, mProject.mSceneDir, mScene);
     }
 
     bool App::LoadScene()
     {
+        if (IsPlaying(mWorld))
+        {
+            MIR_LOG_WARN("App::LoadScene: ignored while Play is running (Stop first)");
+            return false;
+        }
+
         if (!std::filesystem::exists(mProject.mSceneDir / "scene.json"))
         {
             MIR_LOG_ERROR("App::LoadScene: no scene.json in '{}'", mProject.mSceneDir.string());
@@ -180,6 +200,45 @@ namespace mir
         ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
         ResolveSceneMeshes(mWorld, mRenderer, Assets(), mProject.mAssetIdRoot);
         return true;
+    }
+
+    void App::PlayScene()
+    {
+        if (IsPlaying(mWorld))
+            return;
+
+        mPlaySnapshot = CaptureWorld(mWorld);
+
+        SetPlayState(mWorld, PlayState::Running);
+        SetEngineMode(mWorld, EngineMode::Play);
+    }
+
+    void App::StopScene()
+    {
+        if (!IsPlaying(mWorld))
+            return;
+
+        SystemContext context = MakeContext(0.0f);
+        mScriptSystem->StopAllScripts(context);
+
+        mScene = RestoreWorld(mWorld, mPlaySnapshot);
+
+        // Play's entities are gone and the restored ones hold no handles yet
+        mRenderer.ReleaseSceneResources();
+
+        ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
+        ResolveSceneMeshes(mWorld, mRenderer, Assets(), mProject.mAssetIdRoot);
+
+        SetEngineMode(mWorld, EngineMode::Edit);
+        SetPlayState(mWorld, PlayState::Running);
+    }
+
+    void App::TogglePause()
+    {
+        if (!IsPlaying(mWorld))
+            return;
+
+        SetPlayState(mWorld, IsPaused(mWorld) ? PlayState::Running : PlayState::Paused);
     }
 
     void App::UnloadCurrentScene()
@@ -237,7 +296,7 @@ namespace mir
 
     SystemContext App::MakeContext(float dt)
     {
-        return SystemContext{mWorld, mCommands, dt, mElapsed, mFrame};
+        return SystemContext{ mWorld, mCommands, dt, mElapsed, mFrame };
     }
 
     void App::Run()
@@ -258,7 +317,7 @@ namespace mir
 
             const auto now = std::chrono::steady_clock::now();
             const float dt = std::min(std::chrono::duration<float>(now - previous).count(),
-                                      mDesc.mMaxDeltaSeconds);
+                mDesc.mMaxDeltaSeconds);
             previous = now;
             mElapsed += dt;
 
@@ -267,7 +326,8 @@ namespace mir
             if (mWindow->Width() != 0 && mWindow->Height() != 0)
             {
                 const EditorActions actions = mEditor.DrawLayout(
-                    mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mProjectMenu, mProject.mDir);
+                    mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<EngineModeState>(),
+                    mProjectMenu, mProject.mDir);
 
                 switch (actions.mScene)
                 {
@@ -280,6 +340,15 @@ namespace mir
                 case SceneMenuAction::Load:
                     LoadScene();
                     break;
+                case SceneMenuAction::Play:
+                    PlayScene();
+                    break;
+                case SceneMenuAction::TogglePause:
+                    TogglePause();
+                    break;
+                case SceneMenuAction::Stop:
+                    StopScene();
+                    break;
                 case SceneMenuAction::None:
                     break;
                 }
@@ -289,7 +358,19 @@ namespace mir
             }
 
             mRenderer.SetImGuiDrawData(mEditor.EndFrame());
-            mRenderer.SetSceneViewport(mEditor.SceneViewportRect());
+
+            mRenderSystem->SetViewportRect(0, mEditor.SceneViewportRect());
+
+            // Only feed EditorCamera input in Edit.
+            if (IsEditing(mWorld))
+            {
+                mEditor.UpdateCamera(dt);
+                mRenderSystem->SetExternalCamera(0, mEditor.SceneCamera().Matrix(), mEditor.SceneCamera().mLens);
+            }
+            else
+            {
+                mRenderSystem->SetViewportCamera(0, kNullEntity);
+            }
 
             mWorld.Resource<InputState>().SetUiCapture(mEditor.WantsCaptureKeyboard(), mEditor.WantsCaptureMouse());
 
