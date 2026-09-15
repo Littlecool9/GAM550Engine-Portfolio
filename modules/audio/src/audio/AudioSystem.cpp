@@ -50,7 +50,7 @@ namespace mir::audio {
         if (AK::StreamMgr::Create(stmSettings) == nullptr)
         {
             MIR_LOG_ERROR("Wwise streammgr::create failed");
-            Term();
+            Terminate();
             return false;
         }
         
@@ -58,7 +58,7 @@ namespace mir::audio {
         AK::StreamMgr::GetDefaultDeviceSettings(deviceSettings);
         if (!Check(g_lowLevelIO.Init(deviceSettings), "low level i/o init"))
         {
-            Term();
+            Terminate();
             return false;
         }
         g_ioInitialized = true;
@@ -70,7 +70,7 @@ namespace mir::audio {
         AK::SoundEngine::GetDefaultPlatformInitSettings(AkPlatformInitSettings);
         if (!Check(AK::SoundEngine::Init(&initSettings, &AkPlatformInitSettings), "soundengine init"))
         {
-            Term();
+            Terminate();
             return false;
         }
 #ifndef AK_OPTIMIZED
@@ -87,12 +87,12 @@ namespace mir::audio {
         //init bank has bus layout other banks resolves against
         if (!Check(AK::SoundEngine::LoadBank("Init.bnk", bankID), "LoadBank(Init.bnk)")) 
         {
-            Term();
+            Terminate();
             return false;
         }
         if (!Check(AK::SoundEngine::LoadBank("Test.bnk", bankID), "LoadBank(Test.bnk)"))
         {
-            Term();
+            Terminate();
             return false;
         }
         AK::SoundEngine::RegisterGameObj(kListener, "Listener");
@@ -125,7 +125,7 @@ namespace mir::audio {
         return true;
     }
 
-    void Term()
+    void Terminate()
     {
         if (AK::SoundEngine::IsInitialized()) 
         {

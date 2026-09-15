@@ -35,7 +35,7 @@ audio::PostEvent("Play_chargeDown");        // after the window is shown
 
 audio::Update();                            // once per frame, after mScheduler.Update
 
-audio::Term();                              // App::Shutdown
+audio::Terminate();                         // App::Shutdown
 ```
 
 ## API
@@ -44,7 +44,7 @@ audio::Term();                              // App::Shutdown
 |---|---|---|
 | `Init` | `audio/AudioSystem.h` | Brings up all four Wwise stages and loads the banks; false on any failure |
 | `Update` | `audio/AudioSystem.h` | One `RenderAudio()`; nothing is mixed without it |
-| `Term` | `audio/AudioSystem.h` | Reverse-order teardown, safe whether or not `Init` succeeded |
+| `Terminate` | `audio/AudioSystem.h` | Reverse-order teardown, safe whether or not `Init` succeeded |
 | `PostEvent` | `audio/AudioSystem.h` | Fires an event by name on the fixed global game object |
 | `WwiseSdkVersion` | `audio/Wwise.h` | The SDK version this build compiled against |
 | `IsSoundEngineInitialized` | `audio/Wwise.h` | Safe before init, where it returns false |
@@ -66,7 +66,7 @@ applies to *subsequent* registrations, so an emitter registered first keeps an
 empty listener set. Get this backwards and `PostEvent` still returns a valid
 playing ID while nothing is audible, with no error logged anywhere.
 
-**`Term()` runs on every `Init()` failure path, not just at shutdown.** Each
+**`Terminate()` runs on every `Init()` failure path, not just at shutdown.** Each
 stage guards on its own module's state rather than on a single "did init finish"
 flag, so a partially-initialised engine tears down correctly. Debug Wwise asserts
 at `MemoryMgr::Term` if anything is still allocated, which is what makes a clean
@@ -133,7 +133,7 @@ config mapping has never been exercised.
    code already proven, while the component design still has open questions —
    whether emitters post on demand or on a trigger, how 2D UI sounds bypass
    positioning, and what happens to a playing voice when its entity is destroyed.
-2. **Per-object unregistration.** `Term` calls `UnregisterAllGameObj`, which is
+2. **Per-object unregistration.** `Terminate` calls `UnregisterAllGameObj`, which is
    enough while the object set is fixed. Once entities come and go during play,
    destruction needs to unregister, or the session leaks game objects.
 3. **Bank lifecycle.** Everything loads at init and unloads at term. A real

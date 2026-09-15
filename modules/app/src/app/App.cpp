@@ -46,7 +46,7 @@ namespace mir
         mProject = desc.mProject;
         mProjectToOpen.reset();
         mSwitchHookFired = false;
-        //audio stuff
+  
         audio::Init();
 
         EnsureDpiAware();
@@ -380,7 +380,7 @@ namespace mir
             SystemContext context = MakeContext(dt);
             mScheduler.Update(context);
 
-            //audio stuff
+
             audio::Update();
             //
             ++mFrame;
@@ -404,8 +404,8 @@ namespace mir
         SystemContext stopContext = MakeContext(0.0f);
         mScheduler.Stop(stopContext);
 
-        //audio stuff
-        audio::Term();
+
+        audio::Terminate();
         //
         mScheduler.Reset();
 
