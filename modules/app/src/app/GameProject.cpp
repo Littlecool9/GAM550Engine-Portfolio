@@ -1,8 +1,7 @@
 /**
  * @file GameProject.cpp
  * @author Jackey Cen
- * @brief A game directory under games/ resolved into what the engine opens it
- *        from: its name, title, asset id root, scene and settings files.
+ * @brief A game directory resolved into what the engine loads from it.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -97,7 +96,7 @@ namespace mir
         project.mDir = gameDir.generic_string();
         project.mName = gameDir.filename().string();
 
-        // This default is repeated in CMakeLists.txt, which cooks the same root
+        // assetsRoot default must match CMakeLists.txt
         std::string assetsRoot = "assets";
         std::string sceneDir = "scenes/default";
 
@@ -119,12 +118,10 @@ namespace mir
             sceneDir = json.value("sceneDir", sceneDir);
         }
 
-        // an empty "name" would leave nothing to show in the Open Project menu
         if (project.mName.empty())
             project.mName = gameDir.filename().string();
 
-        // Normalized the way the cooker's NormalizeRoot is, so "assets/" and
-        // "./assets" produce the same ids as "assets"
+        // normalized like AssetCooker's NormalizeRoot, so ids match
         std::string idRoot = (gameDir / assetsRoot).lexically_normal().generic_string();
         while (!idRoot.empty() && idRoot.back() == '/')
             idRoot.pop_back();

@@ -36,7 +36,6 @@ namespace mir
 
         bool HasCustomTitleBar() const override { return mHasCustomTitleBar; }
         const char *Title() const override { return mTitle.c_str(); }
-        void SetTitle(const std::string &title) override;
         void SetTitleBarInteractiveRects(std::span<const PixelRect> rects) override
         {
             mTitleBarInteractiveRects.assign(rects.begin(), rects.end());

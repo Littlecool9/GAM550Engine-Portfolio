@@ -32,11 +32,6 @@ namespace mir
         }
 
         void Track(std::string scriptName, AssetId id);
-
-        // Unloads every tracked script from the host and stops watching them -
-        // for closing a game, whose scripts the next one must not inherit.
-        void UnloadAll();
-
         void Poll(AssetCache *cache, float dt);
 
     private:

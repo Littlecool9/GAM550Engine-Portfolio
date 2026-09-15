@@ -124,6 +124,17 @@ namespace mir
         }
     }
 
+    void ShutdownLog()
+    {
+        if (!s_initialized)
+            return;
+
+        s_initialized = false;
+
+        // flushes and releases the log file
+        spdlog::shutdown();
+    }
+
     namespace detail
     {
         bool ShouldLog(LogLevel level)

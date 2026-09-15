@@ -22,7 +22,6 @@
 #include <window/Splash.h>
 #include <window/Window.h>
 
-#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -43,16 +42,14 @@ namespace mir
 
         float mMaxDeltaSeconds = 0.25f;
 
-        // Run requests a close after this many frames; 0 runs until the window closes
+        // 0: run until the window closes
         uint64_t mMaxFrames = 0;
 
-        // The game Initialize opens: window title, project settings and scene
+        // the game Initialize opens
         GameProject mProject;
 
-        // Test hook for bounded runs: game directories opened one after another,
-        // spread evenly across mMaxFrames, through the same OpenProject the
-        // editor's Project > Open Project menu uses
-        std::vector<std::string> mProjectSwitches;
+        // test hook: RequestOpenProject this halfway through mMaxFrames; empty for none
+        std::string mSwitchProjectTo;
     };
 
     class App
@@ -90,40 +87,37 @@ namespace mir
         // The game currently open
         const GameProject &Project() const { return mProject; }
 
-        // Every game found next to the executable at startup
+        // Games found at startup
         const std::vector<GameProject> &AvailableProjects() const { return mAvailableProjects; }
 
-        // Closes the open game and opens `requestedDir` (e.g. "games/EmptyScene"):
-        // its scene, scripts, GPU resources, input map and window title all
-        // switch over. False (logged) when the directory is not a game, in
-        // which case the open game is left exactly as it was.
-        bool OpenProject(const std::string &requestedDir);
+        // Validates the game and closes the window; main.cpp then relaunches into it.
+        // False (logged) if it is not a game.
+        bool RequestOpenProject(const std::string &requestedDir);
+
+        // The game RequestOpenProject accepted, if any
+        const std::optional<GameProject> &ProjectToOpen() const { return mProjectToOpen; }
 
         // Discards mScene's entities and replaces it with an empty one
         void NewScene(std::string name = "untitled");
 
-        // Writes Scene() to the open game's scene directory. False on I/O failure
+        // Writes Scene() to the game's scene directory. False on I/O failure
         bool SaveScene();
 
-        // Discards mScene's entities and replaces them with the open game's
-        // saved scene, resolving its script and mesh names into live instances
-        // and GPU handles. False if the game has no scene.json to load.
+        // Replaces Scene() with the game's saved scene and resolves it. False without a scene.json
         bool LoadScene();
 
     private:
         // context is rebuilt per tick
         SystemContext MakeContext(float dt);
 
-        // Unloads mScene - destroy hooks drop each entity's Lua instance - then
-        // frees the GPU meshes and materials nothing references any more
+        // UnloadScene, then free the GPU resources
         void UnloadCurrentScene();
 
-        // LoadScene when the open game has saved a scene; a new game without
-        // one keeps the empty scene, which is not an error
+        // LoadScene if the game has a scene.json
         void LoadProjectScene();
 
-        // Opens the next of mDesc.mProjectSwitches once its frame has come
-        void RunProjectSwitches();
+        // the mSwitchProjectTo test hook
+        void RunSwitchHook();
 
         SplashScreen mSplash;
         std::unique_ptr<Window> mWindow;
@@ -143,7 +137,8 @@ namespace mir
         GameProject mProject;
         std::vector<GameProject> mAvailableProjects;
         std::vector<ProjectMenuEntry> mProjectMenu;
-        std::size_t mNextProjectSwitch = 0;
+        std::optional<GameProject> mProjectToOpen;
+        bool mSwitchHookFired = false;
         double mElapsed = 0.0;
         uint64_t mFrame = 0;
 

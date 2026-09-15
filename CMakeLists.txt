@@ -64,9 +64,7 @@ engine_add_shaders(MjolnirEngine
     SOURCE assets/shaders/unlit.slang
     ENTRIES vertexMain:vertex fragmentMain:fragment)
 
-# A directory under games/ is a game when it has a game.json, the same rule
-# main.cpp applies at runtime. Adding a game, or editing a game.json, re-runs
-# configure.
+# Every games/*/ with a game.json is a game; its assetsRoot gets cooked
 file(GLOB game_manifests CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/games/*/game.json")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${game_manifests})
 
@@ -83,14 +81,13 @@ foreach(manifest IN LISTS game_manifests)
         message(WARNING "${manifest} is not valid JSON (${game_json_error}), cooking its default assets root")
     endif()
 
-    # Same default as GameProject in main.cpp
+    # default must match LoadGameProject in app/GameProject.cpp
     string(JSON assets_root ERROR_VARIABLE assets_root_error GET "${game_json}" assetsRoot)
     if(assets_root_error)
         set(assets_root "assets")
     endif()
 
-    # A game without assets is fine, but AssetCooker fails on a missing root.
-    # ABSOLUTE collapses "./" so the relative root hashes like main.cpp's.
+    # skip missing roots (AssetCooker fails on them); ABSOLUTE normalizes "./"
     get_filename_component(assets_abs "${game_dir}/${assets_root}" ABSOLUTE)
     if(IS_DIRECTORY "${assets_abs}")
         file(RELATIVE_PATH assets_rel "${CMAKE_SOURCE_DIR}" "${assets_abs}")
@@ -105,10 +102,7 @@ engine_cook_assets(MjolnirEngine
 engine_copy_fonts(MjolnirEngine SOURCE_DIR fonts)
 engine_copy_branding(MjolnirEngine SOURCE_DIR branding)
 
-# A target of its own rather than POST_BUILD: POST_BUILD runs only when the
-# executable relinks, so a game added or edited without a code change never
-# reached the run directory. This runs on every build; the *_if_different
-# commands skip files that already match.
+# Not POST_BUILD, which only runs on relink; unchanged files are skipped
 add_custom_target(MjolnirEngine_copy_games
     COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
             "${CMAKE_SOURCE_DIR}/games" "$<TARGET_FILE_DIR:MjolnirEngine>/games"
@@ -130,10 +124,8 @@ target_link_libraries(MjolnirEngine PRIVATE
     nlohmann_json::nlohmann_json
 )
 
-# One smoke test per game: start it, run a fixed number of frames, close the
-# window. main.cpp exits non-zero if anything was logged as an error, so a
-# broken game fails without crashing. Needs a GPU and a display; skip these
-# with `ctest -LE smoke`.
+# Smoke tests run each game for a few frames and fail on any logged error.
+# They need a GPU; skip them with `ctest -LE smoke`.
 if(BUILD_TESTING)
     foreach(game_name IN LISTS game_names)
         add_test(NAME smoke.${game_name}
@@ -143,9 +135,7 @@ if(BUILD_TESTING)
             TIMEOUT 120)
     endforeach()
 
-    # HelloWorld -> EmptyScene -> HelloWorld mid-run, through App::OpenProject:
-    # the path Project > Open Project takes, minus the confirmation dialog.
-    # Coming back re-creates meshes and materials after a release.
+    # Restarts HelloWorld -> EmptyScene -> HelloWorld, as Open Project does
     if(EXISTS "${CMAKE_SOURCE_DIR}/games/HelloWorld/game.json"
        AND EXISTS "${CMAKE_SOURCE_DIR}/games/EmptyScene/game.json")
         add_test(NAME smoke.switch

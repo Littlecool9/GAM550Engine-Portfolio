@@ -146,11 +146,10 @@ dispatch with isolated errors and independent state, `CommandBuffer`-deferred
 structural changes, and mtime-poll hot reload. All of it has been exercised end
 to end against the running app. LuaJIT is the shipped backend.
 
-Tests: `modules/script/tests/WorldBindings.tests.cpp`, and
-`ScriptReloadWatcher.tests.cpp` for `UnloadAll`. Much of the rest was verified by
-hand rather than automated — independent per-entity state, a live edit reaching a
-running instance, and a deliberate error thrown from inside a `world:each`
-callback being caught and logged.
+Tests: `modules/script/tests/WorldBindings.tests.cpp`. Much of the rest was
+verified by hand rather than automated — independent per-entity state, a live
+edit reaching a running instance, and a deliberate error thrown from inside a
+`world:each` callback being caught and logged.
 
 `ScriptRef.scriptName` exists so scene files can round-trip which script an
 entity runs. `instanceRef` is this run's live state and is deliberately not
@@ -176,12 +175,6 @@ than something this module or `scene` does.
    flavour underneath.
 
 ## Changed
-
-*2026-09-14* — **`ScriptReloadWatcher::UnloadAll`.** Was: the watcher only ever
-gained scripts, so after another game opened, the previous game's scripts stayed
-loaded in the host and kept being polled. Now: `UnloadAll` unloads every tracked
-script from the host and stops watching it, and `App::OpenProject` calls it when
-it closes a game.
 
 *2026-09-05* — **Asset copying was fixed to run on an asset-only change.** Was: a
 `POST_BUILD` command in `cmake/Assets.cmake` that shared its target's up-to-date

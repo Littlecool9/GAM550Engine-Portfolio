@@ -1167,7 +1167,7 @@ namespace mir
         if (mDevice == VK_NULL_HANDLE)
             return;
 
-        // frames still in flight may be drawing with these buffers and pipelines
+        // in-flight frames may still use them
         vkDeviceWaitIdle(mDevice);
 
         const std::size_t meshCount = mMeshes.size();
@@ -1181,8 +1181,7 @@ namespace mir
             return;
         }
 
-        // The default material outlives every scene: DrawFrame falls back to
-        // it for any item without a material of its own.
+        // keep the default material: DrawFrame falls back to it
         const GpuMaterial defaultMaterial = mMaterials[mDefaultMaterial.mIndex];
         std::size_t released = 0;
         for (std::size_t i = 0; i < mMaterials.size(); ++i)

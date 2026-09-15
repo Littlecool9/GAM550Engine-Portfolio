@@ -43,7 +43,8 @@ namespace mir
     {
         mDesc = desc;
         mProject = desc.mProject;
-        mNextProjectSwitch = 0;
+        mProjectToOpen.reset();
+        mSwitchHookFired = false;
 
         EnsureDpiAware();
 
@@ -117,8 +118,7 @@ namespace mir
 
         mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
-        // Found once: a game added while running would still need a build to
-        // cook its assets, and the asset manifest is never re-read
+        // scanned once: a new game needs a build to cook its assets anyway
         mAvailableProjects = DiscoverGameProjects();
         mProjectMenu.clear();
         for (const GameProject &project : mAvailableProjects)
@@ -133,34 +133,24 @@ namespace mir
         return true;
     }
 
-    bool App::OpenProject(const std::string &requestedDir)
+    bool App::RequestOpenProject(const std::string &requestedDir)
     {
         if (!mInitialized)
             return false;
 
-        // Resolved before anything is torn down, so a bad directory leaves the
-        // open game exactly as it was
-        std::optional<GameProject> project = ResolveGameProject(requestedDir);
+        // validate before closing; not ResolveGameProject, which logs "Loading game"
+        const std::optional<std::filesystem::path> gameDir = NormalizeGameDir(requestedDir);
+        std::optional<GameProject> project = gameDir.has_value() ? LoadGameProject(*gameDir) : std::nullopt;
         if (!project.has_value())
         {
-            MIR_LOG_ERROR("App::OpenProject: could not open '{}', '{}' stays open", requestedDir, mProject.mDir);
+            MIR_LOG_ERROR("App::RequestOpenProject: '{}' is not a game, '{}' stays open", requestedDir, mProject.mDir);
             return false;
         }
 
-        NewScene();
-
-        // The old game's scripts must not answer for the new one's; a script of
-        // the same name loads its own source when the new scene resolves
-        mScriptReloadWatcher.UnloadAll();
-
-        mProject = std::move(*project);
-        mWindow->SetTitle(mProject.mTitle);
-
-        // Assigned rather than re-emplaced, so references to the resource stay valid
-        mWorld.Resource<InputMap>() = InputMap::LoadFile(mProject.mProjectSettingsPath);
-        mEditor.SetProjectSettingsPath(mProject.mProjectSettingsPath);
-
-        LoadProjectScene();
+        // one game per process: main.cpp relaunches after Run returns
+        MIR_LOG_INFO("Closing '{}' to open '{}'", mProject.mDir, project->mDir);
+        mProjectToOpen = std::move(project);
+        mWindow->RequestClose();
         return true;
     }
 
@@ -186,8 +176,7 @@ namespace mir
         UnloadCurrentScene();
         mScene = mir::LoadScene(mWorld, mProject.mSceneDir);
 
-        // SceneIO restores only the names a scene file saves; these turn them
-        // back into this run's script instances and GPU handles
+        // saved names to script instances and GPU handles
         ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
         ResolveSceneMeshes(mWorld, mRenderer, Assets(), mProject.mAssetIdRoot);
         return true;
@@ -197,7 +186,7 @@ namespace mir
     {
         UnloadScene(mWorld, mScene);
 
-        // Only scene entities carry mesh and material handles, and they are gone
+        // no scene entity holds a mesh or material handle now
         mRenderer.ReleaseSceneResources();
     }
 
@@ -210,17 +199,17 @@ namespace mir
             MIR_LOG_INFO("No scene.json in '{}', starting with an empty scene", mProject.mSceneDir.string());
     }
 
-    void App::RunProjectSwitches()
+    void App::RunSwitchHook()
     {
-        const std::size_t count = mDesc.mProjectSwitches.size();
-        if (mDesc.mMaxFrames == 0 || mNextProjectSwitch >= count)
+        if (mSwitchHookFired || mDesc.mSwitchProjectTo.empty() || mDesc.mMaxFrames == 0)
             return;
 
-        const uint64_t dueFrame = mDesc.mMaxFrames * (mNextProjectSwitch + 1) / (count + 1);
-        if (mFrame < dueFrame)
+        if (mFrame < mDesc.mMaxFrames / 2)
             return;
 
-        OpenProject(mDesc.mProjectSwitches[mNextProjectSwitch++]);
+        // once, even if it fails
+        mSwitchHookFired = true;
+        RequestOpenProject(mDesc.mSwitchProjectTo);
     }
 
     AssetCache *App::Assets()
@@ -296,7 +285,7 @@ namespace mir
                 }
 
                 if (!actions.mOpenProject.empty())
-                    OpenProject(actions.mOpenProject);
+                    RequestOpenProject(actions.mOpenProject);
             }
 
             mRenderer.SetImGuiDrawData(mEditor.EndFrame());
@@ -311,9 +300,9 @@ namespace mir
 
             ++mFrame;
 
-            RunProjectSwitches();
+            RunSwitchHook();
 
-            // same path as the close button, so the loop and Shutdown see an ordinary exit
+            // same exit path as the close button
             if (mDesc.mMaxFrames != 0 && mFrame >= mDesc.mMaxFrames)
                 mWindow->RequestClose();
         }

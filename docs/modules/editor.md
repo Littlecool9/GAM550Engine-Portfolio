@@ -29,9 +29,10 @@ means, so this module never touches `SceneIO`, a `GameProject` or the `World`.
 
 Project > Open Project lists the `ProjectMenuEntry` values `App` passes in — each
 game's name, with its directory in the shortcut column — and ticks the one whose
-directory is `currentProject`. Picking another opens a modal warning that unsaved
-scene changes will be lost. Only its Open button puts the directory into
-`EditorActions::mOpenProject`.
+directory is `currentProject`. Picking another opens a modal warning that the
+editor restarts with that game and that unsaved scene changes will be lost. Only
+its Open button puts the directory into `EditorActions::mOpenProject`; `App`
+does the restart.
 
 `DrawLayout(true)` builds the dockspace once. It splits into left, right and
 bottom with `DockBuilderSplitNode`, keeps the centre undocked through
@@ -47,7 +48,6 @@ still runs, so a caller can draw its own UI.
 
 ```cpp
 bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath);
-void SetProjectSettingsPath(std::filesystem::path projectSettingsPath);   // after another game opens
 void Shutdown(VulkanRenderer &renderer);
 
 void BeginFrame();
@@ -107,12 +107,13 @@ and rescaled for the window's `ContentScale()`.
 *As of 2026-09-06.* One fixed layout: `Hierarchy` left, `Inspector` right,
 `Output` bottom, and the scene showing through the passthru centre. It is built
 once and left alone, persisted only through ImGui's own `imgui.ini` next to the
-executable.
+executable, which also carries it across an Open Project restart.
 
-`Output` is wired to `LogHistory` through `LogPanel`.
+`Output` is wired to `LogHistory` through `LogPanel`. Its history starts empty in
+the process an Open Project restart launches.
 
-No tests. It needs a device and a display. `smoke.switch` covers what Open
-Project asks `App` to do, but not the menu or the dialog themselves.
+No tests. It needs a device and a display. `smoke.switch` covers the restart that
+Open Project asks for, but not the menu or the dialog themselves.
 
 ## Backlog
 
@@ -130,8 +131,8 @@ Project asks `App` to do, but not the menu or the dialog themselves.
 *2026-09-14* — **Project > Open Project.** Was: `DrawLayout` returned a bare
 `SceneMenuAction`, and the Project menu held only Project Settings. Now: it
 returns `EditorActions`, which adds a game directory picked from the Open Project
-submenu and confirmed in a modal. `App` passes the list in and does the
-switching, so this module still knows nothing about games.
+submenu and confirmed in a modal. `App` passes the list in and restarts into the
+picked game, so this module still knows nothing about games.
 
 *2026-09-03* — **The module was extracted from `App.cpp`.** Was: about 150 lines
 of `ImGui::*` and `ImGui_Impl*` calls sitting next to window and ECS

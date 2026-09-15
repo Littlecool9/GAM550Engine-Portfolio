@@ -1,9 +1,12 @@
 #include <app/App.h>
 #include <app/GameProject.h>
+#include <core/fs/Paths.h>
 #include <core/log/Log.h>
 #include <core/log/LogHistory.h>
+#include <core/platform/Process.h>
 
 #include <charconv>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -13,20 +16,19 @@
 
 namespace
 {
-    /// What the command line asked for. All optional: no --game loads
-    /// engine.json's defaultGame, no --frames runs until the window closes.
     struct LaunchOptions
     {
+        // empty: use engine.json's defaultGame
         std::string mGameDir;
+
+        // 0: run until the window closes
         uint64_t mMaxFrames = 0;
 
-        // Test hook: games opened one after another during a bounded run
+        // test hook: games to restart into, in order
         std::vector<std::string> mProjectSwitches;
     };
 
-    /// `[--game <dir>] [--frames <N>] [--switch-to <dir>]...`. Anything else is
-    /// logged and fails, so a mistyped flag can't quietly fall through to the
-    /// default game.
+    // [--game <dir>] [--frames <N>] [--switch-to <dir>]...; anything else fails
     std::optional<LaunchOptions> ParseLaunchOptions(int argc, char **argv)
     {
         LaunchOptions options;
@@ -59,7 +61,7 @@ namespace
             }
         }
 
-        // Switches are spread across a bounded run; an unbounded one has no schedule for them
+        // a switch happens halfway through --frames
         if (!options.mProjectSwitches.empty() && options.mMaxFrames == 0)
         {
             MIR_LOG_ERROR("--switch-to needs --frames");
@@ -69,8 +71,27 @@ namespace
         return options;
     }
 
-    /// Whether the log history (the buffer behind the editor's Output panel)
-    /// holds an error. It is a bounded ring, far larger than a smoke run logs.
+    // Arguments for the next process; a bounded run passes on its remaining frames and switches
+    std::vector<std::string> RelaunchArguments(const LaunchOptions &options, const mir::GameProject &next)
+    {
+        std::vector<std::string> args{"--game", next.mDir};
+
+        if (options.mMaxFrames != 0)
+        {
+            args.emplace_back("--frames");
+            args.push_back(std::to_string(options.mMaxFrames - options.mMaxFrames / 2));
+
+            for (std::size_t i = 1; i < options.mProjectSwitches.size(); ++i)
+            {
+                args.emplace_back("--switch-to");
+                args.push_back(options.mProjectSwitches[i]);
+            }
+        }
+
+        return args;
+    }
+
+    // Whether LogHistory holds an error
     bool AnyErrorLogged()
     {
         for (const mir::LogEntry &entry : mir::LogHistory::Snapshot())
@@ -87,8 +108,7 @@ int main(int argc, char **argv)
     // Logging lives outside App so early construction failures are still visible.
     mir::InitLog();
 
-    // Resolved before App exists: a bad argument or game directory exits
-    // without ever showing the splash.
+    // bad arguments or game directory exit before the splash
     const std::optional<LaunchOptions> options = ParseLaunchOptions(argc, argv);
 
     std::optional<std::string> requestedGame;
@@ -108,9 +128,10 @@ int main(int argc, char **argv)
     mir::AppDesc desc{};
     desc.mProject = *project;
     desc.mMaxFrames = options->mMaxFrames;
-    desc.mProjectSwitches = options->mProjectSwitches;
+    if (!options->mProjectSwitches.empty())
+        desc.mSwitchProjectTo = options->mProjectSwitches.front();
 
-    // Opens the game's scene too
+    // also loads the game's scene
     if (!app.Initialize(desc))
     {
         mir::FlushLog();
@@ -125,9 +146,30 @@ int main(int argc, char **argv)
     app.Run();
     app.Shutdown();
 
-    // A bounded run is how the smoke tests drive this, and an error in the
-    // log fails one as surely as a crash. Unbounded runs exit 0 as before.
-    const int exitCode = (options->mMaxFrames != 0 && AnyErrorLogged()) ? 1 : 0;
+    // a bounded (test) run fails if anything logged an error
+    const bool bounded = options->mMaxFrames != 0;
+    const int exitCode = (bounded && AnyErrorLogged()) ? 1 : 0;
+
+    // switching games restarts the process; a bounded run waits for the child
+    if (const std::optional<mir::GameProject> &next = app.ProjectToOpen(); next.has_value())
+    {
+        const std::vector<std::string> args = RelaunchArguments(*options, *next);
+        MIR_LOG_INFO("Restarting into '{}'", next->mDir);
+
+        // the next process writes the same log file
+        mir::ShutdownLog();
+
+        const std::optional<int> childExit = mir::LaunchProcess(mir::ExecutablePath(), args, bounded);
+        if (!childExit.has_value())
+        {
+            mir::InitLog();
+            MIR_LOG_ERROR("could not restart into '{}'", next->mDir);
+            mir::FlushLog();
+            return 1;
+        }
+
+        return (bounded && exitCode == 0) ? *childExit : exitCode;
+    }
 
     mir::FlushLog();
     return exitCode;

@@ -90,14 +90,6 @@ namespace mir
         return true;
     }
 
-    void Editor::SetProjectSettingsPath(std::filesystem::path projectSettingsPath)
-    {
-        mProjectSettingsPath = std::move(projectSettingsPath);
-
-        // a binding capture in progress indexes into the input map being replaced
-        mProjectSettingsPanel.CancelListening();
-    }
-
     void Editor::Shutdown(VulkanRenderer &renderer)
     {
         if (!mInitialized)
@@ -181,10 +173,9 @@ namespace mir
 
         for (const ProjectMenuEntry &project : projects)
         {
-            // by directory: two games may share a name
+            // ID by directory: names may repeat
             ImGui::PushID(project.mDir.c_str());
 
-            // the directory in the shortcut column tells same-named games apart
             const bool isCurrent = project.mDir == currentProject;
             if (ImGui::MenuItem(project.mName.c_str(), project.mDir.c_str(), isCurrent) && !isCurrent)
             {
@@ -202,9 +193,7 @@ namespace mir
     {
         constexpr const char *kPopupId = "Open Project##Confirm";
 
-        // Opened here rather than from the menu item: OpenPopup and
-        // BeginPopupModal have to see the same ID stack, and the menu's is
-        // gone once the menu bar ends.
+        // outside the menu: OpenPopup needs the same ID stack as BeginPopupModal
         if (mOpenConfirmRequested)
         {
             ImGui::OpenPopup(kPopupId);
@@ -217,6 +206,7 @@ namespace mir
             return;
 
         ImGui::Text("Open \"%s\"?", mPendingProject.mName.c_str());
+        ImGui::TextDisabled("The editor restarts with this game.");
         ImGui::TextDisabled("Unsaved changes to the current scene will be lost.");
         ImGui::Spacing();
 

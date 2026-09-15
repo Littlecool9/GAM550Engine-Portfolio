@@ -78,10 +78,8 @@ namespace mir
         // kNullMaterial means default material
         MaterialHandle CreateMaterial(const MaterialDesc &desc);
 
-        // Destroys every mesh and material created so far, except the default
-        // material, once the GPU is idle. Every handle they returned is dead
-        // afterwards and the next ones reuse their indices, so call it only
-        // when nothing holds one - e.g. right after a scene unload.
+        // Destroys all meshes and materials but the default material. Old handles
+        // are invalid and their indices get reused: call only after a scene unload.
         void ReleaseSceneResources();
 
         // Width/height of whatever the scene actually renders into: the

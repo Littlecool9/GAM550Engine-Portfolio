@@ -1,8 +1,7 @@
 /**
  * @file SceneResolve.cpp
  * @author Jackey Cen
- * @brief Post-load passes that turn the names a scene file saves back into
- *        this run's script instances and GPU handles.
+ * @brief Post-load passes: saved names to live script instances and GPU handles.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -34,12 +33,7 @@ namespace mir
 {
     namespace
     {
-        /// Loads a `.lua` asset by its cooked path and registers it with the
-        /// script host under `scriptName`, then hands it to the reload watcher
-        /// so an edit followed by a rebuild is picked up without restarting.
-        /// False when assets aren't available or the file failed to load or
-        /// parse - logged by AssetCache/ScriptHost already, so the caller just
-        /// decides whether to attach the script.
+        // Loads a cooked .lua and tracks it for hot reload; false if unavailable (already logged)
         bool LoadScriptAsset(IScriptHost &scripts, ScriptReloadWatcher &reload, AssetCache *assets,
                              std::string_view assetPath, std::string_view scriptName)
         {
@@ -58,12 +52,7 @@ namespace mir
             return true;
         }
 
-        /// A mesh asset is just MeshData (Shapes.h) as JSON - vertices (position/
-        /// color/normal) and indices, the same shape CreateMesh already takes.
-        /// No importer, no binary format: hand- or tool-authored JSON is enough
-        /// until there's a reason for more. Malformed JSON logs and returns
-        /// nullopt rather than throwing - one bad mesh asset shouldn't take the
-        /// whole load down.
+        // MeshData from a mesh JSON asset; nullopt (logged) if malformed
         std::optional<MeshData> ParseMeshAsset(std::string_view text, std::string_view assetPath)
         {
             nlohmann::json json;

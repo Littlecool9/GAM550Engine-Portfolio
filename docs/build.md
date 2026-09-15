@@ -155,10 +155,11 @@ Every game with a `game.json` gets a `smoke.<game>` test. It runs
 `MjolnirEngine --game games/<game> --frames 120`, which closes the window after
 120 frames and exits non-zero if anything was logged as an error.
 
-`smoke.switch` opens HelloWorld, switches to EmptyScene and back through
-`App::OpenProject` — what Project > Open Project does, minus the dialog. The
-switches come from `--switch-to <dir>`, which can repeat and needs `--frames`;
-they are spread evenly across the run.
+`smoke.switch` restarts from HelloWorld into EmptyScene and back — what
+Project > Open Project does, minus the dialog. `--switch-to <dir>` asks for the
+restart halfway through `--frames`. The next process gets the other half and the
+remaining `--switch-to` entries, and in a `--frames` run each process waits for
+the next one and exits with its code.
 
 They open a real window, so they need a GPU and a display. `-L smoke` runs only
 them, `-LE smoke` skips them:

@@ -33,22 +33,22 @@ namespace mir
         Load,
     };
 
-    // One game in the Project > Open Project menu
+    // One game in Project > Open Project
     struct ProjectMenuEntry
     {
-        // What the menu hands back to open it, e.g. "games/HelloWorld"
+        // e.g. "games/HelloWorld"
         std::string mDir;
 
-        // What the menu shows
+        // shown in the menu
         std::string mName;
     };
 
-    // What the editor's menus asked for this frame
+    // What the menus asked for this frame
     struct EditorActions
     {
         SceneMenuAction mScene = SceneMenuAction::None;
 
-        // Directory of the game to open, already confirmed; empty for none
+        // confirmed game directory to open; empty for none
         std::string mOpenProject;
     };
 
@@ -66,9 +66,6 @@ namespace mir
         // `renderer`'s device and render target must already be created.
         bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath);
 
-        // Where the Project Settings window saves to, after another game opens.
-        void SetProjectSettingsPath(std::filesystem::path projectSettingsPath);
-
         // Must run before renderer.Shutdown() and before the window is
         // destroyed. No-op when not initialized.
         void Shutdown(VulkanRenderer &renderer);
@@ -76,9 +73,8 @@ namespace mir
         // Call once per frame, before DrawLayout or any editor drawing.
         void BeginFrame();
 
-        // Draws the editor shell and returns what its menus asked for this frame.
-        // `projects` fills Project > Open Project and `currentProject` is the
-        // mDir of the open one. enableLayout = false disables editor
+        // Draws the editor shell and returns what the menus asked for this frame.
+        // enableLayout = false disables editor
         EditorActions DrawLayout(bool enableLayout, InputMap &inputMap,
                                  std::span<const ProjectMenuEntry> projects, std::string_view currentProject);
 
@@ -110,7 +106,7 @@ namespace mir
         LogPanel mLogPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
 
-        // Picked in Open Project, waiting on the confirmation dialog
+        // waiting on the confirm dialog
         ProjectMenuEntry mPendingProject;
         bool mOpenConfirmRequested = false;
     };

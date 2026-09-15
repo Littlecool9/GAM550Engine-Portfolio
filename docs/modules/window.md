@@ -53,7 +53,7 @@ while (!window->ShouldClose())
 | Type | Header | Role |
 |---|---|---|
 | `WindowDesc` | `window/Window.h` | Size, title, resizable |
-| `Window` | `window/Window.h` | The interface, plus `Create`; `SetTitle` replaces the title at runtime |
+| `Window` | `window/Window.h` | The interface, plus `Create` |
 | `SplashScreen` | `window/Splash.h` | Native startup splash, shown before the window exists |
 | `GLFWWindow` | `src/window/glfw/GLFWWindow.h` | Desktop implementation, not public |
 | `ISurfaceProvider` | `core/platform/Surface.h` | Base of `Window` — `NativeWindow`, `Width`, `Height` |
@@ -61,9 +61,6 @@ while (!window->ShouldClose())
 
 `NativeWindowHandle::display` is null on Win32 and Cocoa. Elsewhere it is the X11
 or Wayland display.
-
-`SetTitle` updates both the OS caption and what `Title()` returns, which is what
-the editor's custom title bar draws.
 
 ## Rules
 
@@ -135,7 +132,8 @@ The module is covered in practice by the engine failing to start.
    drained by a system.
 2. **Resize and close notification.** The size updates silently and nothing is
    told.
-3. Fullscreen, monitor selection, cursor control, and programmatic close.
+3. Fullscreen, monitor selection, cursor control, runtime title changes, and
+   programmatic close.
 4. macOS has no native translation unit, so a macOS configure fails. Linux
    sources exist but there is no Linux preset, so that path is unbuilt.
 5. Undecided: `MIR_CHECK` versus returning `nullptr`. `App` already has a branch

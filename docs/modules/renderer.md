@@ -115,7 +115,6 @@ clipping.
 `VulkanRenderer` directly.
 
 No tests. Everything here needs a device, and the module is verified by running.
-`smoke.switch` releases a scene's meshes and materials and draws the next one's.
 
 ## Backlog
 
