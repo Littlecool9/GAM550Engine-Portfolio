@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WwiseDocument Type="WorkUnit" ID="{5F9B6612-BAF0-4963-8929-75DDF1BD24AB}" SchemaVersion="133">
+	<Containers>
+		<WorkUnit Name="Default Work Unit" ID="{5F9B6612-BAF0-4963-8929-75DDF1BD24AB}" PersistMode="Standalone">
+			<ChildrenList>
+				<Sound Name="chargeDown" ID="{318BF7F8-384C-4F73-B8A8-BF2250DF13B3}" ShortID="420819059">
+					<ReferenceList>
+						<Reference Name="Conversion">
+							<ObjectRef Name="Default Conversion Settings" ID="{6D1B890C-9826-4384-BF07-C15223E9FB56}" WorkUnitID="{0205D382-04A1-4717-8B24-E75742FF68D7}"/>
+						</Reference>
+						<Reference Name="OutputBus">
+							<ObjectRef Name="Main Audio Bus" ID="{1514A4D8-1DA6-412A-A17E-75CA0C2149F3}" WorkUnitID="{BEBAA1AD-0571-4BED-A411-189508ADEE93}"/>
+						</Reference>
+					</ReferenceList>
+					<ChildrenList>
+						<AudioFileSource Name="chargeDown" ID="{76CDF975-DAC4-495A-8BC1-22CF09B049EC}">
+							<Language>SFX</Language>
+							<AudioFile>chargeDown.wav</AudioFile>
+							<MediaIDList>
+								<MediaID ID="821269953"/>
+							</MediaIDList>
+						</AudioFileSource>
+					</ChildrenList>
+					<ActiveSourceList>
+						<ActiveSource Name="chargeDown" ID="{76CDF975-DAC4-495A-8BC1-22CF09B049EC}" Platform="Linked"/>
+					</ActiveSourceList>
+				</Sound>
+			</ChildrenList>
+		</WorkUnit>
+	</Containers>
+</WwiseDocument>

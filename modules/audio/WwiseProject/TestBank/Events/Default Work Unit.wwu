@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<WwiseDocument Type="WorkUnit" ID="{F39F30BC-49BC-4E90-8D7F-50CBC75EB81D}" SchemaVersion="133">
+	<Events>
+		<WorkUnit Name="Default Work Unit" ID="{F39F30BC-49BC-4E90-8D7F-50CBC75EB81D}" PersistMode="Standalone">
+			<ChildrenList>
+				<Event Name="Play_chargeDown" ID="{DB54C0B1-EBC7-4264-AD12-C94F5DD0CDCE}">
+					<ChildrenList>
+						<Action Name="" ID="{384B3FAA-94C9-46FC-B464-B5E84CB38300}" ShortID="311737937">
+							<ReferenceList>
+								<Reference Name="Target">
+									<ObjectRef Name="chargeDown" ID="{318BF7F8-384C-4F73-B8A8-BF2250DF13B3}" WorkUnitID="{5F9B6612-BAF0-4963-8929-75DDF1BD24AB}"/>
+								</Reference>
+							</ReferenceList>
+						</Action>
+					</ChildrenList>
+				</Event>
+			</ChildrenList>
+		</WorkUnit>
+	</Events>
+</WwiseDocument>
