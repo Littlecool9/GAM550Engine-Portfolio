@@ -32,6 +32,7 @@ modules/              one static library each, mir::<name>
   assets/               cooked blobs, manifest, cache
   scene/                scene save and load
   script/               Lua embedding and ECS bindings
+  audio/                Wwise lifetime and the per-frame pump
   editor/               ImGui context, backends, editor shell
   editortheme/          the Slate ImGui theme, data only
   app/                  composition root and main loop

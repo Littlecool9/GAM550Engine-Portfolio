@@ -10,7 +10,7 @@
 #include <app/App.h>
 
 #include "SceneResolve.h"
-
+#include <audio/AudioSystem.h>
 #include <core/EngineVersion.h>
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/DeferredAccess.h>
@@ -47,6 +47,8 @@ namespace mir
         mProjectToOpen.reset();
         mSwitchHookFired = false;
         mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
+  
+        audio::Init();
 
         EnsureDpiAware();
 
@@ -132,7 +134,6 @@ namespace mir
         LoadProjectScene();
 
         mWindow->Show();
-
         return true;
     }
 
@@ -383,6 +384,9 @@ namespace mir
             SystemContext context = MakeContext(dt);
             mScheduler.Update(context, fixedSteps, mFixedTimestep.mStep);
 
+
+            audio::Update();
+            
             ++mFrame;
 
             RunSwitchHook();
@@ -404,6 +408,9 @@ namespace mir
         SystemContext stopContext = MakeContext(0.0f);
         mScheduler.Stop(stopContext);
 
+
+        audio::Terminate();
+        
         mScheduler.Reset();
 
         // Cache before manifest
