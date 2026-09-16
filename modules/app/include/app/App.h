@@ -10,6 +10,7 @@
 
 #include <app/GameProject.h>
 #include <core/ecs/CommandBuffer.h>
+#include <core/ecs/FixedTimestep.h>
 #include <core/ecs/SystemScheduler.h>
 #include <core/ecs/World.h>
 #include <assets/AssetCache.h>
@@ -47,6 +48,10 @@ namespace mir
         bool mEnableEditorLayout = true;
 
         float mMaxDeltaSeconds = 0.25f;
+
+        // FixedUpdate: seconds per substep, and at most this many substeps a frame
+        float mFixedDeltaSeconds = 1.0f / 60.0f;
+        uint32_t mMaxFixedSteps = 4;
 
         // 0: run until the window closes
         uint64_t mMaxFrames = 0;
@@ -159,6 +164,7 @@ namespace mir
         bool mSwitchHookFired = false;
         double mElapsed = 0.0;
         uint64_t mFrame = 0;
+        FixedTimestep mFixedTimestep;
 
         // maintain order of mAssetCache -> mAssetCache
         std::optional<AssetManifest> mAssetManifest;

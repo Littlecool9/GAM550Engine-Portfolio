@@ -21,6 +21,9 @@ namespace mir
     {
         PreUpdate,
         Update,
+        // Once per fixed substep, 0..N times a frame; context.dt is the fixed step.
+        // After Update so physics writes Transform last, before PostUpdate propagates it.
+        FixedUpdate,
         PostUpdate,
         Render,
         kCount
@@ -31,7 +34,7 @@ namespace mir
     {
         World &world;
         CommandBuffer &commands;
-        float dt = 0.0f;      // seconds since the previous frame
+        float dt = 0.0f;      // seconds since the previous frame; the fixed step in FixedUpdate
         double elapsed = 0.0; // seconds since the first frame
         uint64_t frame = 0;
     };

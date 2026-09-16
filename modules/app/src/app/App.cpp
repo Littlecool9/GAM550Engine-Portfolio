@@ -46,6 +46,7 @@ namespace mir
         mProject = desc.mProject;
         mProjectToOpen.reset();
         mSwitchHookFired = false;
+        mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
   
         audio::Init();
 
@@ -377,8 +378,11 @@ namespace mir
 
             mScriptReloadWatcher.Poll(Assets(), dt);
 
+            // advances in every mode; FixedUpdate systems check IsSimulating themselves, as ScriptSystem does
+            const uint32_t fixedSteps = mFixedTimestep.Advance(dt);
+
             SystemContext context = MakeContext(dt);
-            mScheduler.Update(context);
+            mScheduler.Update(context, fixedSteps, mFixedTimestep.mStep);
 
 
             audio::Update();

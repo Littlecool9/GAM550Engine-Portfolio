@@ -34,7 +34,8 @@ while not ShouldClose:
     else:
         renderSystem.SetViewportCamera(0, null)   falls back to the World's own Camera
     ScriptReloadWatcher::Poll
-    SystemScheduler::Update            PreUpdate, Update, PostUpdate, Render
+    fixedSteps = FixedTimestep::Advance(dt)  every mode; FixedUpdate systems check IsSimulating
+    SystemScheduler::Update            PreUpdate, Update, FixedUpdate x fixedSteps, PostUpdate, Render
     ++frame
     halfway through mMaxFrames, if mSwitchProjectTo: RequestOpenProject
     if mMaxFrames reached: RequestClose
@@ -278,21 +279,35 @@ logged error.
 
 1. **A headless mode**, which needs the renderer abstraction. It is also the
    prerequisite for any test in this module, and for making `Editor` optional.
-2. **No fixed timestep**, so physics-style systems have no stable substep.
-   Undecided whether that belongs in the scheduler or in the loop.
-3. **No frame limiter**, and no window-event handling beyond the renderer
+2. **No frame limiter**, and no window-event handling beyond the renderer
    re-querying size.
-4. **`Initialize` after `Shutdown`** is written to work — the sticky asset flag
+3. **`Initialize` after `Shutdown`** is written to work — the sticky asset flag
    and the explicit resets exist for it — but nothing exercises it.
-5. One `App` per process is assumed everywhere, and nothing enforces it.
-6. **A second viewport for Play+Paused**, showing the editor camera alongside
+4. One `App` per process is assumed everywhere, and nothing enforces it.
+5. **A second viewport for Play+Paused**, showing the editor camera alongside
    the game view. `RenderSystem::AddViewport` exists (see
    [renderer.md](renderer.md)); nothing calls it yet.
-7. **No World diffing for Play/Stop** — `PlaySnapshot` destroys and reloads
+6. **No World diffing for Play/Stop** — `PlaySnapshot` destroys and reloads
    every entity rather than diffing what changed, which is simple but not
    cheap for a large scene.
 
 ## Changed
+
+*2026-09-15* — **Fixed timestep for `SystemPhase::FixedUpdate`.** Was: `Run`
+ticked every phase once per frame with the variable `dt`, so physics-style
+systems had no stable substep. Now: `Run` advances a `FixedTimestep`
+(`AppDesc::mFixedDeltaSeconds`, 1/60 s, at most `mMaxFixedSteps`, 4, a frame)
+and hands the substep count to `SystemScheduler::Update`, which runs
+`FixedUpdate` that many times between `Update` and `PostUpdate` with the fixed
+step as `dt`, flushing after each. Every other phase still runs once with the
+frame `dt`, so `Render` happens exactly once per frame.
+
+The loop owns the clock and the scheduler owns the order: the scheduler takes a
+step count and keeps no time state. Leftover time carries to the next frame,
+but the backlog is clamped to one capped frame, so a sustained overload becomes
+slow motion instead of a growing debt. The accumulator advances in every mode;
+a `FixedUpdate` system checks `IsSimulating` itself, as `ScriptSystem` does, so
+Play and Unpause start without a catch-up burst.
 
 *2026-09-14* — **The game is chosen at launch, and switching games restarts.**
 Was: `AppDesc::mProjectPath` named `games/HelloWorld/game.json`, parsed by a
