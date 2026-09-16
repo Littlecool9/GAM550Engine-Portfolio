@@ -42,6 +42,7 @@ add_subdirectory(modules/core)
 add_subdirectory(modules/editor)
 add_subdirectory(modules/editortheme)
 add_subdirectory(modules/input)
+add_subdirectory(modules/physics)
 add_subdirectory(modules/renderer)
 add_subdirectory(modules/scene)
 add_subdirectory(modules/script)
@@ -129,6 +130,7 @@ target_link_libraries(MjolnirEngine PRIVATE
     mir::audio
     mir::core
     mir::input
+    mir::physics
     mir::scene
     mir::script
     nlohmann_json::nlohmann_json

@@ -11,13 +11,13 @@
         "vulkan-memory-allocator",
         "catch2",
         "nlohmann-json",
+        "joltphysics",
         "luajit",
         {
             "name": "pkgconf",
             "host": true
         },
-        "sol2",
-        "catch2"
+        "sol2"
     ],
     "$comment": "builtin-baseline = SHA of vcpkg"
 }

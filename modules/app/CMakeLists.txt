@@ -12,6 +12,7 @@ target_link_libraries(engine_app
            mir::script
     PRIVATE mir::input
             mir::audio
+            mir::physics
             nlohmann_json::nlohmann_json
 )
 
