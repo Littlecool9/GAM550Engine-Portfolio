@@ -38,9 +38,6 @@ namespace
     }
 
 #ifdef JPH_ENABLE_ASSERTS
-    // Returning false keeps Jolt out of the debugger: a failed Jolt assert is a
-    // content problem, and the logged error is already enough to fail a smoke
-    // test or a CI run without hanging the process on a breakpoint.
     bool AssertFailedImpl(const char *expression, const char *message, const char *file, JPH::uint line)
     {
         MIR_LOG_ERROR("Jolt assert at {}:{}: ({}) {}",

@@ -17,7 +17,8 @@
             "name": "pkgconf",
             "host": true
         },
-        "sol2"
+        "sol2",
+        "catch2"
     ],
     "$comment": "builtin-baseline = SHA of vcpkg"
 }
