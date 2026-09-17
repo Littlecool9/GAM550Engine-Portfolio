@@ -4,7 +4,7 @@ The whole Vulkan path — instance through swapchain, meshes, materials, depth a
 per-frame recording — plus the render-facing components and the one system that
 drives it from the ECS.
 
-`mir::renderer` · depends `mir::core`, `volk`, `glm` (public); `VMA`, `imgui` (private) · API `modules/renderer/include/renderer/` · maintainer Sumin Park · reviewed 2026-09-12
+`mir::renderer` · depends `mir::core`, `volk`, `glm` (public); `VMA`, `imgui`, `mir::assets`, `nlohmann_json` (private) · API `modules/renderer/include/renderer/` · maintainer Sumin Park · reviewed 2026-09-12
 
 ## Model
 
@@ -78,6 +78,7 @@ void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera
 | `MeshRenderer`, `Camera` | `renderer/components/` | Handles, and `fovY`/`near`/`far`, declared here rather than in `core` |
 | `RenderSystem` | `renderer/RenderSystem.h` | The ECS-to-renderer bridge, `SystemPhase::Render` |
 | `Shapes.h` | `renderer/Shapes.h` | `MakeCube()` and friends — plain vectors, no Vulkan |
+| `RenderSettings` | `renderer/RenderSettings.h` | Project Settings' `"rendering"` section (`rayTracing: bool` so far); `LoadFile`/`SaveFile`, a World resource loaded in `App::Initialize` |
 
 ## Rules
 
@@ -87,6 +88,18 @@ selection, with a log line naming what was missing.
 
 The floor is roughly 2020 hardware with a current driver. That is acceptable for
 a project that is not shipping to consumers.
+
+**`RenderSettings` owns only `project_settings.json`'s `"rendering"` key**,
+the same way `InputMap` (see the `input` module) owns only `"input"`. Each
+type's `SaveFile` reads the file first and rewrites only its own section, so
+the two can be loaded and saved independently without one clobbering the
+other. A file from before sections existed has no `"rendering"` key, which
+`RenderSettings::LoadFile` reads the same as an empty one — defaults, not an
+error.
+
+`RenderSettings` reads and writes bytes through `assets/AssetFileIo.h`
+(`ReadFileBytes`/`WriteFileBytes`) rather than opening its own file streams,
+the same file-IO primitives `AssetManifest` and `AssetCache` use.
 
 **`volk` is compiled from source in this module**, so the platform defines are
 ours. VMA is configured with `VMA_STATIC_VULKAN_FUNCTIONS=0` and
@@ -182,6 +195,20 @@ No tests. Everything here needs a device, and the module is verified by running.
    Play session.
 
 ## Changed
+
+*2026-09-17* — **`RenderSettings` added, owning `project_settings.json`'s
+new `"rendering"` section.** Was: `project_settings.json` was `InputMap`'s
+file alone, root-level `"actions"` and nothing else. Now: the root has an
+`"input"` section (`InputMap`, unchanged in content) and a `"rendering"`
+section (`RenderSettings`, `rayTracing: bool` so far); each type's
+`LoadFile`/`SaveFile` reads and writes only its own key, and `SaveFile`
+preserves whatever sibling section is already on disk. A pre-sections file
+(root-level `"actions"`, no `"input"`/`"rendering"` keys) still loads via
+`InputMap`'s back-compat path, and is migrated to the sectioned form the
+next time it saves. `RenderSettings` is loaded into a World resource in
+`App::Initialize`, alongside `InputMap`. Its file IO goes through
+`assets/AssetFileIo.h`'s `ReadFileBytes`/`WriteFileBytes` rather than its own
+streams, so this module now depends on `mir::assets`.
 
 *2026-09-17* — **Device floor raised to Vulkan 1.4.** Was: instance/device
 requested 1.3. Now: both request 1.4 (`VulkanRenderer::VulkanVersion`); the
