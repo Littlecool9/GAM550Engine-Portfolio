@@ -213,8 +213,27 @@ namespace mir
         return removeAction;
     }
 
-    void ProjectSettingsPanel::Draw(InputMap &inputMap, const RawInputSnapshot &raw, const std::filesystem::path &savePath)
+    void ProjectSettingsPanel::DrawRendering(RenderSettings &renderSettings, const std::filesystem::path &savePath)
     {
+        ImGui::SeparatorText("Rendering");
+
+        ImGui::Checkbox("Ray Tracing", &renderSettings.rayTracing);
+
+        if (ImGui::Button("Save##Rendering"))
+            mRenderingStatusMessage = renderSettings.SaveFile(savePath) ? "Saved." : "Save failed - see log.";
+
+        if (!mRenderingStatusMessage.empty())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", mRenderingStatusMessage.c_str());
+        }
+    }
+
+    void ProjectSettingsPanel::Draw(InputMap &inputMap, RenderSettings &renderSettings, const RawInputSnapshot &raw,
+                                     const std::filesystem::path &savePath)
+    {
+        ImGui::SeparatorText("Input");
+
         ImGui::SetNextItemWidth(160.0f);
         ImGui::InputTextWithHint("##NewActionName", "New action name...", mNewActionName, sizeof(mNewActionName));
 
@@ -259,5 +278,7 @@ namespace mir
         }
 
         mPreviousRaw = raw;
+
+        DrawRendering(renderSettings, savePath);
     }
 }

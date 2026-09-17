@@ -10,9 +10,5 @@
 
 namespace mir
 {
-    // Mirrors RegisterRendererComponents / RegisterScriptComponents - core
-    // cannot name RigidBody, so physics registers its own. Must run before any
-    // scene is loaded, since SceneIO looks components up by name through the
-    // registry - see App::Initialize.
     void RegisterPhysicsComponents();
 }

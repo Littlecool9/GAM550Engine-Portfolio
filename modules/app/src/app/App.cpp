@@ -25,6 +25,7 @@
 #include <physics/PhysicsSystem.h>
 #include <physics/PhysicsWorld.h>
 #include <renderer/ComponentRegistration.h>
+#include <renderer/RenderSettings.h>
 #include <renderer/RenderSystem.h>
 #include <scene/SceneIO.h>
 #include <script/ComponentRegistration.h>
@@ -115,6 +116,7 @@ namespace mir
         mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
 
         mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mProject.mProjectSettingsPath));
+        mWorld.EmplaceResource<RenderSettings>(RenderSettings::LoadFile(mProject.mProjectSettingsPath));
         mWorld.EmplaceResource<InputState>();
         mWorld.EmplaceResource<EngineModeState>();
 
@@ -339,8 +341,8 @@ namespace mir
             if (mWindow->Width() != 0 && mWindow->Height() != 0)
             {
                 const EditorActions actions = mEditor.DrawLayout(
-                    mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<EngineModeState>(),
-                    mProjectMenu, mProject.mDir);
+                    mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<RenderSettings>(),
+                    mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir);
 
                 switch (actions.mScene)
                 {

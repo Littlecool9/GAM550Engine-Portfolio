@@ -51,8 +51,6 @@ namespace mir
         if (physics == nullptr)
             return;
 
-        // 1. Give every RigidBody a body, and hand physics whatever moved the
-        //    Transform from the outside since the last step.
         mQuery->ForEach(
             [&](Entity entity, Transform &transform, RigidBody &rigidBody)
             {
@@ -79,21 +77,14 @@ namespace mir
                 rigidBody.transformVersion = transform.Version();
             });
 
-        // 2. One fixed substep.
         physics->Step(context.dt);
 
-        // 3. Write the result back. Statics never moved, so only dynamics are
-        //    read; recording the version afterwards keeps step 1 from reading
-        //    our own write as an outside change next substep.
         mQuery->ForEach(
             [&](Entity, Transform &transform, RigidBody &rigidBody)
             {
                 if (!rigidBody.body.IsValid() || rigidBody.motion != PhysicsMotion::Dynamic)
                     return;
 
-                // Compared before writing: a sleeping body reports the same
-                // pose every substep, and setting it would bump the version
-                // and leave TransformPropagateSystem rebuilding it forever.
                 const glm::vec3 position = physics->BodyPosition(rigidBody.body);
                 if (position != transform.Position())
                     transform.SetPosition(position);

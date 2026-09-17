@@ -113,16 +113,12 @@ namespace
     }
 
 #ifdef JPH_DOUBLE_PRECISION
-    // With double precision RVec3 and Vec3 are distinct types; without it they
-    // are the same one and this overload would redeclare the function above.
     glm::vec3 FromJolt(JPH::Vec3Arg v)
     {
         return glm::vec3(v.GetX(), v.GetY(), v.GetZ());
     }
 #endif
 
-    // The BodyID constructor rejects the broad-phase bit, so it never sees an
-    // invalid handle: every caller checks IsValid() first.
     JPH::BodyID ToBodyId(mir::BodyHandle handle)
     {
         return JPH::BodyID(handle.mId);
@@ -160,8 +156,6 @@ namespace mir
         BodyHandle CreateBody(const JPH::Shape *shape, const glm::vec3 &position,
             const glm::quat &rotation, bool dynamic)
         {
-            // Holds the shape until BodyCreationSettings takes its own
-            // reference, so an early return below cannot leak it.
             const JPH::RefConst<JPH::Shape> owned(shape);
 
             const JPH::BodyCreationSettings settings(owned,
@@ -179,7 +173,6 @@ namespace mir
                 return {};
             }
 
-            // Statics land in the broad phase unsorted; Step() re-sorts once.
             if (!dynamic)
                 mBroadPhaseDirty = true;
 
@@ -277,8 +270,6 @@ namespace mir
         if (!body.IsValid())
             return glm::vec3(0.0f);
 
-        // Jolt's getters return zero when the body lock fails, which is exactly
-        // what a stale handle does - no need to check ownership twice.
         return FromJolt(mImpl->mSystem.GetBodyInterface().GetPosition(ToBodyId(body)));
     }
 
@@ -428,8 +419,6 @@ namespace mir
             &mImpl->mTempAllocator,
             &mImpl->mJobSystem);
 
-        // A warning, not an error: Jolt clamps and keeps simulating, and the
-        // fix is always a bigger PhysicsWorldDesc, never a stopped frame.
         if (error != JPH::EPhysicsUpdateError::None)
         {
             MIR_LOG_WARN("PhysicsWorld::Step: Jolt update error bits {}",

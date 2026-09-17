@@ -293,6 +293,11 @@ logged error.
 
 ## Changed
 
+*2026-09-17* — **`RenderSettings` loaded alongside `InputMap`.** `Initialize`
+now also emplaces a `RenderSettings` World resource, loaded from the same
+`project_settings.json` (see [renderer.md](renderer.md#changed) — the file
+gained a `"rendering"` section next to `InputMap`'s `"input"`).
+
 *2026-09-15* — **Fixed timestep for `SystemPhase::FixedUpdate`.** Was: `Run`
 ticked every phase once per frame with the variable `dt`, so physics-style
 systems had no stable substep. Now: `Run` advances a `FixedTimestep`

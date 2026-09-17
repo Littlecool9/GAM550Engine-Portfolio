@@ -20,28 +20,17 @@
 
 namespace mir
 {
-    // PhysicsSystem creates the body on the first simulating step and keeps
-    // Transform and the body in sync from then on. The entity needs a
-    // Transform; one without is skipped.
-    //
-    // The shape sizes below are world space and are NOT multiplied by
-    // Transform::Scale(): a Jolt shape cannot be scaled after it is built, so a
-    // scaled visual has to have its collider dimensions authored to match.
     struct RigidBody
     {
-        // Runtime-only handle
         BodyHandle body;
 
-        // Transform::Version() this component last agreed with. Keep 
-        // the transform and physics synced
         uint32_t transformVersion = 0;
 
-        // Below Stored in scene files
         PhysicsMotion motion = PhysicsMotion::Dynamic;
         PhysicsShape shape = PhysicsShape::Box;
 
-        glm::vec3 halfExtent{ 0.5f, 0.5f, 0.5f }; // PhysicsShape::Box
-        float radius = 0.5f;                      // PhysicsShape::Sphere
+        glm::vec3 halfExtent{ 0.5f, 0.5f, 0.5f };
+        float radius = 0.5f;
     };
 
     MIR_ASSERT_COMPONENT(RigidBody);

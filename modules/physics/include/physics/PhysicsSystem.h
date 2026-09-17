@@ -28,9 +28,6 @@ namespace mir
         void OnStop(SystemContext &context) override;
 
     private:
-        // Frees the Jolt body behind a RigidBody when its entity dies. That
-        // covers UnloadScene and PlaySnapshot::RestoreWorld, both of which go
-        // through World::DestroyEntity - same trick as ScriptSystem.
         static void OnEntityDestroyed(World &world, Entity entity, void *user);
 
         Query<Transform, RigidBody> *mQuery = nullptr;

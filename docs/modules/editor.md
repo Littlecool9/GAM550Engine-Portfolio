@@ -4,7 +4,7 @@ The ImGui context and backend lifecycle, and the Slate editor shell — dockspac
 default panel layout, the File, Project and Debug menus. It is the only place in
 the engine that calls `ImGui::*` or `ImGui_Impl*`.
 
-`mir::editor` · depends `mir::renderer`, `mir::window` (public); `mir::core`, `mir::editortheme`, `imgui`, `iconfontcppheaders` (private) · API `modules/editor/include/editor/` · maintainer Sumin Park · reviewed 2026-09-12
+`mir::editor` · depends `mir::renderer`, `mir::window` (public); `mir::core`, `mir::editortheme`, `imgui`, `iconfontcppheaders` (private) · API `modules/editor/include/editor/` · maintainer Sumin Park · reviewed 2026-09-17
 
 ## Model
 
@@ -15,8 +15,8 @@ mEditor.BeginFrame();                                   // the ImGui NewFrame tr
 
 if (windowVisible)
     Act(mEditor.DrawLayout(mDesc.mEnableEditorLayout,   // EditorActions
-                           world.Resource<InputMap>(), world.Resource<EngineModeState>(),
-                           projectMenu, currentProject));
+                           world.Resource<InputMap>(), world.Resource<RenderSettings>(),
+                           world.Resource<EngineModeState>(), projectMenu, currentProject));
 
 mRenderer.SetImGuiDrawData(mEditor.EndFrame());         // ImGui::Render, hand off draw data
 mRenderSystem.SetViewportRect(0, mEditor.SceneViewportRect());
@@ -69,8 +69,9 @@ bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path 
 void Shutdown(VulkanRenderer &renderer);
 
 void BeginFrame();
-EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, const EngineModeState &mode,
-                         std::span<const ProjectMenuEntry> projects, std::string_view currentProject);
+EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
+                         const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
+                         std::string_view currentProject);
 ImDrawData *EndFrame();
 
 VkRect2D SceneViewportRect() const;
@@ -173,6 +174,17 @@ Open Project asks for, but not the menu or the dialog themselves.
    second panel; nothing calls it yet.
 
 ## Changed
+
+*2026-09-17* — **Project Settings gained a Rendering section.** Was:
+`ProjectSettingsPanel` drew only the Input section (actions/bindings), and its
+own "Save" wrote `InputMap` to `project_settings.json`. Now: it also takes a
+`RenderSettings&` and draws a Rendering section below Input — a ray tracing
+checkbox today, laid out as one row per setting so the next one is a row, not
+a rewrite — with its own "Save" writing `RenderSettings` (see
+[renderer.md](renderer.md)) to the same file. Each section's `SaveFile` reads
+the file first and only replaces its own top-level key, so saving one section
+never touches the other's. `DrawLayout` threads the `RenderSettings&` through
+to `ProjectSettingsPanel::Draw` the same way `InputMap&` already was.
 
 *2026-09-14* — **Project > Open Project.** Was: `DrawLayout` returned a bare
 `SceneMenuAction`, and the Project menu held only Project Settings. Now: it

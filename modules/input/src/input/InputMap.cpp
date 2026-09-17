@@ -1,11 +1,12 @@
 ﻿#include "input/InputMap.h"
 
+#include <assets/AssetFileIo.h>
 #include <core/log/Log.h>
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <fstream>
+#include <string_view>
 
 namespace mir
 {
@@ -140,23 +141,14 @@ namespace mir
     {
         InputMap map;
 
-        if (!std::filesystem::exists(path))
-        {
-            MIR_LOG_INFO("InputMap::LoadFile: no '{}' yet, starting with an empty input map", path.string());
+        const std::optional<std::vector<std::byte>> bytes = ReadFileBytes(path);
+        if (!bytes)
             return map;
-        }
-
-        std::ifstream in(path);
-        if (!in)
-        {
-            MIR_LOG_ERROR("InputMap::LoadFile: could not open '{}'", path.string());
-            return map;
-        }
 
         json root;
         try
         {
-            in >> root;
+            root = json::parse(std::string_view(reinterpret_cast<const char *>(bytes->data()), bytes->size()));
         }
         catch (const json::parse_error &e)
         {
@@ -164,7 +156,10 @@ namespace mir
             return map;
         }
 
-        for (const json &actionNode : root.value("actions", json::array()))
+        const auto inputIt = root.find("input");
+        const json &inputRoot = inputIt != root.end() ? *inputIt : root;
+
+        for (const json &actionNode : inputRoot.value("actions", json::array()))
         {
             InputAction &action = map.AddAction(
                 actionNode.value("name", ""),
@@ -179,8 +174,23 @@ namespace mir
 
     bool InputMap::SaveFile(const std::filesystem::path &path) const
     {
-        json root;
-        json &actions = root["actions"] = json::array();
+        json root = json::object();
+        if (const std::optional<std::vector<std::byte>> bytes = ReadFileBytes(path))
+        {
+            try
+            {
+                json existing = json::parse(std::string_view(reinterpret_cast<const char *>(bytes->data()), bytes->size()));
+                if (existing.is_object())
+                    root = std::move(existing);
+            }
+            catch (const json::parse_error &)
+            {
+            }
+        }
+        root.erase("actions");
+
+        json inputNode;
+        json &actions = inputNode["actions"] = json::array();
 
         for (const InputAction &action : mActions)
         {
@@ -196,20 +206,10 @@ namespace mir
             actions.push_back(std::move(actionNode));
         }
 
-        std::ofstream out(path);
-        if (!out)
-        {
-            MIR_LOG_ERROR("InputMap::SaveFile: could not open '{}' for writing", path.string());
-            return false;
-        }
+        root["input"] = std::move(inputNode);
 
-        out << root.dump(2);
-        if (!out)
-        {
-            MIR_LOG_ERROR("InputMap::SaveFile: write to '{}' failed", path.string());
-            return false;
-        }
-
-        return true;
+        const std::string dumped = root.dump(2);
+        const std::span<const std::byte> bytesOut(reinterpret_cast<const std::byte *>(dumped.data()), dumped.size());
+        return WriteFileBytes(path, bytesOut);
     }
 }
