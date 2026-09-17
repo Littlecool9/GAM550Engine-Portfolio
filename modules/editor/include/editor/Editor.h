@@ -38,7 +38,7 @@ namespace mir
         Stop,
     };
 
-    // One game in Project > Open Project
+    // One game in File > Open Project
     struct ProjectMenuEntry
     {
         // e.g. "games/HelloWorld"
