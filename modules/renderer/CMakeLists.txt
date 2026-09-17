@@ -30,7 +30,7 @@ engine_target_vulkan_platform_defines(engine_renderer)
 target_compile_definitions(engine_renderer PRIVATE
     VMA_STATIC_VULKAN_FUNCTIONS=0
     VMA_DYNAMIC_VULKAN_FUNCTIONS=1
-    VMA_VULKAN_VERSION=1003000
+    VMA_VULKAN_VERSION=1004000
 )
 
 target_sources(engine_renderer PRIVATE
