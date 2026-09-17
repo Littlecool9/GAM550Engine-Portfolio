@@ -4,7 +4,7 @@ The whole Vulkan path — instance through swapchain, meshes, materials, depth a
 per-frame recording — plus the render-facing components and the one system that
 drives it from the ECS.
 
-`mir::renderer` · depends `mir::core`, `volk`, `glm` (public); `VMA`, `imgui` (private) · API `modules/renderer/include/renderer/` · maintainer Sumin Park · reviewed 2026-09-12
+`mir::renderer` · depends `mir::core`, `volk`, `glm` (public); `VMA`, `imgui`, `mir::assets`, `nlohmann_json` (private) · API `modules/renderer/include/renderer/` · maintainer Sumin Park · reviewed 2026-09-12
 
 ## Model
 
@@ -96,6 +96,10 @@ the two can be loaded and saved independently without one clobbering the
 other. A file from before sections existed has no `"rendering"` key, which
 `RenderSettings::LoadFile` reads the same as an empty one — defaults, not an
 error.
+
+`RenderSettings` reads and writes bytes through `assets/AssetFileIo.h`
+(`ReadFileBytes`/`WriteFileBytes`) rather than opening its own file streams,
+the same file-IO primitives `AssetManifest` and `AssetCache` use.
 
 **`volk` is compiled from source in this module**, so the platform defines are
 ours. VMA is configured with `VMA_STATIC_VULKAN_FUNCTIONS=0` and
@@ -202,7 +206,9 @@ preserves whatever sibling section is already on disk. A pre-sections file
 (root-level `"actions"`, no `"input"`/`"rendering"` keys) still loads via
 `InputMap`'s back-compat path, and is migrated to the sectioned form the
 next time it saves. `RenderSettings` is loaded into a World resource in
-`App::Initialize`, alongside `InputMap`.
+`App::Initialize`, alongside `InputMap`. Its file IO goes through
+`assets/AssetFileIo.h`'s `ReadFileBytes`/`WriteFileBytes` rather than its own
+streams, so this module now depends on `mir::assets`.
 
 *2026-09-17* — **Device floor raised to Vulkan 1.4.** Was: instance/device
 requested 1.3. Now: both request 1.4 (`VulkanRenderer::VulkanVersion`); the

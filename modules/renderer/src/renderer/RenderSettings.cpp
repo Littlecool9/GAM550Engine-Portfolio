@@ -1,45 +1,39 @@
 #include "renderer/RenderSettings.h"
 
-#include <core/log/Log.h>
+#include <assets/AssetFileIo.h>
 
 #include <nlohmann/json.hpp>
 
-#include <fstream>
+#include <string_view>
 
 namespace mir
 {
     namespace
     {
         using json = nlohmann::json;
-
-        json ReadRoot(const std::filesystem::path &path)
-        {
-            if (!std::filesystem::exists(path))
-                return json::object();
-
-            std::ifstream in(path);
-            if (!in)
-                return json::object();
-
-            json root;
-            try
-            {
-                in >> root;
-            }
-            catch (const json::parse_error &)
-            {
-                return json::object();
-            }
-
-            return root.is_object() ? root : json::object();
-        }
     }
 
     RenderSettings RenderSettings::LoadFile(const std::filesystem::path &path)
     {
-        const json root = ReadRoot(path);
-
         RenderSettings settings;
+
+        const std::optional<std::vector<std::byte>> bytes = ReadFileBytes(path);
+        if (!bytes)
+            return settings;
+
+        json root;
+        try
+        {
+            root = json::parse(std::string_view(reinterpret_cast<const char *>(bytes->data()), bytes->size()));
+        }
+        catch (const json::parse_error &)
+        {
+            return settings;
+        }
+
+        if (!root.is_object())
+            return settings;
+
         const json &renderingRoot = root.value("rendering", json::object());
         settings.rayTracing = renderingRoot.value("rayTracing", false);
         return settings;
@@ -47,23 +41,24 @@ namespace mir
 
     bool RenderSettings::SaveFile(const std::filesystem::path &path) const
     {
-        json root = ReadRoot(path);
+        json root = json::object();
+        if (const std::optional<std::vector<std::byte>> bytes = ReadFileBytes(path))
+        {
+            try
+            {
+                json existing = json::parse(std::string_view(reinterpret_cast<const char *>(bytes->data()), bytes->size()));
+                if (existing.is_object())
+                    root = std::move(existing);
+            }
+            catch (const json::parse_error &)
+            {
+            }
+        }
+
         root["rendering"] = json{{"rayTracing", rayTracing}};
 
-        std::ofstream out(path);
-        if (!out)
-        {
-            MIR_LOG_ERROR("RenderSettings::SaveFile: could not open '{}' for writing", path.string());
-            return false;
-        }
-
-        out << root.dump(2);
-        if (!out)
-        {
-            MIR_LOG_ERROR("RenderSettings::SaveFile: write to '{}' failed", path.string());
-            return false;
-        }
-
-        return true;
+        const std::string dumped = root.dump(2);
+        const std::span<const std::byte> bytesOut(reinterpret_cast<const std::byte *>(dumped.data()), dumped.size());
+        return WriteFileBytes(path, bytesOut);
     }
 }
