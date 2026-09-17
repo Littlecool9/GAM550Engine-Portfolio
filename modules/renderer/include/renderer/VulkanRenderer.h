@@ -123,7 +123,7 @@ namespace mir
         void RecordView(VkCommandBuffer cmd, const RenderView &view);
 
     private:
-        constexpr static uint32_t VulkanVersion{ VK_API_VERSION_1_3 };
+        constexpr static uint32_t VulkanVersion{ VK_API_VERSION_1_4 };
         constexpr static uint32_t kFramesInFlight = 2;
 
         // 32-bit float depth, no stencil.

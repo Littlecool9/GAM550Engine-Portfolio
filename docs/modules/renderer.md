@@ -34,7 +34,7 @@ scene-build time, stores the returned handles on a `MeshRenderer` component, and
 `RenderSystem` takes over from there every frame after. When `App` unloads that
 scene, `ReleaseSceneResources` frees them all again, except the default material.
 
-The module targets Vulkan 1.3 and rejects any device below it. That removes a
+The module targets Vulkan 1.4 and rejects any device below it. That removes a
 lot of code: there are no render passes and no framebuffers, since
 `vkCmdBeginRendering` is used throughout, there are only synchronization2
 barriers, and frame pacing is one timeline semaphore rather than a fence pool.
@@ -81,7 +81,7 @@ void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera
 
 ## Rules
 
-**Vulkan 1.3 with `dynamicRendering`, `synchronization2`, `timelineSemaphore` and
+**Vulkan 1.4 with `dynamicRendering`, `synchronization2`, `timelineSemaphore` and
 `shaderDrawParameters`.** A device missing any of them is rejected during
 selection, with a log line naming what was missing.
 
@@ -182,6 +182,13 @@ No tests. Everything here needs a device, and the module is verified by running.
    Play session.
 
 ## Changed
+
+*2026-09-17* — **Device floor raised to Vulkan 1.4.** Was: instance/device
+requested 1.3. Now: both request 1.4 (`VulkanRenderer::VulkanVersion`); the
+rejection log line reports "need 1.4". Required features
+(`dynamicRendering`, `synchronization2`, `timelineSemaphore`,
+`shaderDrawParameters`) are unchanged — they validate the same way under 1.4 —
+so this is a floor bump with no functional change to raster rendering.
 
 *2026-09-14* — **Scene resources can be released.** Was: every mesh and pipeline
 lived until `Shutdown()`, so each scene load and each Play session's Stop

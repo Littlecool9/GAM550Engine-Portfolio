@@ -649,7 +649,7 @@ namespace mir
             // Every rejection says which device and why
             if (props.apiVersion < VulkanVersion)
             {
-                MIR_LOG_INFO("Rejected {}: Vulkan {}.{}, need 1.3", props.deviceName,
+                MIR_LOG_INFO("Rejected {}: Vulkan {}.{}, need 1.4", props.deviceName,
                     VK_API_VERSION_MAJOR(props.apiVersion),
                     VK_API_VERSION_MINOR(props.apiVersion));
                 continue;
@@ -717,7 +717,7 @@ namespace mir
             .queueCount = 1,
             .pQueuePriorities = &queuePriority };
 
-        // list of extensions at 1.3
+        // list of extensions at 1.4
         // dynamic rendering, sync resources are core, not extensions
         // .pNext to link multiple extensions together
         const char *deviceExtensions[]{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
