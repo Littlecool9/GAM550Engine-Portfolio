@@ -296,7 +296,8 @@ namespace mir
                 mHierarchyPanel.Draw(world);
             ImGui::End();
 
-            ImGui::Begin("Inspector");
+            if (ImGui::Begin("Inspector"))
+                mInspectorPanel.Draw(world);
             ImGui::End();
 
             if (ImGui::Begin("Output"))

@@ -89,21 +89,40 @@ EditorCamera &SceneCamera();
 | `ProjectMenuEntry` | `editor/Editor.h` | `{mDir, mName}` for one game in Open Project |
 | `EditorActions` | `editor/Editor.h` | `{mScene, mOpenProject}`, what the menus and toolbar asked for this frame |
 | `EditorCamera` | `editor/EditorCamera.h` | Free-fly scene camera, position + yaw/pitch, outside the `World` |
-| `Selection` | `editor/Selection.h` | `{mSelected}`, the `World` resource `Hierarchy` writes and `Inspector` will read |
+| `Selection` | `editor/Selection.h` | `{mSelected}`, the `World` resource `Hierarchy` writes and `Inspector` reads |
 
 `LogPanel`, in `src/editor/panels/LogPanel.cpp`, renders `core`'s `LogHistory`
 into the `Output` dock. `HierarchyPanel`, in
 `src/editor/panels/HierarchyPanel.cpp`, renders the `World`'s live entities
 into the `Hierarchy` dock as a tree built from `HierarchyIndex` (roots are
-entities `ParentOf` reports null for). Neither is public — panels are reached
+entities `ParentOf` reports null for). `InspectorPanel`, in
+`src/editor/panels/InspectorPanel.cpp`, renders the `Selection`'s components
+into the `Inspector` dock. None of the three are public — panels are reached
 only through `DrawLayout`.
 
 Clicking an entity in `Hierarchy` writes it into `Selection`
 (`editor/Selection.h`), a `World` resource `HierarchyPanel` installs on first
-draw if nothing already has. It is the "current selection" the Inspector
-(issue #38, not yet built) reads. `HierarchyPanel` clears it back to
-`kNullEntity` whenever the selected entity is no longer alive, so a stale
-handle never lingers past the frame its entity died.
+draw if nothing already has. `HierarchyPanel` clears it back to `kNullEntity`
+whenever the selected entity is no longer alive, so a stale handle never
+lingers past the frame its entity died. `InspectorPanel` reads it with
+`TryResource` rather than `Resource`, so it degrades to "No entity selected"
+instead of asserting on a frame where `Hierarchy` hasn't drawn yet (e.g. it
+starts collapsed).
+
+`InspectorPanel` walks every `seq` up to `kMaxComponentTypes`, asking
+`ComponentRegistry::FindBySeq` for each one and skipping those the selection
+doesn't `Has` — the same walk `SceneIO` (see [scene.md](scene.md)) uses to
+save a scene, and why it treats a C++ and a script-declared runtime component
+identically: both surface through the same `ComponentOps`/`FieldDesc` tables.
+Each field reads into a 64-byte scratch buffer (large enough for a `Mat4`,
+`FieldKind`'s biggest kind), an ImGui control drawn over the copy per
+`FieldKind`, and `FieldDesc::Write` called on the live component only if the
+control reports an edit — so a component with a custom accessor (`Transform`'s
+`SetPosition` and friends) runs through it rather than being memcpy'd under
+it. A `FieldDesc::ReadOnly` field (`WorldTransform.matrix`) still shows its
+current value, greyed out via `ImGui::BeginDisabled`. No 3D gizmo and no
+component add/remove — numeric/text controls over the existing field tables
+only, per the roadmap's scope cut.
 
 ## Rules
 
@@ -173,22 +192,35 @@ Open Project asks for, but not the menu or the dialog themselves.
 
 ## Backlog
 
-1. **`Inspector` is docked but empty.** Nothing reads the `World` to populate
-   it. The `ComponentRegistry` field tables that serialization already uses
-   are the intended route, reading `Selection` for which entity (issue #38).
+1. **`Inspector` has no way to add or remove a component.** It only edits the
+   fields of what the selection already has; issue #38 scoped that out
+   explicitly, same as the "no gizmo" cut below.
 2. **`Hierarchy` shows no entity names.** No component carries a display
    name yet, so each row is just `Entity <index>`.
-3. **Serialized custom layouts**, beyond whatever `imgui.ini` remembers.
-4. **Input routing**, beyond what `ImGui_ImplGlfw` gives for free.
-5. **Make `Editor` optional on `App`** — a `unique_ptr`, null in a packaged game
+3. **No 3D gizmo for `Transform`.** `Inspector` edits `position`/`rotation`/
+   `scale` as plain drag boxes; a viewport gizmo is its own issue (#59).
+4. **Serialized custom layouts**, beyond whatever `imgui.ini` remembers.
+5. **Input routing**, beyond what `ImGui_ImplGlfw` gives for free.
+6. **Make `Editor` optional on `App`** — a `unique_ptr`, null in a packaged game
    build. This module's boundary is what makes that swap possible without
    touching `RenderSystem` or `VulkanRenderer`.
-6. **A second viewport showing `EditorCamera` during Play+Paused**, so pausing
+7. **A second viewport showing `EditorCamera` during Play+Paused**, so pausing
    lets you look around the live World independent of the game camera. Needs
    `RenderSystem::AddViewport` (see [renderer.md](renderer.md)) wired to a
    second panel; nothing calls it yet.
 
 ## Changed
+
+*2026-09-17* — **`Inspector` populated from the Selection.** Was: an empty
+`ImGui::Begin`/`End`, same as `Hierarchy` before it. Now: `InspectorPanel`
+reads `Selection` (see above) and, for each component the selected entity
+`Has`, draws its `FieldDesc` table as ImGui controls — `DragFloat`/`Vec3`/
+`Vec4`/etc. per `FieldKind`, a read-only field shown greyed out rather than
+skipped, edits written back through `FieldDesc::Write` so a component with an
+accessor (`Transform`) runs its setter instead of being overwritten byte for
+byte. Walking `ComponentRegistry::FindBySeq` rather than something typed to
+C++ components is what makes a script-declared runtime component show up the
+same way, with no separate code path.
 
 *2026-09-17* — **`Hierarchy` populated from the World.** Was: `Hierarchy` and
 `Inspector` were both `ImGui::Begin`/`End` with nothing drawn between them.

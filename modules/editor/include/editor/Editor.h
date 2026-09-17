@@ -13,6 +13,7 @@
 #include <core/platform/Surface.h>
 #include <editor/EditorCamera.h>
 #include <editor/panels/HierarchyPanel.h>
+#include <editor/panels/InspectorPanel.h>
 #include <editor/panels/LogPanel.h>
 #include <editor/panels/ProjectSettingsPanel.h>
 #include <renderer/RenderSettings.h>
@@ -103,6 +104,7 @@ namespace mir
         std::vector<PixelRect> mTitleBarInteractiveRects;
         LogPanel mLogPanel;
         HierarchyPanel mHierarchyPanel;
+        InspectorPanel mInspectorPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
         EditorCamera mCamera;
 
