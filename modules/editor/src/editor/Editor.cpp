@@ -259,8 +259,9 @@ namespace mir
         ImGui::EndPopup();
     }
 
-    EditorActions Editor::DrawLayout(bool enableLayout, InputMap &inputMap, const EngineModeState &mode,
-                                     std::span<const ProjectMenuEntry> projects, std::string_view currentProject)
+    EditorActions Editor::DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
+                                     const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
+                                     std::string_view currentProject)
     {
         EditorActions actions;
 
@@ -352,7 +353,7 @@ namespace mir
             if (mShowProjectSettings)
             {
                 if (ImGui::Begin("Project Settings", &mShowProjectSettings))
-                    mProjectSettingsPanel.Draw(inputMap, mWindow->RawInput(), mProjectSettingsPath);
+                    mProjectSettingsPanel.Draw(inputMap, renderSettings, mWindow->RawInput(), mProjectSettingsPath);
                 else
                     mProjectSettingsPanel.CancelListening();
                 ImGui::End();

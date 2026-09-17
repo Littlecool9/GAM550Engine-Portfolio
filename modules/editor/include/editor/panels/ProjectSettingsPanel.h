@@ -1,8 +1,9 @@
 ﻿/**
  * @file ProjectSettingsPanel.h
  * @author Rahul Nair
- * @brief The "Project Settings" window's Input section - add/remove actions,
- *        add/remove/rebind bindings, save to disk.
+ * @brief The "Project Settings" window - Input section (add/remove actions,
+ *        add/remove/rebind bindings) and Rendering section, each saved to
+ *        disk independently.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -10,6 +11,7 @@
 #pragma once
 
 #include <input/InputMap.h>
+#include <renderer/RenderSettings.h>
 #include <window/InputSnapshot.h>
 
 #include <filesystem>
@@ -20,7 +22,8 @@ namespace mir
     class ProjectSettingsPanel
     {
     public:
-        void Draw(InputMap &inputMap, const RawInputSnapshot &raw, const std::filesystem::path &savePath);
+        void Draw(InputMap &inputMap, RenderSettings &renderSettings, const RawInputSnapshot &raw,
+                   const std::filesystem::path &savePath);
 
         void CancelListening() { mListeningAction = mListeningBinding = -1; }
 
@@ -32,6 +35,8 @@ namespace mir
 
         bool TryCaptureBinding(InputBinding &binding, const RawInputSnapshot &raw);
 
+        void DrawRendering(RenderSettings &renderSettings, const std::filesystem::path &savePath);
+
         char mNewActionName[64] = {};
         int mNewActionType = 0;
 
@@ -40,5 +45,6 @@ namespace mir
         RawInputSnapshot mPreviousRaw;
 
         std::string mStatusMessage;
+        std::string mRenderingStatusMessage;
     };
 }
