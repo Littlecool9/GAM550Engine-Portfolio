@@ -16,7 +16,7 @@ mEditor.BeginFrame();                                   // the ImGui NewFrame tr
 if (windowVisible)
     Act(mEditor.DrawLayout(mDesc.mEnableEditorLayout,   // EditorActions
                            world.Resource<InputMap>(), world.Resource<RenderSettings>(),
-                           world.Resource<EngineModeState>(), projectMenu, currentProject));
+                           world.Resource<EngineModeState>(), projectMenu, currentProject, world));
 
 mRenderer.SetImGuiDrawData(mEditor.EndFrame());         // ImGui::Render, hand off draw data
 mRenderSystem.SetViewportRect(0, mEditor.SceneViewportRect());
@@ -32,8 +32,10 @@ if (IsEditing(world))                                   // Play shows the World'
 Play/Pause/Stop toolbar picked this frame, and the directory of a game picked
 under Project > Open Project and confirmed. The editor decides what was asked for
 and `App` decides what it means, so this module never touches `SceneIO`,
-`PlaySnapshot`, a `GameProject` or the `World`'s entities — `EngineModeState` is
-read-only here, just to draw the toolbar's current label.
+`PlaySnapshot` or a `GameProject` — `EngineModeState` is read-only here, just to
+draw the toolbar's current label. `HierarchyPanel` does read the `World`'s
+entities (see below), but only to display and select them; it never creates,
+destroys or reparents one.
 
 Project > Open Project lists the `ProjectMenuEntry` values `App` passes in — each
 game's name, with its directory in the shortcut column — and ticks the one whose
@@ -71,7 +73,7 @@ void Shutdown(VulkanRenderer &renderer);
 void BeginFrame();
 EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                          const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-                         std::string_view currentProject);
+                         std::string_view currentProject, World &world);
 ImDrawData *EndFrame();
 
 VkRect2D SceneViewportRect() const;
@@ -87,10 +89,21 @@ EditorCamera &SceneCamera();
 | `ProjectMenuEntry` | `editor/Editor.h` | `{mDir, mName}` for one game in Open Project |
 | `EditorActions` | `editor/Editor.h` | `{mScene, mOpenProject}`, what the menus and toolbar asked for this frame |
 | `EditorCamera` | `editor/EditorCamera.h` | Free-fly scene camera, position + yaw/pitch, outside the `World` |
+| `Selection` | `editor/Selection.h` | `{mSelected}`, the `World` resource `Hierarchy` writes and `Inspector` will read |
 
 `LogPanel`, in `src/editor/panels/LogPanel.cpp`, renders `core`'s `LogHistory`
-into the `Output` dock. It is not public — panels are reached only through
-`DrawLayout`.
+into the `Output` dock. `HierarchyPanel`, in
+`src/editor/panels/HierarchyPanel.cpp`, renders the `World`'s live entities
+into the `Hierarchy` dock as a tree built from `HierarchyIndex` (roots are
+entities `ParentOf` reports null for). Neither is public — panels are reached
+only through `DrawLayout`.
+
+Clicking an entity in `Hierarchy` writes it into `Selection`
+(`editor/Selection.h`), a `World` resource `HierarchyPanel` installs on first
+draw if nothing already has. It is the "current selection" the Inspector
+(issue #38, not yet built) reads. `HierarchyPanel` clears it back to
+`kNullEntity` whenever the selected entity is no longer alive, so a stale
+handle never lingers past the frame its entity died.
 
 ## Rules
 
@@ -160,20 +173,32 @@ Open Project asks for, but not the menu or the dialog themselves.
 
 ## Backlog
 
-1. **`Hierarchy` and `Inspector` are docked but empty.** Nothing reads the
-   `World` to populate them. The `ComponentRegistry` field tables that
-   serialization already uses are the intended route.
-2. **Serialized custom layouts**, beyond whatever `imgui.ini` remembers.
-3. **Input routing**, beyond what `ImGui_ImplGlfw` gives for free.
-4. **Make `Editor` optional on `App`** — a `unique_ptr`, null in a packaged game
+1. **`Inspector` is docked but empty.** Nothing reads the `World` to populate
+   it. The `ComponentRegistry` field tables that serialization already uses
+   are the intended route, reading `Selection` for which entity (issue #38).
+2. **`Hierarchy` shows no entity names.** No component carries a display
+   name yet, so each row is just `Entity <index>`.
+3. **Serialized custom layouts**, beyond whatever `imgui.ini` remembers.
+4. **Input routing**, beyond what `ImGui_ImplGlfw` gives for free.
+5. **Make `Editor` optional on `App`** — a `unique_ptr`, null in a packaged game
    build. This module's boundary is what makes that swap possible without
    touching `RenderSystem` or `VulkanRenderer`.
-5. **A second viewport showing `EditorCamera` during Play+Paused**, so pausing
+6. **A second viewport showing `EditorCamera` during Play+Paused**, so pausing
    lets you look around the live World independent of the game camera. Needs
    `RenderSystem::AddViewport` (see [renderer.md](renderer.md)) wired to a
    second panel; nothing calls it yet.
 
 ## Changed
+
+*2026-09-17* — **`Hierarchy` populated from the World.** Was: `Hierarchy` and
+`Inspector` were both `ImGui::Begin`/`End` with nothing drawn between them.
+Now: `DrawLayout` takes a `World&`, and `HierarchyPanel` walks it every frame
+— roots are entities `HierarchyIndex::ParentOf` reports null for, children
+come from `ChildrenOf`, so the tree is read fresh each frame rather than
+cached, which is what makes it track entities a running scene creates or
+destroys without any extra invalidation. Clicking a row writes the entity into
+the new `Selection` resource; `Inspector` (issue #38) reads it from there.
+`Inspector` itself is still an empty window.
 
 *2026-09-17* — **Project Settings gained a Rendering section.** Was:
 `ProjectSettingsPanel` drew only the Input section (actions/bindings), and its

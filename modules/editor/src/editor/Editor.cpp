@@ -261,7 +261,7 @@ namespace mir
 
     EditorActions Editor::DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                                      const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-                                     std::string_view currentProject)
+                                     std::string_view currentProject, World &world)
     {
         EditorActions actions;
 
@@ -292,11 +292,12 @@ namespace mir
                 ImGui::DockBuilderFinish(dockspaceId);
             }
 
-            for (const char *name :{ "Hierarchy", "Inspector" })
-            {
-                ImGui::Begin(name);
-                ImGui::End();
-            }
+            if (ImGui::Begin("Hierarchy"))
+                mHierarchyPanel.Draw(world);
+            ImGui::End();
+
+            ImGui::Begin("Inspector");
+            ImGui::End();
 
             if (ImGui::Begin("Output"))
                 mLogPanel.Draw();

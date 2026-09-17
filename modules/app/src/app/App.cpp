@@ -342,7 +342,7 @@ namespace mir
             {
                 const EditorActions actions = mEditor.DrawLayout(
                     mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<RenderSettings>(),
-                    mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir);
+                    mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir, mWorld);
 
                 switch (actions.mScene)
                 {
