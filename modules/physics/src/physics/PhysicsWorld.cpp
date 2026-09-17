@@ -127,6 +127,13 @@ namespace
     {
         return JPH::BodyID(handle.mId);
     }
+
+    JPH::RVec3 OffsetToWorldPoint(const JPH::BodyInterface &bodies, JPH::BodyID id,
+        const glm::vec3 &localOffset)
+    {
+        const JPH::Vec3 worldOffset = bodies.GetRotation(id) * ToJolt(localOffset);
+        return bodies.GetCenterOfMassPosition(id) + worldOffset;
+    }
 }
 
 namespace mir
@@ -291,6 +298,14 @@ namespace mir
         return FromJolt(mImpl->mSystem.GetBodyInterface().GetLinearVelocity(ToBodyId(body)));
     }
 
+    glm::vec3 PhysicsWorld::BodyAngularVelocity(BodyHandle body) const
+    {
+        if (!body.IsValid())
+            return glm::vec3(0.0f);
+
+        return FromJolt(mImpl->mSystem.GetBodyInterface().GetAngularVelocity(ToBodyId(body)));
+    }
+
     void PhysicsWorld::SetBodyTransform(BodyHandle body, const glm::vec3 &position, const glm::quat &rotation)
     {
         if (!body.IsValid())
@@ -310,12 +325,86 @@ namespace mir
         mImpl->mSystem.GetBodyInterface().SetLinearVelocity(ToBodyId(body), ToJolt(velocity));
     }
 
+    void PhysicsWorld::SetBodyAngularVelocity(BodyHandle body, const glm::vec3 &velocity)
+    {
+        if (!body.IsValid())
+            return;
+
+        mImpl->mSystem.GetBodyInterface().SetAngularVelocity(ToBodyId(body), ToJolt(velocity));
+    }
+
+    void PhysicsWorld::AddLinearVelocity(BodyHandle body, const glm::vec3 &velocity)
+    {
+        if (!body.IsValid())
+            return;
+
+        mImpl->mSystem.GetBodyInterface().AddLinearVelocity(ToBodyId(body), ToJolt(velocity));
+    }
+
+    void PhysicsWorld::AddAngularVelocity(BodyHandle body, const glm::vec3 &velocity)
+    {
+        if (!body.IsValid())
+            return;
+
+        mImpl->mSystem.GetBodyInterface().AddLinearAndAngularVelocity(ToBodyId(body),
+            JPH::Vec3::sZero(),
+            ToJolt(velocity));
+    }
+
+    void PhysicsWorld::AddForce(BodyHandle body, const glm::vec3 &force)
+    {
+        if (!body.IsValid())
+            return;
+
+        mImpl->mSystem.GetBodyInterface().AddForce(ToBodyId(body), ToJolt(force));
+    }
+
+    void PhysicsWorld::AddTorque(BodyHandle body, const glm::vec3 &torque)
+    {
+        if (!body.IsValid())
+            return;
+
+        mImpl->mSystem.GetBodyInterface().AddTorque(ToBodyId(body), ToJolt(torque));
+    }
+
     void PhysicsWorld::AddImpulse(BodyHandle body, const glm::vec3 &impulse)
     {
         if (!body.IsValid())
             return;
 
         mImpl->mSystem.GetBodyInterface().AddImpulse(ToBodyId(body), ToJolt(impulse));
+    }
+
+    void PhysicsWorld::AddAngularImpulse(BodyHandle body, const glm::vec3 &angularImpulse)
+    {
+        if (!body.IsValid())
+            return;
+
+        mImpl->mSystem.GetBodyInterface().AddAngularImpulse(ToBodyId(body), ToJolt(angularImpulse));
+    }
+
+    void PhysicsWorld::AddForceAtOffset(BodyHandle body, const glm::vec3 &force,
+        const glm::vec3 &localOffset)
+    {
+        if (!body.IsValid())
+            return;
+
+        JPH::BodyInterface &bodies = mImpl->mSystem.GetBodyInterface();
+        const JPH::BodyID id = ToBodyId(body);
+
+        bodies.AddForce(id, ToJolt(force), OffsetToWorldPoint(bodies, id, localOffset));
+    }
+
+    void PhysicsWorld::AddImpulseAtOffset(BodyHandle body, const glm::vec3 &impulse,
+        const glm::vec3 &localOffset)
+    {
+        if (!body.IsValid())
+            return;
+
+        JPH::BodyInterface &bodies = mImpl->mSystem.GetBodyInterface();
+        const JPH::BodyID id = ToBodyId(body);
+
+        bodies.AddImpulse(id, ToJolt(impulse), OffsetToWorldPoint(bodies, id, localOffset));
     }
 
     std::size_t PhysicsWorld::BodyCount() const
