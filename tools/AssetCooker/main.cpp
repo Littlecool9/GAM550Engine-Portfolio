@@ -42,6 +42,11 @@ namespace
         return path.extension() == ".slang";
     }
 
+    bool IsSoundBank(const std::filesystem::path &path)
+    {
+        return path.extension() == ".bnk" || path.extension() == ".wem";
+    }
+
     // A cooked blob is only current if it was written by *this* cooker: an mtime
     // test alone means bumping kRawAssetContentVersion (or the blob format) skips
     // every file as up to date while the manifest is rewritten with the new
@@ -150,6 +155,11 @@ int main(int argc, char **argv)
 
             if (IsShaderSource(entry.path()))
                 continue;
+            if (IsSoundBank(entry.path()))
+            {
+                continue;
+            }
+            
 
             const std::filesystem::path relative = std::filesystem::relative(entry.path(), rootPath);
             const std::string idSource = (std::filesystem::path(NormalizeRoot(root)) / relative).generic_string();

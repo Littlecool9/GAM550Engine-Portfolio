@@ -99,6 +99,7 @@ namespace mir
         // assetsRoot default must match CMakeLists.txt
         std::string assetsRoot = "assets";
         std::string sceneDir = "scenes/default";
+        std::string soundBanksRoot = "audio/SoundBanks";
 
         nlohmann::json json;
         try
@@ -116,6 +117,7 @@ namespace mir
             project.mTitle = json.value("title", project.mTitle);
             assetsRoot = json.value("assetsRoot", assetsRoot);
             sceneDir = json.value("sceneDir", sceneDir);
+            soundBanksRoot = json.value("soundBanksRoot", soundBanksRoot);
         }
 
         if (project.mName.empty())
@@ -128,7 +130,9 @@ namespace mir
 
         project.mAssetIdRoot = std::move(idRoot);
         project.mSceneDir = root / sceneDir;
+        project.mSoundBankDir = root / soundBanksRoot;
         project.mProjectSettingsPath = root / "project_settings.json";
+
         return project;
     }
 

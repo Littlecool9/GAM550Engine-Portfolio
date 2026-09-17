@@ -31,6 +31,7 @@ namespace mir
 
         std::filesystem::path mSceneDir;
         std::filesystem::path mProjectSettingsPath;
+        std::filesystem::path mSoundBankDir;
     };
 
     // engine.json's defaultGame; nullopt (logged) if missing
