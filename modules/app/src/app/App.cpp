@@ -21,6 +21,9 @@
 #include <input/InputMap.h>
 #include <input/InputState.h>
 #include <input/InputSystem.h>
+#include <physics/ComponentRegistration.h>
+#include <physics/PhysicsSystem.h>
+#include <physics/PhysicsWorld.h>
 #include <renderer/ComponentRegistration.h>
 #include <renderer/RenderSystem.h>
 #include <scene/SceneIO.h>
@@ -105,6 +108,7 @@ namespace mir
         // Before anything may load a script
         RegisterCoreComponents();
         RegisterRendererComponents();
+        RegisterPhysicsComponents();
         RegisterScriptComponents();
 
         // defers structural change
@@ -114,9 +118,16 @@ namespace mir
         mWorld.EmplaceResource<InputState>();
         mWorld.EmplaceResource<EngineModeState>();
 
+        // physcis world - currently Jolt
+        mWorld.EmplaceResource<PhysicsWorld>();
+
         mScheduler.AddSystem<InputSystem>(SystemPhase::PreUpdate, *mWindow);
 
         mScriptSystem = &mScheduler.AddSystem<ScriptSystem>(SystemPhase::PreUpdate, mScriptHost);
+
+        // FixedUpdate: once per fixed substep, before PostUpdate turns the
+        // Transforms it writes into world matrices
+        mScheduler.AddSystem<PhysicsSystem>(SystemPhase::FixedUpdate);
 
         // should be before any other system in PostUpdate
         mScheduler.AddSystem<TransformPropagateSystem>(SystemPhase::PostUpdate);

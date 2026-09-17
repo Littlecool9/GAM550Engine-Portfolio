@@ -11,6 +11,7 @@
         "vulkan-memory-allocator",
         "catch2",
         "nlohmann-json",
+        "joltphysics",
         "luajit",
         {
             "name": "pkgconf",

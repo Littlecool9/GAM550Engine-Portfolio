@@ -56,6 +56,19 @@
         ]
       },
       "type": "MeshRenderer"
+    },
+    {
+      "fields": {
+        "halfExtent": [
+          0.25,
+          0.25,
+          0.25
+        ],
+        "motion": 1,
+        "radius": 0.5,
+        "shape": 0
+      },
+      "type": "RigidBody"
     }
   ],
   "id": 2,
