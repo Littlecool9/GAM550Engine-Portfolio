@@ -1,3 +1,12 @@
+/**
+ * @file ScriptReloadWatcher.h
+ * @author Rahul Nair
+ * @brief Polls a tracked script's cooked file for on-disk changes and
+ *        hot-reloads it through IScriptHost.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 
 #include <assets/AssetId.h>

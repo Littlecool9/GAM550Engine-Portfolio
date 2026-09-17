@@ -1,3 +1,13 @@
+/**
+ * @file AssetFileIo.cpp
+ * @author Rahul Nair
+ * @brief Raw file byte I/O - read or write a whole file, or just probe its
+ *        first few bytes.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include "assets/AssetFileIo.h"
 
 #include "core/log/Log.h"

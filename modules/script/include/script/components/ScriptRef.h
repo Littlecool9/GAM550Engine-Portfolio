@@ -1,3 +1,12 @@
+/**
+ * @file ScriptRef.h
+ * @author Rahul Nair
+ * @brief Which script an entity runs, and whether OnStart has fired for it
+ *        yet.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 
 #include <core/ecs/ComponentAsserts.h>

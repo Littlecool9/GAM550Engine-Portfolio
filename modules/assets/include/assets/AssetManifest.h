@@ -1,3 +1,12 @@
+/**
+ * @file AssetManifest.h
+ * @author Rahul Nair
+ * @brief The cooked asset manifest - AssetId -> type/version/path, built at
+ *        cook time and loaded at runtime.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 
 #include "assets/AssetId.h"

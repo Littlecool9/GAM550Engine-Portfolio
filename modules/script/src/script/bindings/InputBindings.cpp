@@ -1,3 +1,12 @@
+/**
+ * @file InputBindings.cpp
+ * @author Rahul Nair
+ * @brief Extends the World usertype with world:is_down/world:axis/etc.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include "InputBindings.h"
 
 #include <core/ecs/World.h>

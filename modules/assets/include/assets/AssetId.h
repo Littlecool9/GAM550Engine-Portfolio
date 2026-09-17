@@ -1,3 +1,12 @@
+/**
+ * @file AssetId.h
+ * @author Rahul Nair
+ * @brief Content-addressed asset identity - hashing a path (or raw bytes)
+ *        into an AssetId.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 
 #include <cstddef>

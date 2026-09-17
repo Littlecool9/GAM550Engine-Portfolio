@@ -1,3 +1,13 @@
+/**
+ * @file main.cpp
+ * @author Rahul Nair
+ * @brief Cooks a game's raw assets into the manifest + blob files the
+ *        runtime AssetCache loads.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include <assets/AssetBlob.h>
 #include <assets/AssetFileIo.h>
 #include <assets/AssetId.h>
