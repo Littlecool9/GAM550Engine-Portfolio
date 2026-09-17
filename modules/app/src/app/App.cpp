@@ -341,8 +341,8 @@ namespace mir
             if (mWindow->Width() != 0 && mWindow->Height() != 0)
             {
                 const EditorActions actions = mEditor.DrawLayout(
-                    mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<EngineModeState>(),
-                    mProjectMenu, mProject.mDir);
+                    mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<RenderSettings>(),
+                    mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir);
 
                 switch (actions.mScene)
                 {
