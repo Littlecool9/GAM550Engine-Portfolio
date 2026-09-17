@@ -46,6 +46,28 @@ namespace mir
             return name == "Y" ? AxisChannel::Y : AxisChannel::X;
         }
 
+        json ReadRoot(const std::filesystem::path &path)
+        {
+            if (!std::filesystem::exists(path))
+                return json::object();
+
+            std::ifstream in(path);
+            if (!in)
+                return json::object();
+
+            json root;
+            try
+            {
+                in >> root;
+            }
+            catch (const json::parse_error &)
+            {
+                return json::object();
+            }
+
+            return root.is_object() ? root : json::object();
+        }
+
         json ToJson(const InputBinding &binding)
         {
             return json{
@@ -164,7 +186,10 @@ namespace mir
             return map;
         }
 
-        for (const json &actionNode : root.value("actions", json::array()))
+        const auto inputIt = root.find("input");
+        const json &inputRoot = inputIt != root.end() ? *inputIt : root;
+
+        for (const json &actionNode : inputRoot.value("actions", json::array()))
         {
             InputAction &action = map.AddAction(
                 actionNode.value("name", ""),
@@ -179,8 +204,11 @@ namespace mir
 
     bool InputMap::SaveFile(const std::filesystem::path &path) const
     {
-        json root;
-        json &actions = root["actions"] = json::array();
+        json root = ReadRoot(path);
+        root.erase("actions");
+
+        json inputNode;
+        json &actions = inputNode["actions"] = json::array();
 
         for (const InputAction &action : mActions)
         {
@@ -195,6 +223,8 @@ namespace mir
 
             actions.push_back(std::move(actionNode));
         }
+
+        root["input"] = std::move(inputNode);
 
         std::ofstream out(path);
         if (!out)

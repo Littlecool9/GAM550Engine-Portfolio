@@ -25,6 +25,7 @@
 #include <physics/PhysicsSystem.h>
 #include <physics/PhysicsWorld.h>
 #include <renderer/ComponentRegistration.h>
+#include <renderer/RenderSettings.h>
 #include <renderer/RenderSystem.h>
 #include <scene/SceneIO.h>
 #include <script/ComponentRegistration.h>
@@ -115,6 +116,7 @@ namespace mir
         mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
 
         mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mProject.mProjectSettingsPath));
+        mWorld.EmplaceResource<RenderSettings>(RenderSettings::LoadFile(mProject.mProjectSettingsPath));
         mWorld.EmplaceResource<InputState>();
         mWorld.EmplaceResource<EngineModeState>();
 

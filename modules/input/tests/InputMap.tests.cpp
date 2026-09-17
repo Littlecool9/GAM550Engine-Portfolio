@@ -11,6 +11,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 namespace
 {
@@ -23,6 +25,20 @@ namespace
         {
             std::filesystem::create_directories(mPath.parent_path());
             std::filesystem::remove(mPath);
+        }
+
+        void Write(std::string_view contents) const
+        {
+            std::ofstream out(mPath);
+            out << contents;
+        }
+
+        std::string Read() const
+        {
+            std::ifstream in(mPath);
+            std::ostringstream buffer;
+            buffer << in.rdbuf();
+            return buffer.str();
         }
 
         ~TempInputMapFile() { std::filesystem::remove(mPath); }
@@ -76,6 +92,41 @@ TEST_CASE("LoadFile on a missing path returns an empty map", "[input]")
 {
     const mir::InputMap map = mir::InputMap::LoadFile("no/such/project_settings.json");
     REQUIRE(map.Actions().empty());
+}
+
+TEST_CASE("LoadFile reads a legacy unsectioned file back-compat", "[input]")
+{
+    TempInputMapFile file{"legacy_unsectioned.json"};
+    file.Write(R"({"actions": [{"name": "Jump", "type": "Button", "bindings": []}]})");
+
+    const mir::InputMap map = mir::InputMap::LoadFile(file.mPath);
+    REQUIRE(map.Find("Jump") != nullptr);
+}
+
+TEST_CASE("LoadFile reads the sectioned 'input' key and ignores a sibling 'rendering' key", "[input]")
+{
+    TempInputMapFile file{"sectioned.json"};
+    file.Write(R"({"input": {"actions": [{"name": "Jump", "type": "Button", "bindings": []}]}, "rendering": {"rayTracing": true}})");
+
+    const mir::InputMap map = mir::InputMap::LoadFile(file.mPath);
+    REQUIRE(map.Find("Jump") != nullptr);
+    REQUIRE(map.Actions().size() == 1);
+}
+
+TEST_CASE("SaveFile preserves a sibling 'rendering' section instead of clobbering it", "[input]")
+{
+    TempInputMapFile file{"sibling_preserved.json"};
+    file.Write(R"({"rendering": {"rayTracing": true}})");
+
+    mir::InputMap saved;
+    saved.AddAction("Jump", mir::InputActionType::Button);
+    REQUIRE(saved.SaveFile(file.mPath));
+
+    const std::string contents = file.Read();
+    REQUIRE(contents.find("\"rayTracing\": true") != std::string::npos);
+
+    const mir::InputMap loaded = mir::InputMap::LoadFile(file.mPath);
+    REQUIRE(loaded.Find("Jump") != nullptr);
 }
 
 TEST_CASE("SaveFile then LoadFile round-trips a Button action with mixed-device bindings", "[input]")

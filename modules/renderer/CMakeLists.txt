@@ -5,6 +5,7 @@ find_package(volk CONFIG REQUIRED)
 # VMA : vulkan memory manager
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 target_link_libraries(engine_renderer
     PUBLIC volk::volk_headers
@@ -15,6 +16,7 @@ target_link_libraries(engine_renderer
             glm::glm
     PRIVATE GPUOpen::VulkanMemoryAllocator
             imgui::imgui
+            nlohmann_json::nlohmann_json
 )
 
 # compile volk ourself instead of linking prebuilt library
@@ -37,6 +39,7 @@ target_sources(engine_renderer PRIVATE
     src/renderer/CameraMath.cpp
     src/renderer/ComponentRegistration.cpp
     src/renderer/Renderer.cpp
+    src/renderer/RenderSettings.cpp
     src/renderer/Shapes.cpp
     src/renderer/VulkanRenderer.cpp
     src/renderer/vulkan/VmaImpl.cpp
@@ -49,4 +52,8 @@ if(ENGINE_FAMILY_DESKTOP)
     else()
         message(FATAL_ERROR "No native window backend for ${ENGINE_PLATFORM}")
     endif()
+endif()
+
+if(BUILD_TESTING)
+    add_subdirectory(tests)
 endif()
