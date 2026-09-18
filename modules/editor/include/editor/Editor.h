@@ -51,6 +51,11 @@ namespace mir
     {
         SceneMenuAction mScene = SceneMenuAction::None;
         std::string mOpenProject;
+
+        // non-empty mCreateProjectName requests CreateGameProject(name, RT),
+        // then the same open-into-new-directory path as mOpenProject
+        std::string mCreateProjectName;
+        bool mCreateProjectRayTracing = false;
     };
 
     class Editor
@@ -91,6 +96,7 @@ namespace mir
         void DrawTitleBar();
         void DrawOpenProjectMenu(std::span<const ProjectMenuEntry> projects, std::string_view currentProject);
         void DrawOpenProjectConfirm(EditorActions &actions);
+        void DrawNewProjectModal(EditorActions &actions, std::span<const ProjectMenuEntry> projects);
 
         SceneMenuAction DrawPlayControls(const EngineModeState &mode);
 
@@ -111,5 +117,10 @@ namespace mir
         // waiting on the confirm dialog
         ProjectMenuEntry mPendingProject;
         bool mOpenConfirmRequested = false;
+
+        // New Project modal
+        bool mNewProjectRequested = false;
+        char mNewProjectName[64] = {};
+        bool mNewProjectRayTracing = false;
     };
 }
