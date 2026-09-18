@@ -331,12 +331,13 @@ namespace mir
                         actions.mScene = SceneMenuAction::Load;
 
                     ImGui::EndDisabled();
+                    ImGui::Separator();
+                    DrawOpenProjectMenu(projects, currentProject);
                     ImGui::EndMenu();
                 }
                 if (ImGui::BeginMenu("Project"))
                 {
                     ImGui::MenuItem("Project Settings", nullptr, &mShowProjectSettings);
-                    DrawOpenProjectMenu(projects, currentProject);
                     ImGui::EndMenu();
                 }
                 if (ImGui::BeginMenu("Debug"))
