@@ -55,9 +55,6 @@ namespace mir
         using BodyWrite = void (PhysicsWorld::*)(BodyHandle, const glm::vec3 &);
         using BodyWriteAtOffset = void (PhysicsWorld::*)(BodyHandle, const glm::vec3 &, const glm::vec3 &);
 
-        // A body that is not there yet reads as zero and refuses every write, so
-        // a script can push at an entity before physics has caught up with it
-        // without guarding each call.
         sol::table ReadVector(World &world, Entity entity, sol::this_state state, BodyRead read)
         {
             BodyHandle body{};
@@ -67,8 +64,6 @@ namespace mir
                              physics != nullptr ? (physics->*read)(body) : glm::vec3(0.0f));
         }
 
-        // A mistyped argument is a script bug and does get logged, unlike a
-        // missing body above.
         bool WriteVector(World &world, Entity entity, std::string_view name, const sol::object &value,
                          BodyWrite write)
         {
