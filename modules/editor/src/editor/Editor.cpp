@@ -263,6 +263,56 @@ namespace mir
         ImGui::EndPopup();
     }
 
+    void Editor::DrawNewProjectModal(EditorActions &actions, std::span<const ProjectMenuEntry> projects)
+    {
+        constexpr const char *kPopupId = "New Project";
+
+        // outside the menu: OpenPopup needs the same ID stack as BeginPopupModal
+        if (mNewProjectRequested)
+        {
+            mNewProjectName[0] = '\0';
+            mNewProjectRayTracing = false;
+            ImGui::OpenPopup(kPopupId);
+            mNewProjectRequested = false;
+        }
+
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (!ImGui::BeginPopupModal(kPopupId, nullptr,
+                                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+            return;
+
+        ImGui::InputTextWithHint("Name", "Project name...", mNewProjectName, sizeof(mNewProjectName));
+        ImGui::Checkbox("Ray Tracing", &mNewProjectRayTracing);
+        ImGui::Spacing();
+
+        const std::string_view name(mNewProjectName);
+        const bool collides = std::any_of(projects.begin(), projects.end(),
+            [&](const ProjectMenuEntry &project)
+            { return project.mDir == "games/" + std::string(name); });
+        const bool canCreate = !name.empty() && !collides;
+
+        ImGui::BeginDisabled(!canCreate);
+        if (ImGui::Button("Create"))
+        {
+            actions.mCreateProjectName = mNewProjectName;
+            actions.mCreateProjectRayTracing = mNewProjectRayTracing;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            ImGui::CloseCurrentPopup();
+
+        if (collides)
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "A project named \"%s\" already exists.",
+                                mNewProjectName);
+        }
+
+        ImGui::EndPopup();
+    }
+
     EditorActions Editor::DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                                      const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
                                      std::string_view currentProject, World &world)
@@ -332,6 +382,8 @@ namespace mir
 
                     ImGui::EndDisabled();
                     ImGui::Separator();
+                    if (ImGui::MenuItem("New Project..."))
+                        mNewProjectRequested = true;
                     DrawOpenProjectMenu(projects, currentProject);
                     ImGui::EndMenu();
                 }
@@ -349,6 +401,7 @@ namespace mir
             }
 
             DrawOpenProjectConfirm(actions);
+            DrawNewProjectModal(actions, projects);
 
             if (mShowStyleEditor)
             {
