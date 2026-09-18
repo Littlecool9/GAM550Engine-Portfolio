@@ -185,9 +185,9 @@ int main(int argc, char **argv)
             { file.id, mir::kRawAssetTypeTag, mir::kRawAssetContentVersion }, file.fileName });
 
     const std::vector<std::byte> manifestBlob = mir::BuildAssetManifestBlob(entries);
-    if (!mir::WriteBytes(outPath / "manifest.blob", manifestBlob))
+    if (!mir::WriteBytes(outPath / mir::kAssetManifestFileName, manifestBlob))
     {
-        MIR_LOG_ERROR("AssetCooker: failed to write manifest.blob");
+        MIR_LOG_ERROR("AssetCooker: failed to write {}", mir::kAssetManifestFileName);
         mir::FlushLog();
         return 1;
     }
@@ -199,7 +199,7 @@ int main(int argc, char **argv)
     keep.reserve(cooked.size() + 1);
     for (const CookedFile &file : cooked)
         keep.insert(file.fileName);
-    keep.insert("manifest.blob");
+    keep.insert(std::string(mir::kAssetManifestFileName));
 
     std::error_code pruneEc;
     for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(outPath, pruneEc))

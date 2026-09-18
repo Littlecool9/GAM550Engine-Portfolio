@@ -21,7 +21,7 @@ namespace mir
 {
     std::optional<std::string> ReadDefaultGame()
     {
-        const std::filesystem::path path = ExecutableDir() / "engine.json";
+        const std::filesystem::path path = ExecutableDir() / kEngineManifestFileName;
 
         const std::optional<nlohmann::json> json = ReadJsonFile(path);
         if (!json)
@@ -71,12 +71,12 @@ namespace mir
     std::optional<GameProject> LoadGameProject(const std::filesystem::path &gameDir)
     {
         const std::filesystem::path root = ExecutableDir() / gameDir;
-        const std::filesystem::path manifestPath = root / "game.json";
+        const std::filesystem::path manifestPath = root / kGameManifestFileName;
 
         std::error_code manifestEc;
         if (!std::filesystem::is_regular_file(manifestPath, manifestEc))
         {
-            MIR_LOG_ERROR("LoadGameProject: no game.json in '{}', not a game directory", root.string());
+            MIR_LOG_ERROR("LoadGameProject: no {} in '{}', not a game directory", kGameManifestFileName, root.string());
             return std::nullopt;
         }
 
@@ -107,7 +107,7 @@ namespace mir
 
         project.mAssetIdRoot = std::move(idRoot);
         project.mSceneDir = root / sceneDir;
-        project.mProjectSettingsPath = root / "project_settings.json";
+        project.mProjectSettingsPath = root / kProjectSettingsFileName;
         return project;
     }
 
@@ -132,7 +132,7 @@ namespace mir
         {
             std::error_code entryEc;
             if (!entry.is_directory(entryEc) ||
-                !std::filesystem::is_regular_file(entry.path() / "game.json", entryEc))
+                !std::filesystem::is_regular_file(entry.path() / kGameManifestFileName, entryEc))
                 continue;
 
             if (std::optional<GameProject> project = LoadGameProject(std::filesystem::path("games") / entry.path().filename()))

@@ -11,10 +11,15 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace mir
 {
+    inline constexpr std::string_view kEngineManifestFileName = "engine.json";
+    inline constexpr std::string_view kGameManifestFileName = "game.json";
+    inline constexpr std::string_view kProjectSettingsFileName = "project_settings.json";
+
     // One game directory; paths in its game.json are relative to it
     struct GameProject
     {

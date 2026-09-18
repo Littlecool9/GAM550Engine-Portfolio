@@ -35,9 +35,11 @@ namespace mir
             std::byte mBytes[64];
         };
 
+        constexpr std::string_view kEntitiesDirName = "entities";
+
         fs::path EntityFilePath(const fs::path &sceneDir, StableId id)
         {
-            return sceneDir / "entities" / (std::to_string(id) + ".json");
+            return sceneDir / kEntitiesDirName / (std::to_string(id) + ".json");
         }
 
         double CleanFloat(float value)
@@ -174,10 +176,15 @@ namespace mir
         }
     }
 
+    fs::path SceneManifestPath(const fs::path &sceneDir)
+    {
+        return sceneDir / kSceneManifestFileName;
+    }
+
     bool SaveScene(World &world, const fs::path &sceneDir, const LoadedScene &scene)
     {
         std::error_code ec;
-        fs::create_directories(sceneDir / "entities", ec);
+        fs::create_directories(sceneDir / kEntitiesDirName, ec);
         if (ec)
         {
             MIR_LOG_ERROR("SaveScene: could not create '{}': {}", sceneDir.string(), ec.message());
@@ -200,9 +207,9 @@ namespace mir
         for (const auto &[id, entity] : scene.mEntities)
             manifest["entities"].push_back(id);
 
-        if (!WriteJsonFile(sceneDir / "scene.json", manifest))
+        if (!WriteJsonFile(SceneManifestPath(sceneDir), manifest))
         {
-            MIR_LOG_ERROR("SaveScene: could not write scene.json in '{}'", sceneDir.string());
+            MIR_LOG_ERROR("SaveScene: could not write {} in '{}'", kSceneManifestFileName, sceneDir.string());
             return false;
         }
 
@@ -266,10 +273,10 @@ namespace mir
     {
         LoadedScene loaded;
 
-        const std::optional<json> manifestJson = ReadJsonFile(sceneDir / "scene.json");
+        const std::optional<json> manifestJson = ReadJsonFile(SceneManifestPath(sceneDir));
         if (!manifestJson || !manifestJson->is_object())
         {
-            MIR_LOG_ERROR("LoadScene: no readable scene.json in '{}'", sceneDir.string());
+            MIR_LOG_ERROR("LoadScene: no readable {} in '{}'", kSceneManifestFileName, sceneDir.string());
             return loaded;
         }
         const json &manifest = *manifestJson;
