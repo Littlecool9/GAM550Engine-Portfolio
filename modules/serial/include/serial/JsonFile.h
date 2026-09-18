@@ -1,7 +1,7 @@
 /**
  * @file JsonFile.h
  * @author Sumin Park
- * @brief Class for JSON control. Interpretates bytes from core/fs.FileIo.h
+ * @brief Class for JSON control. Interpretates bytes from core/fs.FileIO.h
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -13,9 +13,13 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <string_view>
 
 namespace mir
 {
+    // after JSON already in memory
+    std::optional<nlohmann::json> ParseJson(std::string_view text, std::string_view context);
+
     std::optional<nlohmann::json> ReadJsonFile(const std::filesystem::path &path);
 
     // Dump and write atomically

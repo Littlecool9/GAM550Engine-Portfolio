@@ -1,7 +1,5 @@
 engine_add_module(app)
 
-find_package(nlohmann_json CONFIG REQUIRED)
-
 target_link_libraries(engine_app
     PUBLIC mir::assets
            mir::core
@@ -13,7 +11,7 @@ target_link_libraries(engine_app
     PRIVATE mir::input
             mir::audio
             mir::physics
-            nlohmann_json::nlohmann_json
+            mir::serial
 )
 
 target_sources(engine_app PRIVATE

@@ -21,7 +21,7 @@
 #include <script/ScriptReloadWatcher.h>
 #include <script/components/ScriptRef.h>
 
-#include <nlohmann/json.hpp>
+#include <serial/JsonFile.h>
 
 #include <cstdint>
 #include <optional>
@@ -35,7 +35,7 @@ namespace mir
     {
         // Loads a cooked .lua and tracks it for hot reload; false if unavailable (already logged)
         bool LoadScriptAsset(IScriptHost &scripts, ScriptReloadWatcher &reload, AssetCache *assets,
-                             std::string_view assetPath, std::string_view scriptName)
+            std::string_view assetPath, std::string_view scriptName)
         {
             if (assets == nullptr)
                 return false;
@@ -55,19 +55,12 @@ namespace mir
         // MeshData from a mesh JSON asset; nullopt (logged) if malformed
         std::optional<MeshData> ParseMeshAsset(std::string_view text, std::string_view assetPath)
         {
-            nlohmann::json json;
-            try
-            {
-                json = nlohmann::json::parse(text);
-            }
-            catch (const nlohmann::json::parse_error &e)
-            {
-                MIR_LOG_ERROR("ParseMeshAsset: '{}' is not valid JSON ({})", assetPath, e.what());
+            const std::optional<nlohmann::json> json = ParseJson(text, assetPath);
+            if (!json)
                 return std::nullopt;
-            }
 
             MeshData mesh;
-            for (const auto &v : json.value("vertices", nlohmann::json::array()))
+            for (const auto &v : json->value("vertices", nlohmann::json::array()))
             {
                 Vertex vertex{};
                 const auto &p = v.at("position");
@@ -78,13 +71,13 @@ namespace mir
                 vertex.normal = glm::vec3(n.at(0).get<float>(), n.at(1).get<float>(), n.at(2).get<float>());
                 mesh.vertices.push_back(vertex);
             }
-            mesh.indices = json.value("indices", std::vector<uint32_t>{});
+            mesh.indices = json->value("indices", std::vector<uint32_t>{});
             return mesh;
         }
     }
 
     void ResolveSceneScripts(World &world, IScriptHost &scripts, ScriptReloadWatcher &reload,
-                             AssetCache *assets, std::string_view assetIdRoot)
+        AssetCache *assets, std::string_view assetIdRoot)
     {
         world.GetOrCreateQuery<ScriptRef>().ForEach(
             [&](Entity, ScriptRef &ref)
@@ -106,7 +99,7 @@ namespace mir
     }
 
     void ResolveSceneMeshes(World &world, VulkanRenderer &renderer, AssetCache *assets,
-                            std::string_view assetIdRoot)
+        std::string_view assetIdRoot)
     {
         std::unordered_map<uint64_t, MeshHandle> meshCache;
         std::unordered_map<std::string, MaterialHandle> materialCache;
@@ -147,9 +140,9 @@ namespace mir
                         meshRenderer.material = it->second;
                     else
                         meshRenderer.material = materialCache
-                                                    .emplace(shaderName, renderer.CreateMaterial(
-                                                                             MaterialDesc{.shaderName = shaderName}))
-                                                    .first->second;
+                        .emplace(shaderName, renderer.CreateMaterial(
+                            MaterialDesc{ .shaderName = shaderName }))
+                        .first->second;
                 }
             });
     }

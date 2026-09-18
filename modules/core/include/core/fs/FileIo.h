@@ -1,5 +1,5 @@
 /**
- * @file FileIo.h
+ * @file FileIO.h
  * @author Sumin Park
  * @brief  For byte level file read / write
  *

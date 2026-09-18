@@ -1,12 +1,12 @@
 /**
- * @file FileIo.cpp
+ * @file FileIO.cpp
  * @author Sumin Park
  * @brief The engine's one file-byte layer.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
-#include "core/fs/FileIo.h"
+#include "core/fs/FileIO.h"
 
 #include "core/log/Log.h"
 

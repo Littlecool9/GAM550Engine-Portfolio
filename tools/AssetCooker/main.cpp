@@ -1,5 +1,5 @@
 #include <assets/AssetBlob.h>
-#include <core/fs/FileIo.h>
+#include <core/fs/FileIO.h>
 #include <assets/AssetId.h>
 #include <assets/AssetManifest.h>
 

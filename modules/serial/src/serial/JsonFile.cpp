@@ -1,17 +1,18 @@
 /**
  * @file JsonFile.cpp
  * @author Sumin Park
- * @brief Class for JSON control. Interpretates bytes from core/fs.FileIo.h
+ * @brief Class for JSON control. Interpretates bytes from core/fs.FileIO.h
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
 #include "serial/JsonFile.h"
 
-#include "core/fs/FileIo.h"
+#include "core/fs/FileIO.h"
 #include "core/log/Log.h"
 
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -20,6 +21,19 @@ namespace mir
     namespace
     {
         using json = nlohmann::json;
+    }
+
+    std::optional<json> ParseJson(std::string_view text, std::string_view context)
+    {
+        try
+        {
+            return json::parse(text);
+        }
+        catch (const json::parse_error &e)
+        {
+            MIR_LOG_ERROR("ParseJson: '{}' is not valid JSON ({})", context, e.what());
+            return std::nullopt;
+        }
     }
 
     std::optional<json> ReadJsonFile(const std::filesystem::path &path)
@@ -32,15 +46,7 @@ namespace mir
         if (!text)
             return std::nullopt; // ReadText already logged why
 
-        try
-        {
-            return json::parse(*text);
-        }
-        catch (const json::parse_error &e)
-        {
-            MIR_LOG_ERROR("ReadJsonFile: '{}' is not valid JSON ({})", path.string(), e.what());
-            return std::nullopt;
-        }
+        return ParseJson(*text, path.string());
     }
 
     bool WriteJsonFile(const std::filesystem::path &path, const json &root, int indent)

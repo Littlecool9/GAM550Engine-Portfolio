@@ -11,10 +11,9 @@
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
 
-#include <nlohmann/json.hpp>
+#include <serial/JsonFile.h>
 
 #include <algorithm>
-#include <fstream>
 #include <system_error>
 #include <utility>
 
@@ -24,26 +23,15 @@ namespace mir
     {
         const std::filesystem::path path = ExecutableDir() / "engine.json";
 
-        std::ifstream in(path);
-        if (!in)
+        const std::optional<nlohmann::json> json = ReadJsonFile(path);
+        if (!json)
         {
-            MIR_LOG_ERROR("no --game given and could not open '{}'", path.string());
+            MIR_LOG_ERROR("no --game given and could not read '{}'", path.string());
             return std::nullopt;
         }
 
-        nlohmann::json json;
-        try
-        {
-            in >> json;
-        }
-        catch (const nlohmann::json::parse_error &e)
-        {
-            MIR_LOG_ERROR("'{}' is not valid JSON ({})", path.string(), e.what());
-            return std::nullopt;
-        }
-
-        const auto it = json.find("defaultGame");
-        if (it == json.end() || !it->is_string() || it->get<std::string>().empty())
+        const auto it = json->find("defaultGame");
+        if (it == json->end() || !it->is_string() || it->get<std::string>().empty())
         {
             MIR_LOG_ERROR("no --game given and '{}' names no defaultGame", path.string());
             return std::nullopt;
@@ -85,8 +73,8 @@ namespace mir
         const std::filesystem::path root = ExecutableDir() / gameDir;
         const std::filesystem::path manifestPath = root / "game.json";
 
-        std::ifstream in(manifestPath);
-        if (!in)
+        std::error_code manifestEc;
+        if (!std::filesystem::is_regular_file(manifestPath, manifestEc))
         {
             MIR_LOG_ERROR("LoadGameProject: no game.json in '{}', not a game directory", root.string());
             return std::nullopt;
@@ -100,22 +88,13 @@ namespace mir
         std::string assetsRoot = "assets";
         std::string sceneDir = "scenes/default";
 
-        nlohmann::json json;
-        try
+        // A malformed manifest keeps the defaults; ReadJsonFile logged why.
+        if (const std::optional<nlohmann::json> json = ReadJsonFile(manifestPath); json && json->is_object())
         {
-            in >> json;
-        }
-        catch (const nlohmann::json::parse_error &e)
-        {
-            MIR_LOG_ERROR("LoadGameProject: '{}' is not valid JSON ({}), using defaults", manifestPath.string(), e.what());
-        }
-
-        if (json.is_object())
-        {
-            project.mName = json.value("name", project.mName);
-            project.mTitle = json.value("title", project.mTitle);
-            assetsRoot = json.value("assetsRoot", assetsRoot);
-            sceneDir = json.value("sceneDir", sceneDir);
+            project.mName = json->value("name", project.mName);
+            project.mTitle = json->value("title", project.mTitle);
+            assetsRoot = json->value("assetsRoot", assetsRoot);
+            sceneDir = json->value("sceneDir", sceneDir);
         }
 
         if (project.mName.empty())
@@ -164,8 +143,10 @@ namespace mir
             MIR_LOG_WARN("DiscoverGameProjects: could not list '{}': {}", gamesDir.string(), ec.message());
 
         std::sort(projects.begin(), projects.end(),
-                  [](const GameProject &a, const GameProject &b)
-                  { return a.mDir < b.mDir; });
+            [](const GameProject &a, const GameProject &b)
+            {
+                return a.mDir < b.mDir;
+            });
         return projects;
     }
 }

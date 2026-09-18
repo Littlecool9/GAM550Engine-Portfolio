@@ -1,6 +1,6 @@
 #include <serial/JsonFile.h>
 
-#include <core/fs/FileIo.h>
+#include <core/fs/FileIO.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -32,7 +32,7 @@ namespace
     }
 }
 
-TEST_CASE("ReadJsonFile parses an object", "[serial][jsonfile]")
+TEST_CASE("ReadJsonFile parses an object", "[serial][jsonFile]")
 {
     const std::filesystem::path path = MakeScratchFile();
     REQUIRE(mir::WriteText(path, R"({"a": 1, "b": "two"})"));
@@ -45,12 +45,12 @@ TEST_CASE("ReadJsonFile parses an object", "[serial][jsonfile]")
     std::filesystem::remove(path);
 }
 
-TEST_CASE("ReadJsonFile returns nullopt for a missing file", "[serial][jsonfile]")
+TEST_CASE("ReadJsonFile returns nullopt for a missing file", "[serial][jsonFile]")
 {
     CHECK_FALSE(mir::ReadJsonFile(MakeScratchFile()).has_value());
 }
 
-TEST_CASE("ReadJsonFile returns nullopt for malformed JSON", "[serial][jsonfile]")
+TEST_CASE("ReadJsonFile returns nullopt for malformed JSON", "[serial][jsonFile]")
 {
     const std::filesystem::path path = MakeScratchFile();
     REQUIRE(mir::WriteText(path, "{not json"));
@@ -60,7 +60,7 @@ TEST_CASE("ReadJsonFile returns nullopt for malformed JSON", "[serial][jsonfile]
     std::filesystem::remove(path);
 }
 
-TEST_CASE("WriteJsonFile and ReadJsonFile round trip", "[serial][jsonfile]")
+TEST_CASE("WriteJsonFile and ReadJsonFile round trip", "[serial][jsonFile]")
 {
     const std::filesystem::path path = MakeScratchFile();
     const nlohmann::json written{ { "rendering",{ { "rayTracing", true } } } };
@@ -74,7 +74,7 @@ TEST_CASE("WriteJsonFile and ReadJsonFile round trip", "[serial][jsonfile]")
     std::filesystem::remove(path);
 }
 
-TEST_CASE("WriteJsonFile honours the indent argument", "[serial][jsonfile]")
+TEST_CASE("WriteJsonFile honours the indent argument", "[serial][jsonFile]")
 {
     const std::filesystem::path compact = MakeScratchFile();
     const std::filesystem::path pretty = MakeScratchFile();
@@ -89,7 +89,7 @@ TEST_CASE("WriteJsonFile honours the indent argument", "[serial][jsonfile]")
     std::filesystem::remove(pretty);
 }
 
-TEST_CASE("UpdateJsonFile creates a file that was not there", "[serial][jsonfile]")
+TEST_CASE("UpdateJsonFile creates a file that was not there", "[serial][jsonFile]")
 {
     const std::filesystem::path path = MakeScratchFile();
 
@@ -107,7 +107,7 @@ TEST_CASE("UpdateJsonFile creates a file that was not there", "[serial][jsonfile
 
 // The point of the whole layer: two owners of two sections of one file, neither
 // knowing about the other.
-TEST_CASE("UpdateJsonFile leaves sections it did not touch alone", "[serial][jsonfile]")
+TEST_CASE("UpdateJsonFile leaves sections it did not touch alone", "[serial][jsonFile]")
 {
     const std::filesystem::path path = MakeScratchFile();
     REQUIRE(mir::WriteText(path, R"({"input": {"actions": []}, "handWritten": 7})"));
@@ -128,7 +128,7 @@ TEST_CASE("UpdateJsonFile leaves sections it did not touch alone", "[serial][jso
 
 // A typo in a hand-edited settings file must not cost the user every other
 // section in it.
-TEST_CASE("UpdateJsonFile refuses to overwrite a malformed file", "[serial][jsonfile]")
+TEST_CASE("UpdateJsonFile refuses to overwrite a malformed file", "[serial][jsonFile]")
 {
     const std::filesystem::path path = MakeScratchFile();
     const std::string_view original = R"({"input": broken)";
@@ -146,7 +146,7 @@ TEST_CASE("UpdateJsonFile refuses to overwrite a malformed file", "[serial][json
     std::filesystem::remove(path);
 }
 
-TEST_CASE("UpdateJsonFile refuses a file whose root is not an object", "[serial][jsonfile]")
+TEST_CASE("UpdateJsonFile refuses a file whose root is not an object", "[serial][jsonFile]")
 {
     const std::filesystem::path path = MakeScratchFile();
     REQUIRE(mir::WriteText(path, "[1, 2, 3]"));

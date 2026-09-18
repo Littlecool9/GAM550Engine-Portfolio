@@ -1,4 +1,4 @@
-#include <core/fs/FileIo.h>
+#include <core/fs/FileIO.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -11,8 +11,7 @@
 
 namespace
 {
-    .
-        const std::string &ProcessToken()
+    const std::string &ProcessToken()
     {
         static const std::string token = []
             {

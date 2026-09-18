@@ -1,6 +1,6 @@
 #include "assets/AssetCache.h"
 
-#include "core/fs/FileIo.h"
+#include "core/fs/FileIO.h"
 #include "core/log/Assert.h"
 #include "core/log/Log.h"
 
