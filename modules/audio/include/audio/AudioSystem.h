@@ -8,10 +8,11 @@
  *
  */
 #pragma once
+#include <filesystem>
 namespace mir::audio
 {
 
-    bool Init();
+    bool Init(const std::filesystem::path &bankDir);
 
     void Update();
     

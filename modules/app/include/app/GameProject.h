@@ -20,7 +20,7 @@ namespace mir
     {
         // relative to the executable, e.g. "games/HelloWorld"
         std::string mDir;
-
+        
         // game.json's "name", else the directory name
         std::string mName;
 
@@ -31,6 +31,7 @@ namespace mir
 
         std::filesystem::path mSceneDir;
         std::filesystem::path mProjectSettingsPath;
+        std::filesystem::path mSoundBankDir;
     };
 
     // engine.json's defaultGame; nullopt (logged) if missing
