@@ -370,6 +370,12 @@ namespace mir
 
                 if (!actions.mOpenProject.empty())
                     RequestOpenProject(actions.mOpenProject);
+
+                if (!actions.mCreateProjectName.empty() &&
+                    CreateGameProject(actions.mCreateProjectName, actions.mCreateProjectRayTracing))
+                {
+                    RequestOpenProject("games/" + actions.mCreateProjectName);
+                }
             }
 
             mRenderer.SetImGuiDrawData(mEditor.EndFrame());

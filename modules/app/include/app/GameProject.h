@@ -48,4 +48,7 @@ namespace mir
 
     // Every games/*/ next to the executable with a game.json, sorted by directory
     std::vector<GameProject> DiscoverGameProjects();
+
+    // Writes games/<name>/: game.json, an EmptyScene-shaped scenes/default/scene.json
+    bool CreateGameProject(const std::string &name, bool useRayTracing);
 }
