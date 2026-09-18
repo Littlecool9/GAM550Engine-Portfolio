@@ -10,6 +10,8 @@
 
 #include <editor/Editor.h>
 
+#include <core/ecs/TransformHierarchy.h>
+#include <core/ecs/components/Transform.h>
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
 #include <editor/Selection.h>
@@ -20,12 +22,47 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 #include <imgui_internal.h>
+#include <ImGuizmo.h>
+
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
 #include <utility>
 
 namespace mir
 {
+    namespace
+    {
+        ImGuizmo::OPERATION ToImGuizmoOperation(GizmoOperation operation)
+        {
+            switch (operation)
+            {
+            case GizmoOperation::Translate:
+                return ImGuizmo::TRANSLATE;
+            case GizmoOperation::Rotate:
+                return ImGuizmo::ROTATE;
+            case GizmoOperation::Scale:
+                return ImGuizmo::SCALE;
+            }
+            return ImGuizmo::TRANSLATE;
+        }
+
+        // Transform::Matrix() is always translate * rotate * scale with no skew,
+        // so this is exact (unlike a general-purpose mat4 decomposition)
+        void DecomposeTRS(const glm::mat4 &matrix, glm::vec3 &position, glm::quat &rotation, glm::vec3 &scale)
+        {
+            position = glm::vec3(matrix[3]);
+            scale = { glm::length(glm::vec3(matrix[0])), glm::length(glm::vec3(matrix[1])),
+                      glm::length(glm::vec3(matrix[2])) };
+
+            const glm::mat3 rotationMatrix(glm::vec3(matrix[0]) / (scale.x != 0.0f ? scale.x : 1.0f),
+                                           glm::vec3(matrix[1]) / (scale.y != 0.0f ? scale.y : 1.0f),
+                                           glm::vec3(matrix[2]) / (scale.z != 0.0f ? scale.z : 1.0f));
+            rotation = glm::quat_cast(rotationMatrix);
+        }
+    }
+
     // Shutdown needs a VulkanRenderer this doesn't have, so skipping it leaks
     // the ImGui context rather than crashing into a dangling device.
     Editor::~Editor() {}
@@ -263,6 +300,84 @@ namespace mir
         ImGui::EndPopup();
     }
 
+    void Editor::DrawViewportGizmo(const EngineModeState &mode, World &world)
+    {
+        // matches EditorCamera's own Edit-only gating in App::Run
+        if (mode.mMode != EngineMode::Edit)
+            return;
+
+        if (mSceneViewportRect.extent.width == 0 || mSceneViewportRect.extent.height == 0)
+            return;
+
+        const Selection *selection = world.TryResource<Selection>();
+        const Entity entity = selection != nullptr ? selection->mSelected : kNullEntity;
+        if (entity.IsNull() || !world.IsAlive(entity))
+            return;
+
+        Transform *transform = world.GetComponent<Transform>(entity);
+        if (transform == nullptr)
+            return;
+
+        const float x = static_cast<float>(mSceneViewportRect.offset.x);
+        const float y = static_cast<float>(mSceneViewportRect.offset.y);
+        const float width = static_cast<float>(mSceneViewportRect.extent.width);
+        const float height = static_cast<float>(mSceneViewportRect.extent.height);
+
+        ImGui::SetNextWindowPos(ImVec2(x + 8.0f, y + 8.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.6f);
+        if (ImGui::Begin("##GizmoToolbar", nullptr,
+                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav |
+                             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                             ImGuiWindowFlags_NoFocusOnAppearing))
+        {
+            const auto modeButton = [&](const char *label, GizmoOperation op)
+                {
+                    const bool active = mGizmoOperation == op;
+                    if (active)
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                    if (ImGui::Button(label))
+                        mGizmoOperation = op;
+                    if (active)
+                        ImGui::PopStyleColor();
+                };
+
+            modeButton("Translate", GizmoOperation::Translate);
+            ImGui::SameLine();
+            modeButton("Rotate", GizmoOperation::Rotate);
+            ImGui::SameLine();
+            modeButton("Scale", GizmoOperation::Scale);
+        }
+        ImGui::End();
+
+        const glm::mat4 view = glm::inverse(mCamera.Matrix());
+        const glm::mat4 proj = glm::perspective(glm::radians(mCamera.mLens.mFovYDegrees), width / height,
+                                                mCamera.mLens.mNearZ, mCamera.mLens.mFarZ);
+
+        glm::mat4 worldMatrix = ResolveWorld(world, entity);
+
+        ImGuizmo::SetOrthographic(false);
+        ImGuizmo::BeginFrame();
+        ImGuizmo::SetDrawlist(ImGui::GetForegroundDrawList(ImGui::GetMainViewport()));
+        ImGuizmo::SetRect(x, y, width, height);
+
+        if (ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj), ToImGuizmoOperation(mGizmoOperation),
+                                 ImGuizmo::LOCAL, glm::value_ptr(worldMatrix)))
+        {
+            const Entity parent = ParentOf(world, entity);
+            const glm::mat4 localMatrix =
+                parent.IsNull() ? worldMatrix : glm::inverse(ResolveWorld(world, parent)) * worldMatrix;
+
+            glm::vec3 position{};
+            glm::vec3 scale{};
+            glm::quat rotation{};
+            DecomposeTRS(localMatrix, position, rotation, scale);
+
+            transform->SetPosition(position);
+            transform->SetRotation(rotation);
+            transform->SetScale(scale);
+        }
+    }
+
     EditorActions Editor::DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                                      const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
                                      std::string_view currentProject, World &world)
@@ -316,6 +431,8 @@ namespace mir
                     .extent{ static_cast<uint32_t>(std::max(centralNode->Size.x, 0.0f)),
                             static_cast<uint32_t>(std::max(centralNode->Size.y, 0.0f)) } };
             }
+
+            DrawViewportGizmo(mode, world);
 
             if (ImGui::BeginMainMenuBar())
             {
