@@ -156,10 +156,7 @@ int main(int argc, char **argv)
             if (IsShaderSource(entry.path()))
                 continue;
             if (IsSoundBank(entry.path()))
-            {
                 continue;
-            }
-            
 
             const std::filesystem::path relative = std::filesystem::relative(entry.path(), rootPath);
             const std::string idSource = (std::filesystem::path(NormalizeRoot(root)) / relative).generic_string();

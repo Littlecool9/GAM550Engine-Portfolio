@@ -11,7 +11,6 @@
 #endif
 
 #include "core/log/Log.h"
-//#include "core/fs/Paths.h"
 #include <filesystem>
 #include <system_error>
 
@@ -92,7 +91,7 @@ namespace mir::audio {
             MIR_LOG_WARN("wwise profiler connection unavailable");
         }
 #endif
-        //const std::filesystem::path bankDir = ExecutableDir() / "wwise";
+
         g_lowLevelIO.SetBasePath(bankDir.c_str());
         AkBankID bankID;
         //init bank has bus layout other banks resolves against
