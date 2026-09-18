@@ -20,7 +20,7 @@ namespace mir
     {
         // relative to the executable, e.g. "games/HelloWorld"
         std::string mDir;
-
+        
         // game.json's "name", else the directory name
         std::string mName;
 

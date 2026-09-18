@@ -3,7 +3,7 @@
 Owns the Wwise sound engine's lifetime and its per-frame pump, and keeps the AK
 SDK out of the rest of the engine. 
 
-`mir::audio` · depends `mir::core`, `Wwise` (private) · API `modules/audio/include/audio/` · maintainer Dong Ta · reviewed 2026-09-15
+`mir::audio` · depends `mir::core`, `Wwise` (private) · API `modules/audio/include/audio/` · maintainer Dong Ta · reviewed 2026-09-18
 
 ## Model
 
@@ -19,18 +19,25 @@ manager, stream manager, low-level I/O, sound engine — and go down in exactly 
 reverse. That ordering is the whole reason this module exists as a unit rather
 than as calls scattered through `app`.
 
-Banks arrive as build artifacts. The Wwise authoring project does not live in
-this repository; generated `.bnk` files are committed to `modules/audio/banks/`,
-the build copies that directory next to the executable, and the runtime resolves
-it from `mir::ExecutableDir()`, so a moved build folder still runs, matching how
+Banks arrive as build artifacts, and they belong to a game rather than to the
+engine. The Wwise authoring project does not live in this repository; generated
+`.bnk` files are committed to `games/<name>/audio/SoundBanks/`, ride the game
+directory copy next to the executable, and the runtime resolves them from
+`GameProject::mSoundBankDir`, so a moved build folder still runs, matching how
 `assets`, `fonts` and `branding` already behave.
+
+`game.json`'s `soundBanksRoot` names that directory and defaults to
+`audio/SoundBanks`. It sits outside `assetsRoot`, so `AssetCooker` never walks
+it — and the cooker skips `.bnk` and `.wem` outright, so a bank dropped under a
+cook root by mistake is passed over rather than buried in a blob it cannot be
+loaded from.
 
 Today this is a harness, not an audio system. One hardcoded listener and one
 hardcoded emitter exist so that playback can be proven end to end; there is no
 positioning, no entity mapping and no component.
 
 ```cpp
-audio::Init();                              // App::Initialize
+audio::Init(mProject.mSoundBankDir);        // App::Initialize
 audio::PostEvent("Play_chargeDown");        // after the window is shown
 
 audio::Update();                            // once per frame, after mScheduler.Update
@@ -42,7 +49,7 @@ audio::Terminate();                         // App::Shutdown
 
 | Name | Header | Role |
 |---|---|---|
-| `Init` | `audio/AudioSystem.h` | Brings up all four Wwise stages and loads the banks; false on any failure |
+| `Init` | `audio/AudioSystem.h` | Brings up all four Wwise stages and loads a game's banks; false on any failure, and on a game that has none |
 | `Update` | `audio/AudioSystem.h` | One `RenderAudio()`; nothing is mixed without it |
 | `Terminate` | `audio/AudioSystem.h` | Reverse-order teardown, safe whether or not `Init` succeeded |
 | `PostEvent` | `audio/AudioSystem.h` | Fires an event by name on the fixed global game object |
@@ -75,10 +82,17 @@ Debug exit evidence rather than luck.
 **`Init.bnk` loads before any other bank.** It carries the bus layout every other
 bank resolves against, and loading a content bank first fails.
 
-**The bank path comes from `mir::ExecutableDir()`, never the working directory.**
-`ctest` runs from the build directory while a VS Code F5 launch typically runs
-from the repository root, so a CWD-relative path passes the smoke tests and
-silently finds nothing under the debugger.
+**The bank path is resolved from the executable, never the working directory.**
+`GameProject::mSoundBankDir` is built from `mir::ExecutableDir()`, and `Init`
+takes it as given rather than deriving a path of its own. `ctest` runs from the
+build directory while a VS Code F5 launch typically runs from the repository
+root, so a CWD-relative path passes the smoke tests and silently finds nothing
+under the debugger.
+
+**A game with no SoundBanks is not an error.** `Init` checks the directory
+before any Wwise stage comes up, logs `Info` and returns false. The smoke tests
+fail on any logged Error, so treating a deliberately silent game as a failure
+would turn every game without audio red.
 
 **`RenderAudio()` runs once per frame, after `mScheduler.Update`.** Calls queued
 before it are processed that frame; anything posted after waits for the next one.
@@ -107,19 +121,24 @@ are describing a version this project does not use.
 
 ## State
 
-*As of 2026-09-15.* Working: the full init and teardown sequence in Debug and
-Release, both banks loading, and one event producing audible output, confirmed on
-hardware. The Wwise Profiler connects to Debug and Profile builds.
+*As of 2026-09-18.* Working: the full init and teardown sequence in Debug and
+Release, and both of `HelloWorld`'s banks loading, confirmed on hardware. The
+Wwise Profiler connects to Debug and Profile builds.
 
-Everything about *what* plays is a placeholder — listener id 2, emitter id 1, one
-event name passed as a literal from `App::Initialize`. No positioning, no
-distance attenuation, no entity mapping.
+Banks are per game. `HelloWorld` carries `Init.bnk` and `Test.bnk`; `EmptyScene`
+has no `audio/` directory and runs silent through the rule above.
+
+Everything about *what* plays is a placeholder — listener id 2 and emitter id 1
+are registered at init and nothing posts to them. `PostEvent` has no caller
+outside this module today; audible output was proven with a temporary call and
+that call was not kept. No positioning, no distance attenuation, no entity
+mapping.
 
 There is no `modules/audio/tests/`. Coverage comes from `smoke.HelloWorld`, which
 runs the engine for 120 frames and fails on any logged Error or Critical; since
-every failure path in `Init` logs, a passing smoke test means the engine came up,
-both banks loaded and the event was accepted. It does not and cannot assert that
-sound reached the speakers.
+every failure path in `Init` logs, a passing smoke test means the engine came up
+and both banks loaded. It does not and cannot assert that sound reached the
+speakers.
 
 The test bank's media is PCM, so no codec library is linked. `Profile` maps to
 CMake's `RelWithDebInfo` and there is no preset for it, so that branch of the
@@ -145,7 +164,10 @@ config mapping has never been exercised.
    Vorbis, and a Vorbis bank plays silently with no error when
    `AkVorbisDecoder` is not linked.
 6. **Settle where the authoring project lives.** It was removed from this
-   repository, so `banks/` is currently a pair of binaries nobody can regenerate
-   without rebuilding the Wwise project from scratch. Its own repository, shared
-   storage, or back here once the content settles are all defensible; what would
-   decide it is whether anyone outside the engine programmers edits audio.
+   repository, so `games/HelloWorld/audio/SoundBanks/` is currently a pair of
+   binaries nobody can regenerate without rebuilding the Wwise project from
+   scratch. Its own repository, shared storage, or back here once the content
+   settles are all defensible; what would decide it is whether anyone outside
+   the engine programmers edits audio. Per-game banks raise the stakes a little:
+   each game that gains audio needs its own generation target, and its own
+   `Init.bnk`.

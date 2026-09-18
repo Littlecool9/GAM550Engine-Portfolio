@@ -52,7 +52,7 @@ namespace mir
         mSwitchHookFired = false;
         mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
   
-        audio::Init();
+        audio::Init(mProject.mSoundBankDir);
 
         EnsureDpiAware();
 

@@ -99,7 +99,7 @@ namespace mir
         // assetsRoot default must match CMakeLists.txt
         std::string assetsRoot = "assets";
         std::string sceneDir = "scenes/default";
-        std::string soundBanksRoot = "audio/SoundBanks";
+        std::string soundBanksRoot = "assets/audio/SoundBanks";
 
         nlohmann::json json;
         try

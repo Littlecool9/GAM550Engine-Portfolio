@@ -11,7 +11,9 @@
 #endif
 
 #include "core/log/Log.h"
-#include "core/fs/Paths.h"
+//#include "core/fs/Paths.h"
+#include <filesystem>
+#include <system_error>
 
 namespace mir::audio {
     namespace {
@@ -35,8 +37,17 @@ namespace mir::audio {
 
     }
 
-    bool Init()
+    bool Init(const std::filesystem::path &bankDir)
     {
+
+        std::error_code errorC;
+        if (!std::filesystem::is_directory(bankDir, errorC))
+        {
+            MIR_LOG_INFO("audio: no SoundBanks at '{}', running silent", bankDir.string());
+            return false;
+        }
+        
+
         AkMemSettings memSettings;
         AK::MemoryMgr::GetDefaultSettings(memSettings);
 
@@ -81,7 +92,7 @@ namespace mir::audio {
             MIR_LOG_WARN("wwise profiler connection unavailable");
         }
 #endif
-        const std::filesystem::path bankDir = ExecutableDir() / "wwise";
+        //const std::filesystem::path bankDir = ExecutableDir() / "wwise";
         g_lowLevelIO.SetBasePath(bankDir.c_str());
         AkBankID bankID;
         //init bank has bus layout other banks resolves against
