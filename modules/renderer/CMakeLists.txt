@@ -17,7 +17,6 @@ target_link_libraries(engine_renderer
     PRIVATE GPUOpen::VulkanMemoryAllocator
             imgui::imgui
             nlohmann_json::nlohmann_json
-            mir::assets
 )
 
 # compile volk ourself instead of linking prebuilt library

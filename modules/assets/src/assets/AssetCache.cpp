@@ -1,6 +1,6 @@
 #include "assets/AssetCache.h"
 
-#include "assets/AssetFileIo.h"
+#include "core/fs/FileIo.h"
 #include "core/log/Assert.h"
 #include "core/log/Log.h"
 
@@ -33,7 +33,7 @@ namespace mir
         }
 
         const std::filesystem::path path = mCookedRoot / mManifest->PathOf(*entry);
-        std::optional<std::vector<std::byte>> raw = ReadFileBytes(path);
+        std::optional<std::vector<std::byte>> raw = ReadBytes(path);
         if (!raw.has_value())
         {
             mFailedLoads.insert(id.value);
@@ -54,7 +54,7 @@ namespace mir
             return nullptr;
         }
 
-        AssetCacheEntry cacheEntry{std::move(*raw), *view};
+        AssetCacheEntry cacheEntry{ std::move(*raw), *view };
         return &mLoaded.emplace(id.value, std::move(cacheEntry)).first->second.view;
     }
 

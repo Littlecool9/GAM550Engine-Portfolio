@@ -1,6 +1,6 @@
 ﻿#include "input/InputMap.h"
 
-#include <assets/AssetFileIo.h>
+#include <core/fs/FileIo.h>
 #include <core/log/Log.h>
 
 #include <nlohmann/json.hpp>
@@ -50,15 +50,15 @@ namespace mir
         json ToJson(const InputBinding &binding)
         {
             return json{
-                {"device", ToString(binding.device)},
-                {"channel", ToString(binding.channel)},
-                {"key", KeyName(binding.key)},
-                {"mouseButton", MouseButtonName(binding.mouseButton)},
-                {"useGamepadAxis", binding.useGamepadAxis},
-                {"gamepadButton", GamepadButtonName(binding.gamepadButton)},
-                {"gamepadAxis", GamepadAxisName(binding.gamepadAxis)},
-                {"deadzone", binding.deadzone},
-                {"scale", binding.scale},
+                { "device", ToString(binding.device) },
+                { "channel", ToString(binding.channel) },
+                { "key", KeyName(binding.key) },
+                { "mouseButton", MouseButtonName(binding.mouseButton) },
+                { "useGamepadAxis", binding.useGamepadAxis },
+                { "gamepadButton", GamepadButtonName(binding.gamepadButton) },
+                { "gamepadAxis", GamepadAxisName(binding.gamepadAxis) },
+                { "deadzone", binding.deadzone },
+                { "scale", binding.scale },
             };
         }
 
@@ -115,8 +115,10 @@ namespace mir
     bool InputMap::RemoveAction(std::string_view name)
     {
         const auto it = std::find_if(mActions.begin(), mActions.end(),
-                                      [&](const InputAction &action)
-                                      { return action.name == name; });
+            [&](const InputAction &action)
+            {
+                return action.name == name;
+            });
         if (it == mActions.end())
             return false;
 
@@ -127,8 +129,10 @@ namespace mir
     InputAction *InputMap::Find(std::string_view name)
     {
         const auto it = std::find_if(mActions.begin(), mActions.end(),
-                                      [&](const InputAction &action)
-                                      { return action.name == name; });
+            [&](const InputAction &action)
+            {
+                return action.name == name;
+            });
         return it != mActions.end() ? &*it : nullptr;
     }
 
@@ -141,7 +145,7 @@ namespace mir
     {
         InputMap map;
 
-        const std::optional<std::vector<std::byte>> bytes = ReadFileBytes(path);
+        const std::optional<std::vector<std::byte>> bytes = ReadBytes(path);
         if (!bytes)
             return map;
 
@@ -175,7 +179,7 @@ namespace mir
     bool InputMap::SaveFile(const std::filesystem::path &path) const
     {
         json root = json::object();
-        if (const std::optional<std::vector<std::byte>> bytes = ReadFileBytes(path))
+        if (const std::optional<std::vector<std::byte>> bytes = ReadBytes(path))
         {
             try
             {
@@ -195,9 +199,9 @@ namespace mir
         for (const InputAction &action : mActions)
         {
             json actionNode{
-                {"name", action.name},
-                {"type", ActionTypeName(action.type)},
-                {"bindings", json::array()},
+                { "name", action.name },
+                { "type", ActionTypeName(action.type) },
+                { "bindings", json::array() },
             };
 
             for (const InputBinding &binding : action.bindings)
@@ -210,6 +214,6 @@ namespace mir
 
         const std::string dumped = root.dump(2);
         const std::span<const std::byte> bytesOut(reinterpret_cast<const std::byte *>(dumped.data()), dumped.size());
-        return WriteFileBytes(path, bytesOut);
+        return WriteBytes(path, bytesOut);
     }
 }

@@ -1,7 +1,7 @@
 #include "assets/AssetManifest.h"
 
 #include "assets/AssetBlob.h"
-#include "assets/AssetFileIo.h"
+#include "core/fs/FileIo.h"
 #include "core/log/Log.h"
 
 #include <cstring>
@@ -53,7 +53,7 @@ namespace mir
         if (blob->header.typeTag != kAssetManifestTypeTag)
         {
             MIR_LOG_ERROR("AssetManifest::Parse: type tag mismatch, expected {}, got {}",
-                          kAssetManifestTypeTag, blob->header.typeTag);
+                kAssetManifestTypeTag, blob->header.typeTag);
             return std::nullopt;
         }
 
@@ -64,7 +64,7 @@ namespace mir
         if (blob->header.contentVersion != kAssetManifestContentVersion)
         {
             MIR_LOG_ERROR("AssetManifest::Parse: unsupported content version {}, expected {}",
-                          blob->header.contentVersion, kAssetManifestContentVersion);
+                blob->header.contentVersion, kAssetManifestContentVersion);
             return std::nullopt;
         }
 
@@ -120,7 +120,7 @@ namespace mir
 
     std::optional<AssetManifest> AssetManifest::LoadFile(const std::filesystem::path &path)
     {
-        const std::optional<std::vector<std::byte>> bytes = ReadFileBytes(path);
+        const std::optional<std::vector<std::byte>> bytes = ReadBytes(path);
         if (!bytes.has_value())
             return std::nullopt;
 

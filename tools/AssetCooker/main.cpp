@@ -1,5 +1,5 @@
 #include <assets/AssetBlob.h>
-#include <assets/AssetFileIo.h>
+#include <core/fs/FileIo.h>
 #include <assets/AssetId.h>
 #include <assets/AssetManifest.h>
 
@@ -42,15 +42,11 @@ namespace
         return path.extension() == ".slang";
     }
 
-    // A cooked blob is only current if it was written by *this* cooker: an mtime
-    // test alone means bumping kRawAssetContentVersion (or the blob format) skips
-    // every file as up to date while the manifest is rewritten with the new
-    // version, so every blob on disk disagrees with it and every runtime load
-    // fails. Reading the 32-byte header is cheap next to recooking the asset.
     bool BlobMatchesCurrentFormat(const std::filesystem::path &cooked)
     {
+        // check asset header to see if it was written by the current cooker
         const std::optional<std::vector<std::byte>> prefix =
-            mir::ReadFilePrefix(cooked, sizeof(mir::AssetBlobHeader));
+            mir::ReadFirstBytes(cooked, sizeof(mir::AssetBlobHeader));
         if (!prefix.has_value())
             return false;
 
@@ -58,9 +54,9 @@ namespace
         std::memcpy(&header, prefix->data(), sizeof(header));
 
         return header.magic == mir::kAssetBlobMagic &&
-               header.formatVersion == mir::kAssetBlobFormatVersion &&
-               header.typeTag == mir::kRawAssetTypeTag &&
-               header.contentVersion == mir::kRawAssetContentVersion;
+            header.formatVersion == mir::kAssetBlobFormatVersion &&
+            header.typeTag == mir::kRawAssetTypeTag &&
+            header.contentVersion == mir::kRawAssetContentVersion;
     }
 
     bool IsUpToDate(const std::filesystem::path &source, const std::filesystem::path &cooked)
@@ -131,11 +127,6 @@ int main(int argc, char **argv)
     for (const std::string &root : sourceRoots)
     {
         const std::filesystem::path rootPath = root;
-        // Skipping would leave a valid, empty manifest and a green build whose
-        // only symptom is "no manifest entry for asset ..." at runtime. An
-        // explicitly requested root that is not there is a build error.
-        // (An empty root is fine - only a missing one fails. A game with no
-        // assets yet needs a .gitkeep, since git does not track empty dirs.)
         if (!std::filesystem::exists(rootPath))
         {
             MIR_LOG_ERROR("AssetCooker: source root does not exist: {}", root);
@@ -161,11 +152,11 @@ int main(int argc, char **argv)
             if (IsUpToDate(entry.path(), blobPath))
             {
                 MIR_LOG_INFO("up to date {} -> {}", idSource, fileName);
-                cooked.push_back(CookedFile{id, fileName});
+                cooked.push_back(CookedFile{ id, fileName });
                 continue;
             }
 
-            const std::optional<std::vector<std::byte>> bytes = mir::ReadFileBytes(entry.path());
+            const std::optional<std::vector<std::byte>> bytes = mir::ReadBytes(entry.path());
             if (!bytes.has_value())
             {
                 MIR_LOG_ERROR("AssetCooker: failed to read {}", entry.path().string());
@@ -175,7 +166,7 @@ int main(int argc, char **argv)
 
             const std::vector<std::byte> blob =
                 mir::BuildAssetBlob(mir::kRawAssetTypeTag, mir::kRawAssetContentVersion, *bytes);
-            if (!mir::WriteFileBytes(blobPath, blob))
+            if (!mir::WriteBytes(blobPath, blob))
             {
                 MIR_LOG_ERROR("AssetCooker: failed to write {}", blobPath.string());
                 mir::FlushLog();
@@ -183,7 +174,7 @@ int main(int argc, char **argv)
             }
 
             MIR_LOG_INFO("cooked {} -> {}", idSource, fileName);
-            cooked.push_back(CookedFile{id, fileName});
+            cooked.push_back(CookedFile{ id, fileName });
         }
     }
 
@@ -191,10 +182,10 @@ int main(int argc, char **argv)
     entries.reserve(cooked.size());
     for (const CookedFile &file : cooked)
         entries.push_back(mir::AssetManifestSourceEntry{
-            {file.id, mir::kRawAssetTypeTag, mir::kRawAssetContentVersion}, file.fileName});
+            { file.id, mir::kRawAssetTypeTag, mir::kRawAssetContentVersion }, file.fileName });
 
     const std::vector<std::byte> manifestBlob = mir::BuildAssetManifestBlob(entries);
-    if (!mir::WriteFileBytes(outPath / "manifest.blob", manifestBlob))
+    if (!mir::WriteBytes(outPath / "manifest.blob", manifestBlob))
     {
         MIR_LOG_ERROR("AssetCooker: failed to write manifest.blob");
         mir::FlushLog();

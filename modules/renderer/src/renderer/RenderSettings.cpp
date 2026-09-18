@@ -1,6 +1,6 @@
 #include "renderer/RenderSettings.h"
 
-#include <assets/AssetFileIo.h>
+#include <core/fs/FileIo.h>
 
 #include <nlohmann/json.hpp>
 
@@ -17,7 +17,7 @@ namespace mir
     {
         RenderSettings settings;
 
-        const std::optional<std::vector<std::byte>> bytes = ReadFileBytes(path);
+        const std::optional<std::vector<std::byte>> bytes = ReadBytes(path);
         if (!bytes)
             return settings;
 
@@ -42,7 +42,7 @@ namespace mir
     bool RenderSettings::SaveFile(const std::filesystem::path &path) const
     {
         json root = json::object();
-        if (const std::optional<std::vector<std::byte>> bytes = ReadFileBytes(path))
+        if (const std::optional<std::vector<std::byte>> bytes = ReadBytes(path))
         {
             try
             {
@@ -55,10 +55,10 @@ namespace mir
             }
         }
 
-        root["rendering"] = json{{"rayTracing", rayTracing}};
+        root["rendering"] = json{ { "rayTracing", rayTracing } };
 
         const std::string dumped = root.dump(2);
         const std::span<const std::byte> bytesOut(reinterpret_cast<const std::byte *>(dumped.data()), dumped.size());
-        return WriteFileBytes(path, bytesOut);
+        return WriteBytes(path, bytesOut);
     }
 }
