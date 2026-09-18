@@ -12,9 +12,9 @@
 
 #include <core/ecs/ComponentFields.h>
 #include <core/ecs/ComponentRegistry.h>
-#include <core/ecs/Signature.h>
 #include <editor/Selection.h>
 
+#include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 #include <imgui.h>
@@ -49,21 +49,36 @@ namespace mir
             case FieldKind::Vec4:
                 return ImGui::DragFloat4(label, glm::value_ptr(*static_cast<glm::vec4 *>(bytes)), 0.1f);
             case FieldKind::Quat:
-                return ImGui::DragFloat4(label, glm::value_ptr(*static_cast<glm::quat *>(bytes)), 0.01f, -1.0f, 1.0f);
-            case FieldKind::Mat4:
-            {
-                ImGui::TextUnformatted(label);
-                bool changed = false;
-                float *m = glm::value_ptr(*static_cast<glm::mat4 *>(bytes));
-                for (int row = 0; row < 4; ++row)
                 {
-                    ImGui::PushID(row);
-                    changed |= ImGui::DragFloat4("##row", m + row * 4, 0.1f);
-                    ImGui::PopID();
+                    // Editing quaternion components directly can denormalize them
+                    glm::quat &quat = *static_cast<glm::quat *>(bytes);
+                    glm::vec3 euler = glm::degrees(glm::eulerAngles(quat));
+                    if (ImGui::DragFloat3(label, glm::value_ptr(euler), 0.5f))
+                    {
+                        quat = glm::quat(glm::radians(euler));
+                        return true;
+                    }
+                    return false;
                 }
-                return changed;
-            }
+            case FieldKind::Mat4:
+                {
+                    ImGui::TextUnformatted(label);
+                    bool changed = false;
+                    float *m = glm::value_ptr(*static_cast<glm::mat4 *>(bytes));
+                    for (int row = 0; row < 4; ++row)
+                    {
+                        ImGui::PushID(row);
+                        changed |= ImGui::DragFloat4("##row", m + row * 4, 0.1f);
+                        ImGui::PopID();
+                    }
+                    return changed;
+                }
             case FieldKind::EntityRef:
+                {
+                    const Entity *ref = static_cast<const Entity *>(bytes);
+                    ImGui::Text("%s: Entity %u", label, ref->mIndex);
+                    return false;
+                }
             case FieldKind::Handle:
                 return ImGui::DragScalarN(label, ImGuiDataType_U32, bytes, 2);
             case FieldKind::String:
@@ -121,12 +136,9 @@ namespace mir
         ImGui::Text("Entity %u", entity.mIndex);
         ImGui::Separator();
 
-        ComponentRegistry &registry = ComponentRegistry::Instance();
-
-        for (uint32_t seq = 0; seq < kMaxComponentTypes; ++seq)
+        for (const ComponentOps *ops : ComponentRegistry::Instance().All())
         {
-            const ComponentOps *ops = registry.FindBySeq(seq);
-            if (ops == nullptr || !ops->Has(world, entity))
+            if (!ops->Has(world, entity))
                 continue;
 
             DrawComponent(world, *ops, entity);

@@ -50,9 +50,6 @@ namespace mir
 
     void HierarchyPanel::Draw(World &world)
     {
-        if (!world.HasResource<Selection>())
-            world.EmplaceResource<Selection>();
-
         Selection &selection = world.Resource<Selection>();
         if (!selection.mSelected.IsNull() && !world.IsAlive(selection.mSelected))
             selection.mSelected = kNullEntity;

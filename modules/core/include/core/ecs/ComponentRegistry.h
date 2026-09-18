@@ -100,8 +100,8 @@ namespace mir
         {
             MIR_ASSERT_COMPONENT(T);
             static_assert(std::is_default_constructible_v<T>,
-                          "ComponentRegistry::Register: T must be default constructible - the registry "
-                          "captures a default value so a script can add the component without supplying one");
+                "ComponentRegistry::Register: T must be default constructible - the registry "
+                "captures a default value so a script can add the component without supplying one");
 
             ComponentOps ops{};
             ops.mType = TypeIdOf<T>();
@@ -111,46 +111,58 @@ namespace mir
             ops.mFields = fields;
 
             ops.mHas = [](const ComponentOps &, const World &world, Entity entity)
-            { return world.IsAlive(entity) && world.Has<T>(entity); };
+                {
+                    return world.IsAlive(entity) && world.Has<T>(entity);
+                };
 
             ops.mRemove = [](const ComponentOps &, World &world, Entity entity)
-            {
-                if (world.IsAlive(entity) && world.Has<T>(entity))
-                    world.RemoveComponent<T>(entity);
-            };
+                {
+                    if (world.IsAlive(entity) && world.Has<T>(entity))
+                        world.RemoveComponent<T>(entity);
+                };
 
             ops.mDeferRemove = [](const ComponentOps &, CommandBuffer &commands, Entity entity)
-            { commands.Remove<T>(entity); };
+                {
+                    commands.Remove<T>(entity);
+                };
 
             if constexpr (kIsTagComponent<T>)
             {
                 ops.mGet = [](const ComponentOps &, World &, Entity) -> void *
-                { return nullptr; };
+                    {
+                        return nullptr;
+                    };
 
                 ops.mAddCopy = [](const ComponentOps &, World &world, Entity entity, const void *)
-                {
-                    if (world.IsAlive(entity) && !world.Has<T>(entity))
-                        world.AddTag<T>(entity);
-                };
+                    {
+                        if (world.IsAlive(entity) && !world.Has<T>(entity))
+                            world.AddTag<T>(entity);
+                    };
 
                 ops.mDeferAdd = [](const ComponentOps &, CommandBuffer &commands, Entity entity, const void *)
-                { commands.AddTag<T>(entity); };
+                    {
+                        commands.AddTag<T>(entity);
+                    };
             }
             else
             {
                 ops.mGet = [](const ComponentOps &, World &world, Entity entity) -> void *
-                { return world.IsAlive(entity) ? world.GetComponent<T>(entity) : nullptr; };
+                    {
+                        return world.IsAlive(entity) ? world.GetComponent<T>(entity) : nullptr;
+                    };
 
-                // World::AddComponent is itself idempotent on a duplicate (keeps
-                // the existing value), so no has-check needed here.
+// World::AddComponent is itself idempotent on a duplicate (keeps
+// the existing value), so no has-check needed here.
                 ops.mAddCopy = [](const ComponentOps &, World &world, Entity entity, const void *value)
-                {
-                    if (world.IsAlive(entity))
-                        world.AddComponent<T>(entity, *static_cast<const T *>(value));
-                };
+                    {
+                        if (world.IsAlive(entity))
+                            world.AddComponent<T>(entity, *static_cast<const T *>(value));
+                    };
 
                 ops.mDeferAdd = [](const ComponentOps &, CommandBuffer &commands, Entity entity, const void *value)
-                { commands.Add<T>(entity, *static_cast<const T *>(value)); };
+                    {
+                        commands.Add<T>(entity, *static_cast<const T *>(value));
+                    };
             }
 
             const T defaultValue{};
@@ -166,6 +178,9 @@ namespace mir
 
         // For a TypeId recovered from an archetype column or a signature bit.
         const ComponentOps *FindBySeq(uint32_t seq) const;
+
+        // All registered component ops, in registration order. Lets callers iterate without a FindBySeq lookup per entry.
+        std::span<const ComponentOps *const> All() const { return mAllOps; }
 
         std::size_t Count() const { return mOps.size(); }
 
@@ -186,6 +201,7 @@ namespace mir
 
         std::unordered_map<uint32_t, ComponentOps *> mByHash;
         std::unordered_map<uint32_t, ComponentOps *> mBySeq;
+        std::vector<ComponentOps *> mAllOps; // contiguous, for All()
     };
 
     // core component

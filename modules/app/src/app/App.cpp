@@ -91,7 +91,7 @@ namespace mir
         }
 
         mSplash.SetProgress("Initializing editor...", 0.5f);
-        if (!mEditor.Initialize(*mWindow, mRenderer, mProject.mProjectSettingsPath))
+        if (!mEditor.Initialize(*mWindow, mRenderer, mProject.mProjectSettingsPath, mWorld))
         {
             MIR_LOG_ERROR("Editor initialization failed");
             mRenderer.Shutdown();

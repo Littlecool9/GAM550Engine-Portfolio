@@ -64,7 +64,7 @@ namespace mir
         Editor(Editor &&) = delete;
         Editor &operator=(Editor &&) = delete;
 
-        bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath);
+        bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath, World &world);
 
         void Shutdown(VulkanRenderer &renderer);
 

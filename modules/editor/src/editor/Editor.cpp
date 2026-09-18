@@ -12,6 +12,7 @@
 
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
+#include <editor/Selection.h>
 #include <editortheme/EditorTheme.h>
 
 #include <IconsFontAwesome6.h>
@@ -29,9 +30,12 @@ namespace mir
     // the ImGui context rather than crashing into a dangling device.
     Editor::~Editor() {}
 
-    bool Editor::Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath)
+    bool Editor::Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath,
+                            World &world)
     {
         mProjectSettingsPath = std::move(projectSettingsPath);
+
+        world.EmplaceResource<Selection>();
 
         ImGui::CreateContext();
 
