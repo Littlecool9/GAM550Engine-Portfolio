@@ -1,3 +1,12 @@
+/**
+ * @file AssetFileIo.h
+ * @author Rahul Nair
+ * @brief Raw file byte I/O - read or write a whole file, or just probe its
+ *        first few bytes.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 
 #include <cstddef>

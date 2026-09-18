@@ -1,3 +1,12 @@
+/**
+ * @file InputCodes.cpp
+ * @author Rahul Nair
+ * @brief Backend-neutral key/button/axis identifiers for the raw input layer.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include "window/InputCodes.h"
 
 #include <array>

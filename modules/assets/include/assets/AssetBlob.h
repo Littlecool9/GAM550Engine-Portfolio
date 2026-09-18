@@ -1,3 +1,12 @@
+/**
+ * @file AssetBlob.h
+ * @author Rahul Nair
+ * @brief Cooked asset file framing - a magic/version/type header wrapped
+ *        around raw content, with a content hash to catch corruption.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 
 #include <cstddef>

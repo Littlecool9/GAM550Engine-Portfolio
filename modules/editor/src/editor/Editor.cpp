@@ -12,6 +12,7 @@
 
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
+#include <editor/Selection.h>
 #include <editortheme/EditorTheme.h>
 
 #include <IconsFontAwesome6.h>
@@ -29,9 +30,12 @@ namespace mir
     // the ImGui context rather than crashing into a dangling device.
     Editor::~Editor() {}
 
-    bool Editor::Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath)
+    bool Editor::Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath,
+                            World &world)
     {
         mProjectSettingsPath = std::move(projectSettingsPath);
+
+        world.EmplaceResource<Selection>();
 
         ImGui::CreateContext();
 
@@ -261,7 +265,7 @@ namespace mir
 
     EditorActions Editor::DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                                      const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-                                     std::string_view currentProject)
+                                     std::string_view currentProject, World &world)
     {
         EditorActions actions;
 
@@ -292,11 +296,13 @@ namespace mir
                 ImGui::DockBuilderFinish(dockspaceId);
             }
 
-            for (const char *name :{ "Hierarchy", "Inspector" })
-            {
-                ImGui::Begin(name);
-                ImGui::End();
-            }
+            if (ImGui::Begin("Hierarchy"))
+                mHierarchyPanel.Draw(world);
+            ImGui::End();
+
+            if (ImGui::Begin("Inspector"))
+                mInspectorPanel.Draw(world);
+            ImGui::End();
 
             if (ImGui::Begin("Output"))
                 mLogPanel.Draw();

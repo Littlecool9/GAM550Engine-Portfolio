@@ -1,3 +1,12 @@
+/**
+ * @file ScriptHost.cpp
+ * @author Rahul Nair
+ * @brief Lua-backed IScriptHost
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include <script/ScriptHost.h>
 
 #include "bindings/EntityBindings.h"

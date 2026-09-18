@@ -1,3 +1,12 @@
+/**
+ * @file ScriptSystem.h
+ * @author Rahul Nair
+ * @brief Dispatches OnStart/OnUpdate to every entity with a ScriptRef, once
+ *        per frame.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 
 #include <script/components/ScriptRef.h>

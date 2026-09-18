@@ -1,3 +1,13 @@
+/**
+ * @file ScriptReloadWatcher.cpp
+ * @author Rahul Nair
+ * @brief Polls a tracked script's cooked file for on-disk changes and
+ *        hot-reloads it through IScriptHost.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include <script/ScriptReloadWatcher.h>
 
 #include <script/IScriptHost.h>

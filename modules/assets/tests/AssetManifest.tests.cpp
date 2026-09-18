@@ -1,3 +1,12 @@
+/**
+ * @file AssetManifest.tests.cpp
+ * @author Rahul Nair
+ * @brief Tests for assets/AssetManifest: build/parse round trip.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include <assets/AssetManifest.h>
 
 #include <assets/AssetBlob.h>

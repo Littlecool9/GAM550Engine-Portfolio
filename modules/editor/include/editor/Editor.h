@@ -12,6 +12,8 @@
 #include <core/ecs/EngineMode.h>
 #include <core/platform/Surface.h>
 #include <editor/EditorCamera.h>
+#include <editor/panels/HierarchyPanel.h>
+#include <editor/panels/InspectorPanel.h>
 #include <editor/panels/LogPanel.h>
 #include <editor/panels/ProjectSettingsPanel.h>
 #include <renderer/RenderSettings.h>
@@ -62,7 +64,7 @@ namespace mir
         Editor(Editor &&) = delete;
         Editor &operator=(Editor &&) = delete;
 
-        bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath);
+        bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath, World &world);
 
         void Shutdown(VulkanRenderer &renderer);
 
@@ -70,7 +72,7 @@ namespace mir
 
         EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                                  const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-                                 std::string_view currentProject);
+                                 std::string_view currentProject, World &world);
 
         ImDrawData *EndFrame();
 
@@ -101,6 +103,8 @@ namespace mir
         Window *mWindow = nullptr;
         std::vector<PixelRect> mTitleBarInteractiveRects;
         LogPanel mLogPanel;
+        HierarchyPanel mHierarchyPanel;
+        InspectorPanel mInspectorPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
         EditorCamera mCamera;
 

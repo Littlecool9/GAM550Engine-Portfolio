@@ -1,3 +1,12 @@
+/**
+ * @file WorldBindings.cpp
+ * @author Rahul Nair
+ * @brief Registers the World usertype: world:has/world:get
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include "WorldBindings.h"
 
 #include <core/ecs/ComponentRegistry.h>

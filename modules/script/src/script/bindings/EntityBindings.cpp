@@ -1,3 +1,12 @@
+/**
+ * @file EntityBindings.cpp
+ * @author Rahul Nair
+ * @brief Registers the Entity usertype for Lua scripts.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include "EntityBindings.h"
 
 #include <core/ecs/Entity.h>

@@ -1,3 +1,12 @@
+/**
+ * @file AssetFileIo.tests.cpp
+ * @author Rahul Nair
+ * @brief Tests for assets/AssetFileIo: whole-file and prefix reads/writes.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include <assets/AssetFileIo.h>
 
 #include <catch2/catch_test_macros.hpp>

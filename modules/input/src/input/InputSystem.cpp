@@ -1,4 +1,14 @@
-﻿#include "input/InputSystem.h"
+﻿/**
+ * @file InputSystem.cpp
+ * @author Rahul Nair
+ * @brief Resolves the window's RawInputSnapshot against the World's InputMap
+ *        into its InputState, once per frame.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
+#include "input/InputSystem.h"
 
 #include <input/InputMap.h>
 #include <input/InputState.h>

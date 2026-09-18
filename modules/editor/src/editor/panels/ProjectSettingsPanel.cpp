@@ -1,3 +1,14 @@
+/**
+ * @file ProjectSettingsPanel.cpp
+ * @author Rahul Nair
+ * @brief The "Project Settings" window - Input section (add/remove actions,
+ *        add/remove/rebind bindings) and Rendering section, each saved to
+ *        disk independently.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include <editor/panels/ProjectSettingsPanel.h>
 
 #include <imgui.h>

@@ -13,6 +13,8 @@ target_link_libraries(engine_editor
 target_sources(engine_editor PRIVATE
     src/editor/Editor.cpp
     src/editor/EditorCamera.cpp
+    src/editor/panels/HierarchyPanel.cpp
+    src/editor/panels/InspectorPanel.cpp
     src/editor/panels/LogPanel.cpp
     src/editor/panels/ProjectSettingsPanel.cpp
 )

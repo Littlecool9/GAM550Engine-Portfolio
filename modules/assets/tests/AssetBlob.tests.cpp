@@ -1,3 +1,13 @@
+/**
+ * @file AssetBlob.tests.cpp
+ * @author Rahul Nair
+ * @brief Tests for assets/AssetBlob: build/parse round-trip and header
+ *        validation.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include <assets/AssetBlob.h>
 
 #include <catch2/catch_test_macros.hpp>

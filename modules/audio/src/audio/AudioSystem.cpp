@@ -1,3 +1,13 @@
+/**
+ * @file AudioSystem.cpp
+ * @author Dong Ta
+ * @brief Wwise sound engine lifecycle - init, per-frame update, event
+ *        posting, and teardown.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include "audio/AudioSystem.h"
 
 #include <AK/SoundEngine/Common/AkMemoryMgrModule.h>
