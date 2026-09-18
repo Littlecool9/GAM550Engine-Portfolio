@@ -3,16 +3,32 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <cstdint>
 #include <cstring>
+#include <random>
+#include <sstream>
 #include <string>
 
 namespace
 {
+    .
+        const std::string &ProcessToken()
+    {
+        static const std::string token = []
+            {
+                std::random_device rd;
+                std::ostringstream out;
+                out << std::hex << ((static_cast<std::uint64_t>(rd()) << 32) ^ rd());
+                return out.str();
+            }();
+        return token;
+    }
+
     std::filesystem::path MakeScratchFile()
     {
         static std::atomic<int> counter{ 0 };
         return std::filesystem::temp_directory_path() /
-            ("mjolnir_fileio_test_" + std::to_string(counter.fetch_add(1)));
+            ("mjolnir_fileio_test_" + ProcessToken() + "_" + std::to_string(counter.fetch_add(1)));
     }
 
     std::vector<std::byte> MakeContent(std::string_view text)

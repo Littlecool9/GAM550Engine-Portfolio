@@ -1,7 +1,6 @@
 ﻿#include "input/InputMap.h"
 
-#include <core/fs/FileIo.h>
-#include <core/log/Log.h>
+#include <serial/JsonFile.h>
 
 #include <nlohmann/json.hpp>
 
@@ -145,23 +144,14 @@ namespace mir
     {
         InputMap map;
 
-        const std::optional<std::vector<std::byte>> bytes = ReadBytes(path);
-        if (!bytes)
+        const std::optional<json> root = ReadJsonFile(path);
+        if (!root || !root->is_object())
             return map;
 
-        json root;
-        try
-        {
-            root = json::parse(std::string_view(reinterpret_cast<const char *>(bytes->data()), bytes->size()));
-        }
-        catch (const json::parse_error &e)
-        {
-            MIR_LOG_ERROR("InputMap::LoadFile: '{}' is not valid JSON ({})", path.string(), e.what());
-            return map;
-        }
-
-        const auto inputIt = root.find("input");
-        const json &inputRoot = inputIt != root.end() ? *inputIt : root;
+        // Falls back to the document root so a file written before the sectioned
+        // schema (actions at top level) still loads.
+        const auto inputIt = root->find("input");
+        const json &inputRoot = inputIt != root->end() ? *inputIt : *root;
 
         for (const json &actionNode : inputRoot.value("actions", json::array()))
         {
@@ -178,42 +168,32 @@ namespace mir
 
     bool InputMap::SaveFile(const std::filesystem::path &path) const
     {
-        json root = json::object();
-        if (const std::optional<std::vector<std::byte>> bytes = ReadBytes(path))
-        {
-            try
+        // Only the "input" key is written; UpdateJsonFile carries the rest of
+        // project_settings.json through untouched.
+        return UpdateJsonFile(path, [this](json &root)
             {
-                json existing = json::parse(std::string_view(reinterpret_cast<const char *>(bytes->data()), bytes->size()));
-                if (existing.is_object())
-                    root = std::move(existing);
-            }
-            catch (const json::parse_error &)
-            {
-            }
-        }
-        root.erase("actions");
+                // a file loaded through the fallback above is migrated on its first 
+                // save instead of keeping two copies of the same actions. 
+                root.erase("actions");
 
-        json inputNode;
-        json &actions = inputNode["actions"] = json::array();
+                json inputNode;
+                json &actions = inputNode["actions"] = json::array();
 
-        for (const InputAction &action : mActions)
-        {
-            json actionNode{
-                { "name", action.name },
-                { "type", ActionTypeName(action.type) },
-                { "bindings", json::array() },
-            };
+                for (const InputAction &action : mActions)
+                {
+                    json actionNode{
+                        { "name", action.name },
+                        { "type", ActionTypeName(action.type) },
+                        { "bindings", json::array() },
+                    };
 
-            for (const InputBinding &binding : action.bindings)
-                actionNode["bindings"].push_back(ToJson(binding));
+                    for (const InputBinding &binding : action.bindings)
+                        actionNode["bindings"].push_back(ToJson(binding));
 
-            actions.push_back(std::move(actionNode));
-        }
+                    actions.push_back(std::move(actionNode));
+                }
 
-        root["input"] = std::move(inputNode);
-
-        const std::string dumped = root.dump(2);
-        const std::span<const std::byte> bytesOut(reinterpret_cast<const std::byte *>(dumped.data()), dumped.size());
-        return WriteBytes(path, bytesOut);
+                root["input"] = std::move(inputNode);
+            });
     }
 }

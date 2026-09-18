@@ -1,10 +1,8 @@
 #include "renderer/RenderSettings.h"
 
-#include <core/fs/FileIo.h>
+#include <serial/JsonFile.h>
 
 #include <nlohmann/json.hpp>
-
-#include <string_view>
 
 namespace mir
 {
@@ -17,48 +15,20 @@ namespace mir
     {
         RenderSettings settings;
 
-        const std::optional<std::vector<std::byte>> bytes = ReadBytes(path);
-        if (!bytes)
+        const std::optional<json> root = ReadJsonFile(path);
+        if (!root || !root->is_object())
             return settings;
 
-        json root;
-        try
-        {
-            root = json::parse(std::string_view(reinterpret_cast<const char *>(bytes->data()), bytes->size()));
-        }
-        catch (const json::parse_error &)
-        {
-            return settings;
-        }
-
-        if (!root.is_object())
-            return settings;
-
-        const json &renderingRoot = root.value("rendering", json::object());
+        const json &renderingRoot = root->value("rendering", json::object());
         settings.rayTracing = renderingRoot.value("rayTracing", false);
         return settings;
     }
 
     bool RenderSettings::SaveFile(const std::filesystem::path &path) const
     {
-        json root = json::object();
-        if (const std::optional<std::vector<std::byte>> bytes = ReadBytes(path))
-        {
-            try
+        return UpdateJsonFile(path, [this](json &root)
             {
-                json existing = json::parse(std::string_view(reinterpret_cast<const char *>(bytes->data()), bytes->size()));
-                if (existing.is_object())
-                    root = std::move(existing);
-            }
-            catch (const json::parse_error &)
-            {
-            }
-        }
-
-        root["rendering"] = json{ { "rayTracing", rayTracing } };
-
-        const std::string dumped = root.dump(2);
-        const std::span<const std::byte> bytesOut(reinterpret_cast<const std::byte *>(dumped.data()), dumped.size());
-        return WriteBytes(path, bytesOut);
+                root["rendering"] = json{ { "rayTracing", rayTracing } };
+            });
     }
 }
