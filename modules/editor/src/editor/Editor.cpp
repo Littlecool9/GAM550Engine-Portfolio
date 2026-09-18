@@ -48,8 +48,6 @@ namespace mir
             return ImGuizmo::TRANSLATE;
         }
 
-        // Transform::Matrix() is always translate * rotate * scale with no skew,
-        // so this is exact (unlike a general-purpose mat4 decomposition)
         void DecomposeTRS(const glm::mat4 &matrix, glm::vec3 &position, glm::quat &rotation, glm::vec3 &scale)
         {
             position = glm::vec3(matrix[3]);
