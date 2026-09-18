@@ -48,3 +48,18 @@ add_library(iconfontcppheaders INTERFACE)
 add_library(iconfontcppheaders::iconfontcppheaders ALIAS iconfontcppheaders)
 target_include_directories(iconfontcppheaders INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/IconFontCppHeaders)
+
+set(IMGUIZMO_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ImGuizmo)
+
+if(NOT EXISTS ${IMGUIZMO_DIR}/src/ImGuizmo.h)
+    message(FATAL_ERROR
+        "third_party/ImGuizmo is empty. Run: git submodule update --init --recursive")
+endif()
+
+add_library(imguizmo STATIC
+    ${IMGUIZMO_DIR}/src/ImGuizmo.cpp
+)
+add_library(imguizmo::imguizmo ALIAS imguizmo)
+
+target_include_directories(imguizmo PUBLIC ${IMGUIZMO_DIR}/src)
+target_link_libraries(imguizmo PUBLIC imgui::imgui)

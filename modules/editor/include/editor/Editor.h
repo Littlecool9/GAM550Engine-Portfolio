@@ -41,6 +41,13 @@ namespace mir
         Stop,
     };
 
+    enum class GizmoOperation
+    {
+        Translate,
+        Rotate,
+        Scale,
+    };
+
     struct ProjectMenuEntry
     {
         std::string mDir;
@@ -96,6 +103,7 @@ namespace mir
         void DrawTitleBar();
         void DrawOpenProjectMenu(std::span<const ProjectMenuEntry> projects, std::string_view currentProject);
         void DrawOpenProjectConfirm(EditorActions &actions);
+        void DrawViewportGizmo(const EngineModeState &mode, World &world);
         void DrawNewProjectModal(EditorActions &actions, std::span<const ProjectMenuEntry> projects);
 
         SceneMenuAction DrawPlayControls(const EngineModeState &mode);
@@ -117,6 +125,8 @@ namespace mir
         // waiting on the confirm dialog
         ProjectMenuEntry mPendingProject;
         bool mOpenConfirmRequested = false;
+
+        GizmoOperation mGizmoOperation = GizmoOperation::Translate;
 
         // New Project modal
         bool mNewProjectRequested = false;

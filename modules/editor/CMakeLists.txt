@@ -7,6 +7,7 @@ target_link_libraries(engine_editor
     PRIVATE mir::core
             mir::editortheme
             imgui::imgui
+            imguizmo::imguizmo
             iconfontcppheaders::iconfontcppheaders
 )
 
