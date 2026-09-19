@@ -276,10 +276,8 @@ namespace mir
         {
             const std::optional<std::vector<std::byte>> bytes = ReadBytes(path);
             if (!bytes)
-            {
-                MIR_LOG_CRITICAL("Cannot read SPIR-V: {}", path.string());
+                // ReadBytes takes care of logging onfailure
                 return std::nullopt;
-            }
 
             if (bytes->empty() || bytes->size() % sizeof(uint32_t) != 0)
             {
@@ -1189,7 +1187,7 @@ namespace mir
 
         mMaterials.clear();
         mMaterials.push_back(defaultMaterial);
-        mDefaultMaterial = MaterialHandle{0, 0};
+        mDefaultMaterial = MaterialHandle{ 0, 0 };
 
         MIR_LOG_INFO("Released {} meshes and {} materials", meshCount, released);
     }

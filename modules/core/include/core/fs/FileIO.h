@@ -32,7 +32,7 @@ namespace mir
 
     bool WriteText(const std::filesystem::path &path, std::string_view text);
 
-    // safe file writing - for user authored files()
+    // safe file writing - for user authored files
     bool WriteBytesAtomic(const std::filesystem::path &path, std::span<const std::byte> bytes);
 
     bool WriteTextAtomic(const std::filesystem::path &path, std::string_view text);

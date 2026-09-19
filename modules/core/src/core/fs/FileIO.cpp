@@ -90,7 +90,7 @@ namespace mir
 
     std::optional<std::string> ReadText(const std::filesystem::path &path)
     {
-        // read from bytes so white spaces aren't quitely corrected
+        // read from bytes so white space is not quietly corrected
         const std::optional<std::vector<std::byte>> bytes = ReadAll(path, "ReadText");
         if (!bytes)
             return std::nullopt;
@@ -109,7 +109,7 @@ namespace mir
 
     bool WriteText(const std::filesystem::path &path, std::string_view text)
     {
-        // write as bytes so white spaces aren't quitely corrected
+        // write as bytes so white space is not quietly corrected
         return WriteAll(path, text.data(), text.size(), "WriteText");
     }
 

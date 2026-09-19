@@ -276,7 +276,8 @@ namespace mir
         const std::optional<json> manifestJson = ReadJsonFile(SceneManifestPath(sceneDir));
         if (!manifestJson || !manifestJson->is_object())
         {
-            MIR_LOG_ERROR("LoadScene: no readable {} in '{}'", kSceneManifestFileName, sceneDir.string());
+            MIR_LOG_ERROR("LoadScene: '{}' has no usable {}, loading an empty scene", sceneDir.string(),
+                kSceneManifestFileName);
             return loaded;
         }
         const json &manifest = *manifestJson;

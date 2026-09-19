@@ -223,6 +223,12 @@ because its caller is probing a fixed-size header on a file that may legitimatel
 not exist yet — `AssetCooker` reads 32 bytes to decide whether a cooked blob is
 stale rather than reading the whole asset.
 
+**A failure is logged once, by the layer that knows why.** `FileIO` names the
+path and the reason, so a caller adds a line only for something that layer cannot
+know. `ReadSpirv` logs the word count it rejected but says nothing about a file it
+could not open, and `LoadScene` reports that it is loading an empty scene rather
+than repeating why the manifest failed to parse.
+
 `ReadText` and `WriteText` open in binary mode. Text mode on Windows turns a
 newline into a carriage-return pair on the way out and back on the way in, which
 makes `file_size` disagree with what was written and makes the same file differ
