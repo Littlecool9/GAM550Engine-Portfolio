@@ -62,6 +62,13 @@
         "scriptName": "spin"
       },
       "type": "ScriptRef"
+    },
+    {
+      "fields": {
+        "eventName": "Play_chargeDown",
+        "playOnStart": true
+      },
+      "type": "AudioEmitter"
     }
   ],
   "id": 1,

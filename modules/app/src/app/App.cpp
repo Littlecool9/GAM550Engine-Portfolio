@@ -10,7 +10,9 @@
 #include <app/App.h>
 
 #include "SceneResolve.h"
+#include <audio/AudioEmitterSystem.h>
 #include <audio/AudioSystem.h>
+#include <audio/ComponentRegistration.h>
 #include <core/EngineVersion.h>
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/DeferredAccess.h>
@@ -111,6 +113,7 @@ namespace mir
         RegisterRendererComponents();
         RegisterPhysicsComponents();
         RegisterScriptComponents();
+        RegisterAudioComponents();
 
         // defers structural change
         mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
@@ -133,6 +136,9 @@ namespace mir
 
         // should be before any other system in PostUpdate
         mScheduler.AddSystem<TransformPropagateSystem>(SystemPhase::PostUpdate);
+
+        // after TransformPropagateSystem: it reads the WorldTransform that system writes
+        mScheduler.AddSystem<AudioEmitterSystem>(SystemPhase::PostUpdate);
 
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
