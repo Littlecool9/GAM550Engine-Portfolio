@@ -45,6 +45,15 @@ namespace mir::audio
     // the audio thread and applied in Update(), so this answers for last frame.
     bool IsVoicePlaying(uint32_t playingId);
 
+
+    bool SetRTPCValue(const char *rtpcName, float value, uint64_t gameObject = 0);
+
+    //switches are per game object, wwise has no global switch.
+    bool SetSwitch(const char *switchGroup, const char *switchState, uint64_t gameObject);
+
+    //states are global by design, no game object takes part.
+    bool SetState(const char *stateGroup, const char *state);
+
     bool IsInitialized();
 
 }

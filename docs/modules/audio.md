@@ -53,6 +53,9 @@ audio::Terminate();                         // App::Shutdown
 | `Update` | `audio/AudioSystem.h` | One `RenderAudio()`; nothing is mixed without it |
 | `Terminate` | `audio/AudioSystem.h` | Reverse-order teardown, safe whether or not `Init` succeeded |
 | `PostEvent` | `audio/AudioSystem.h` | Fires an event by name on the fixed global game object |
+| `SetRTPCValue` | `audio/AudioSystem.h` | Writes a game parameter on one object, or globally with a `gameObject` of 0 |
+| `SetSwitch` | `audio/AudioSystem.h` | Writes a switch on one object; Wwise has no global switch to fall back on |
+| `SetState` | `audio/AudioSystem.h` | Writes a state group, which Wwise scopes globally - no object takes part |
 | `WwiseSdkVersion` | `audio/Wwise.h` | The SDK version this build compiled against |
 | `IsSoundEngineInitialized` | `audio/Wwise.h` | Safe before init, where it returns false |
 
@@ -115,6 +118,19 @@ removed. Those sources call the wide Win32 APIs, which is why this target define
 compare against the wrong type of failure and report success for every bad event
 name.
 
+**A game parameter, switch or state is addressed by name, never by ID.**
+`AK::SoundEngine` hashes the string at the call, so the banks need no string
+table and nothing here has to carry generated IDs. The cost is that a misspelled
+name is not an error anywhere: Wwise takes the write and it reaches nothing, so
+`SetRTPCValue` returning true means "the call was made", not "something heard
+it".
+
+**Only the RTPC has a global fallback.** A game parameter with no per-object
+value falls back to the global one, which is what `gameObject = 0` writes, and
+reaching one object alone additionally needs the parameter scoped to Game Object
+in the authoring project. A switch is per object with no fallback, and a state
+is global with no per-object form - hence the three different signatures.
+
 **There is no `AkMusicEngine` in 2025.1.** It was folded into `AkSoundEngine`, so
 there is no separate init call to add, and older integration guides that list one
 are describing a version this project does not use.
@@ -139,6 +155,14 @@ runs the engine for 120 frames and fails on any logged Error or Critical; since
 every failure path in `Init` logs, a passing smoke test means the engine came up
 and both banks loaded. It does not and cannot assert that sound reached the
 speakers.
+
+`SetRTPCValue`, `SetSwitch` and `SetState` are wired through to Lua (see
+`docs/modules/script.md`) but nothing audible has been proven through them yet.
+`HelloWorld`'s `Init.bnk` declares ten game parameters, and because banks carry
+IDs rather than names, none of their names can be recovered from this repository
+- whoever owns the authoring project has to supply one, or author an RTPC mapped
+to volume or pitch, before `games/HelloWorld/assets/scripts/audio_rtpc.lua` can
+be heard doing anything.
 
 The test bank's media is PCM, so no codec library is linked. `Profile` maps to
 CMake's `RelWithDebInfo` and there is no preset for it, so that branch of the

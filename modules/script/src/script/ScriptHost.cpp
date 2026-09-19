@@ -9,6 +9,7 @@
 
 #include <script/ScriptHost.h>
 
+#include "bindings/AudioBindings.h"
 #include "bindings/EntityBindings.h"
 #include "bindings/InputBindings.h"
 #include "bindings/PhysicsBindings.h"
@@ -56,6 +57,7 @@ namespace mir
 
             RegisterInputBindings(mLua);
             RegisterPhysicsBindings(mLua);
+            RegisterAudioBindings(mLua);
         }
 
         struct ScriptInstance

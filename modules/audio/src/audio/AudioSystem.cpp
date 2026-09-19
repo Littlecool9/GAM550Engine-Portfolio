@@ -286,6 +286,34 @@ namespace mir::audio {
         return playingId != AK_INVALID_PLAYING_ID && g_livePlayingIds.count(playingId) != 0;
     }
 
+
+
+    bool SetRTPCValue(const char *rtpcName, float value, uint64_t gameObject)
+    {
+        if (!g_Initialized || rtpcName == nullptr)
+            return false;
+
+        const AkGameObjectID target = gameObject == 0 ? AK_INVALID_GAME_OBJECT : static_cast<AkGameObjectID>(gameObject);
+
+        return Check(AK::SoundEngine::SetRTPCValue(rtpcName, static_cast<AkRtpcValue>(value), target),"SetRTPCValue");
+    }
+
+    bool SetSwitch(const char *switchGroup, const char *switchState, uint64_t gameObject)
+    {
+        if (!g_Initialized || switchGroup == nullptr || switchState == nullptr || gameObject == 0)
+            return false;
+
+        return Check(AK::SoundEngine::SetSwitch(switchGroup, switchState, static_cast<AkGameObjectID>(gameObject)), "SetSwitch");
+    }
+
+    bool SetState(const char *stateGroup, const char *state)
+    {
+        if (!g_Initialized || stateGroup == nullptr || state == nullptr)
+            return false;
+
+        return Check(AK::SoundEngine::SetState(stateGroup, state), "SetState");
+    }
+
     void Terminate()
     {
         if (AK::SoundEngine::IsInitialized()) 

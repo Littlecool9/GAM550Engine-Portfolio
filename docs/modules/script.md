@@ -4,7 +4,7 @@ Embeds Lua as the gameplay scripting layer, through sol2 over LuaJIT. A script
 reads per-frame ECS state and drives triggers, entity behaviour and UI logic. It
 does not touch physics, flight dynamics or rendering.
 
-`mir::script` · depends `mir::core` (public); `mir::assets`, `sol2`, `luajit` (private) · API `modules/script/include/script/` · maintainer Rahul Nair · reviewed 2026-09-06
+`mir::script` · depends `mir::core` (public); `mir::assets`, `mir::audio`, `mir::input`, `mir::physics`, `sol2`, `luajit` (private) · API `modules/script/include/script/` · maintainer Rahul Nair · reviewed 2026-09-18
 
 ## Model
 
@@ -72,9 +72,37 @@ return Spin
 
 The Lua surface — `world:has/get/set/spawn/destroy/add/remove/each/declare` and
 the `Entity` usertype — lives in `src/script/bindings/` and is not public. Loaded
-Lua source reaches it; no C++ outside this module includes it.
+Lua source reaches it; no C++ outside this module includes it. The input,
+physics and audio bindings each extend that same `World` usertype rather than
+adding one of their own, and each is registered after `RegisterWorldBindings`.
+
+The audio half is `world:post_event/stop_event/set_rtpc/set_switch/set_state`.
+All but `set_state` take the entity and reach the `AkGameObject` its
+`AudioEmitter` carries; `set_state` takes none, because a Wwise state is global.
+
+```lua
+function T.OnUpdate(self, world, entity, dt)
+    self.charge = math.min(self.charge + dt, 1.0)
+    world:set_rtpc(entity, "Speed", self.charge * 100.0)   -- false if refused
+end
+```
 
 ## Rules
+
+**A script-posted voice is handed to `AudioEmitterSystem`, not kept here.**
+`world:post_event` writes the playing ID it got back into the emitter's
+`mPlayingId`, because that system is the only thing that stops a voice when play
+mode ends or the entity is destroyed, and it holds exactly one ID. A voice left
+out of it keeps playing past the session with nothing able to reach it. The
+consequence is that one emitter carries one voice: a post stops whatever that
+emitter was already playing, including its own `eventName`.
+
+**Every audio binding resolves the `AkGameObject` again on each call.** An
+`AudioEmitter` has none until `AudioEmitterSystem`'s first update registers one,
+so a handle cached at script start would stay 0 for the entity's whole life. An
+entity with no emitter, or one not registered yet, gets a refusal — `false`, or
+`0` from `post_event` — rather than an error, the same contract the physics
+bindings have for an entity with no `RigidBody`.
 
 **Script state never lives in a component.** Components stay POD, so a script's
 data lives in the host's instance map, addressed by `instanceRef`.
@@ -146,7 +174,10 @@ dispatch with isolated errors and independent state, `CommandBuffer`-deferred
 structural changes, and mtime-poll hot reload. All of it has been exercised end
 to end against the running app. LuaJIT is the shipped backend.
 
-Tests: `modules/script/tests/WorldBindings.tests.cpp`. Much of the rest was
+Tests: `modules/script/tests/`, one file per binding group. The audio one runs
+with no sound engine at all — `audio::Init` is never called there — so it covers
+the resolve path, the argument checking and the promise that a script on an
+entity with no audio keeps running, and nothing about what is audible. Much of the rest was
 verified by hand rather than automated — independent per-entity state, a live
 edit reaching a running instance, and a deliberate error thrown from inside a
 `world:each` callback being caught and logged.
