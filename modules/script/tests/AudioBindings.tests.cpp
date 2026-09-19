@@ -3,16 +3,6 @@
  * @author Quy Dong Ta
  * @brief Tests for the Lua world:post_event/stop_event/set_rtpc/set_switch/set_state bindings.
  *
- * Bare World plus a ScriptHost driven by hand, the same pattern the other
- * binding tests use - no window, no renderer, and here no sound engine either.
- *
- * `audio::Init` is never called in this process, so every facade call is the
- * documented no-op and every binding refuses. That is what is checkable without
- * Wwise: the resolve path, the argument checking, and the promise that a script
- * on an entity with no audio keeps running rather than dying. Whether a posted
- * event is audible, or an RTPC reaches the mixer, belongs to the manual pass in
- * games/HelloWorld, which needs banks and a device.
- *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */

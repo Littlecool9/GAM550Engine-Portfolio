@@ -24,12 +24,10 @@ namespace mir
 {
     namespace
     {
-        // Same fade AudioEmitterSystem stops with - a hard stop mid-waveform clicks.
+
         constexpr int kStopFadeMs = 10;
 
-        // Names arrive as sol::object rather than const char* so that a script
-        // passing a number or nil is refused and logged, the way the physics
-        // bindings refuse a malformed vector, instead of raising a Lua error.
+
         bool ToName(const sol::object &value, std::string_view binding, std::string &out)
         {
             if (!value.is<std::string>())
@@ -42,8 +40,7 @@ namespace mir
             return !out.empty();
         }
 
-        // Any Lua number counts, tested by type rather than by is<float>(), which
-        // is what the field bindings already do.
+
         bool ToNumber(const sol::object &value, std::string_view binding, float &out)
         {
             if (value.get_type() != sol::type::number)
@@ -56,9 +53,6 @@ namespace mir
             return true;
         }
 
-        // The one lookup every binding here starts from. Returns nullptr when the
-        // entity has no AudioEmitter, and when it has one that AudioEmitterSystem
-        // has not registered a game object for yet.
         AudioEmitter *ResolveEmitter(World &world, Entity entity)
         {
             AudioEmitter *emitter = world.GetComponent<AudioEmitter>(entity);
@@ -82,13 +76,7 @@ namespace mir
             if (playingId == 0)
                 return 0;
 
-            // The voice has to be handed to AudioEmitterSystem, because that is the
-            // only thing that stops one when play mode ends or the entity dies, and
-            // it knows a single ID - mPlayingId. A script-posted loop left out of it
-            // would keep playing past the session, out of everyone's reach.
-            //
-            // One emitter therefore carries one voice: this stops whatever the
-            // emitter was playing, including its own mEventName.
+
             if (emitter->mPlayingId != 0)
                 audio::StopPlaying(emitter->mPlayingId, kStopFadeMs);
 
@@ -110,8 +98,6 @@ namespace mir
             audio::StopPlaying(emitter->mPlayingId, static_cast<int>(fade));
             emitter->mPlayingId = 0;
 
-            // mStarted stays true: it means "this emitter has already fired its
-            // play-on-start", and a stop is not a reason to fire it again.
             return true;
         }
 
@@ -145,8 +131,7 @@ namespace mir
             return audio::SetSwitch(group.c_str(), state.c_str(), emitter->mGameObject);
         }
 
-        // No entity: a Wwise state is global, so scoping one to an emitter would be
-        // a lie the bindings cannot keep.
+
         bool WorldSetState(World &, const sol::object &stateGroup, const sol::object &state)
         {
             std::string group;
