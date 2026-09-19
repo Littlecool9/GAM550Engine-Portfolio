@@ -45,8 +45,9 @@ barriers, and frame pacing is one timeline semaphore rather than a fence pool.
 bool Initialize(const RendererDesc &desc);   // takes an ISurfaceProvider, never a Window
 
 MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
+TextureHandle CreateTexture(const TextureDesc &desc);
 MaterialHandle CreateMaterial(const MaterialDesc &desc);
-void ReleaseSceneResources();                // every mesh and material but the default
+void ReleaseSceneResources();                // every mesh, material and texture but the defaults
 
 void DrawFrame(std::span<const RenderView> views);
 void SetClearColor(const glm::vec4 &color);
@@ -71,7 +72,8 @@ void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera
 | Type | Header | Role |
 |---|---|---|
 | `Vertex`, `MeshHandle` | `renderer/Mesh.h` | `{pos, color, normal}`; a `{index, generation}` handle |
-| `MaterialDesc`, `MaterialHandle` | `renderer/Material.h` | `{shaderName, cullMode, polygonMode}`; `kNullMaterial` means the default |
+| `TextureDesc`, `TextureHandle` | `renderer/Texture.h` | `{width, height, pixels, srgb}`, tightly-packed RGBA8; `kNullTexture` falls back to a default in `CreateMaterial` |
+| `MaterialDesc`, `MaterialHandle` | `renderer/Material.h` | `{shaderName, cullMode, polygonMode, baseColorTexture, normalTexture}`; `kNullMaterial` means the default |
 | `DrawItem` | `renderer/Renderer.h` | `{mesh, model, normalMatrix, tint, material}` |
 | `RenderView` | `renderer/VulkanRenderer.h` | `{rect, items}` — one camera's `DrawItem`s, clipped to a screen rect |
 | `Viewport`, `ViewportId` | `renderer/RenderSystem.h` | `RenderSystem`'s per-viewport state: rect plus a World `Entity`, an external camera, or neither (fallback) |
@@ -109,19 +111,29 @@ ours. VMA is configured with `VMA_STATIC_VULKAN_FUNCTIONS=0` and
 size through that interface after a resize, which is why it is an interface
 rather than a handle and two integers passed once.
 
-**One `VkPipeline` per material, built eagerly at `CreateMaterial`.** The cost is
-a shader module load plus `vkCreateGraphicsPipelines`, paid at load time.
-Everything is created at scene-build time anyway, before the loop starts.
+**One `VkPipeline` and one `VkDescriptorSet` per material, built eagerly at
+`CreateMaterial`.** The cost is a shader module load, `vkCreateGraphicsPipelines`
+and a descriptor set write, paid at load time. Everything is created at
+scene-build time anyway, before the loop starts. Every material's pipeline
+layout carries the same one-set layout: binding 0 is the base color texture,
+binding 1 is the normal map, both combined image samplers read in the
+fragment stage.
 
-**An invalid material falls back to the default** rather than failing the draw,
-so one bad handle does not blank the frame.
+**An invalid material falls back to the default** rather than failing the
+draw, so one bad handle does not blank the frame. The same rule applies one
+level down: `CreateMaterial` resolves `MaterialDesc::baseColorTexture` and
+`normalTexture` through `CreateTexture`'s table, and a null or stale texture
+handle falls back to a flat white base color / flat normal map rather than
+failing material creation.
 
 **`ReleaseSceneResources` is all or nothing, and the caller vouches for the
-handles.** It waits for the device to go idle, destroys every mesh and every
-material except the default, and the next `CreateMesh` or `CreateMaterial` reuses
-index 0. Mesh generations are not bumped, so a handle kept across the call names
-whatever is created next in its slot, with no error. `App` calls it only right
-after unloading a scene, when no `MeshRenderer` is left.
+handles.** It waits for the device to go idle, destroys every mesh, every
+material except the default, and every texture except the two defaults, and
+the next `CreateMesh`/`CreateMaterial`/`CreateTexture` reuses index 0 (index 2
+for textures, since the two defaults keep 0 and 1). Mesh and texture
+generations are not bumped, so a handle kept across the call names whatever is
+created next in its slot, with no error. `App` calls it only right after
+unloading a scene, when no `MeshRenderer` is left.
 
 **`RenderSystem` runs in `Render` because `TransformPropagateSystem` runs in
 `PostUpdate`.** Placed any earlier, it would draw the previous frame's matrices.

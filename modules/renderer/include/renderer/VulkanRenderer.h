@@ -11,6 +11,7 @@
 #include <core/platform/Surface.h>
 #include <renderer/Material.h>
 #include <renderer/Mesh.h>
+#include <renderer/Texture.h>
 
 #include <volk.h>
 
@@ -75,12 +76,12 @@ namespace mir
         MeshHandle CreateMesh(std::span<const Vertex> vertices,
             std::span<const uint32_t> indices);
 
+        TextureHandle CreateTexture(const TextureDesc &desc);
+
 // Handle of a pipeline
 // kNullMaterial means default material
         MaterialHandle CreateMaterial(const MaterialDesc &desc);
 
-        // Destroys all meshes and materials but the default material. Old handles
-        // are invalid and their indices get reused: call only after a scene unload.
         void ReleaseSceneResources();
 
         VkExtent2D SwapchainExtent() const { return mSwapchainExtent; }
@@ -94,6 +95,7 @@ namespace mir
     private:
         struct GpuMesh;
         struct GpuMaterial;
+        struct GpuTexture;
 
         bool CreateVulkanInstance(const RendererDesc &desc);
         bool CreateDebugMessenger();
@@ -111,12 +113,16 @@ namespace mir
         bool CreateRenderCompleteSemaphores();
         void DestroyRenderCompleteSemaphores();
         bool CreatePipelineLayout();
+        bool CreateTextureSampler();
+        bool CreateDefaultTextures();
         // Builds one VkPipeline from a desc.
         VkPipeline BuildPipeline(const MaterialDesc &desc);
         void DestroyMeshes();
         void DestroyMaterials();
+        void DestroyTextures();
         const GpuMesh *FindMesh(MeshHandle handle) const;
         const GpuMaterial *FindMaterial(MaterialHandle handle) const;
+        const GpuTexture *FindTexture(TextureHandle handle) const;
         void NameObject(VkObjectType type, uint64_t handle, const char *name);
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
         // Draws one view's items, clipped to its rect
@@ -171,6 +177,13 @@ namespace mir
         // = DrawItem + Vertex format
         VkPipelineLayout mPipelineLayout = VK_NULL_HANDLE;
 
+        // set 0: binding 0 = base color, binding 1 = normal map.
+        VkDescriptorSetLayout mMaterialSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool mMaterialDescriptorPool = VK_NULL_HANDLE;
+
+        // One shared sampler.
+        VkSampler mTextureSampler = VK_NULL_HANDLE;
+
         // One buffer pair per mesh
         struct GpuMesh
         {
@@ -184,15 +197,29 @@ namespace mir
 
         std::vector<GpuMesh> mMeshes;
 
-        // One pipeline per material.
         struct GpuMaterial
         {
             VkPipeline mPipeline = VK_NULL_HANDLE;
+            VkDescriptorSet mDescriptorSet = VK_NULL_HANDLE;
         };
 
         std::vector<GpuMaterial> mMaterials;
 
         MaterialHandle mDefaultMaterial;
+
+        // One image per texture.
+        struct GpuTexture
+        {
+            VkImage mImage = VK_NULL_HANDLE;
+            VmaAllocation mAllocation = VK_NULL_HANDLE;
+            VkImageView mView = VK_NULL_HANDLE;
+            uint32_t mGeneration = 0; //< 0 = slot never filled
+        };
+
+        std::vector<GpuTexture> mTextures;
+
+        TextureHandle mDefaultWhiteTexture;
+        TextureHandle mDefaultNormalTexture;
 
         uint32_t mFrameIndex = 0;
         bool mNeedRecreate = false;
