@@ -286,22 +286,16 @@ namespace mir::audio {
         return playingId != AK_INVALID_PLAYING_ID && g_livePlayingIds.count(playingId) != 0;
     }
 
-    //al three take names rather than IDs, like PostEventOn, AK hashes the
-    //string at the call, so nothing here needs the banks string table.
+
 
     bool SetRTPCValue(const char *rtpcName, float value, uint64_t gameObject)
     {
         if (!g_Initialized || rtpcName == nullptr)
             return false;
 
-        //0 is the module's "no object" (RegisterEmitter hands out 1000 and up),
-        //and AK spells that AK_INVALID_GAME_OBJECT, which is its global scope.
-        const AkGameObjectID target = gameObject == 0
-            ? AK_INVALID_GAME_OBJECT
-            : static_cast<AkGameObjectID>(gameObject);
+        const AkGameObjectID target = gameObject == 0 ? AK_INVALID_GAME_OBJECT : static_cast<AkGameObjectID>(gameObject);
 
-        return Check(AK::SoundEngine::SetRTPCValue(rtpcName, static_cast<AkRtpcValue>(value), target),
-            "SetRTPCValue");
+        return Check(AK::SoundEngine::SetRTPCValue(rtpcName, static_cast<AkRtpcValue>(value), target),"SetRTPCValue");
     }
 
     bool SetSwitch(const char *switchGroup, const char *switchState, uint64_t gameObject)
@@ -309,8 +303,7 @@ namespace mir::audio {
         if (!g_Initialized || switchGroup == nullptr || switchState == nullptr || gameObject == 0)
             return false;
 
-        return Check(AK::SoundEngine::SetSwitch(switchGroup, switchState,
-            static_cast<AkGameObjectID>(gameObject)), "SetSwitch");
+        return Check(AK::SoundEngine::SetSwitch(switchGroup, switchState, static_cast<AkGameObjectID>(gameObject)), "SetSwitch");
     }
 
     bool SetState(const char *stateGroup, const char *state)
