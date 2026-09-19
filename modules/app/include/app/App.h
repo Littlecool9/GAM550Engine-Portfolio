@@ -35,6 +35,7 @@ namespace mir
 {
     class RenderSystem;
     class ScriptSystem;
+    class ModelSystem;
 
     struct AppDesc
     {
@@ -55,6 +56,7 @@ namespace mir
 
         // 0: run until the window closes
         uint64_t mMaxFrames = 0;
+        std::filesystem::path mCapturePath;
 
         // the game Initialize opens
         GameProject mProject;
@@ -151,6 +153,7 @@ namespace mir
         SystemScheduler mScheduler;
         RenderSystem *mRenderSystem = nullptr;
         ScriptSystem *mScriptSystem = nullptr;
+        ModelSystem *mModelSystem = nullptr;
         PlaySnapshot mPlaySnapshot;
         ScriptHost mScriptHost;
         ScriptReloadWatcher mScriptReloadWatcher{ mScriptHost };

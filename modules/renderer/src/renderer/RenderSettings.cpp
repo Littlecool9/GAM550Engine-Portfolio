@@ -27,6 +27,10 @@ namespace mir
     {
         RenderSettings settings;
 
+        std::error_code existsError;
+        if (!std::filesystem::exists(path, existsError) && !existsError)
+            return settings;
+
         const std::optional<std::vector<std::byte>> bytes = ReadFileBytes(path);
         if (!bytes)
             return settings;

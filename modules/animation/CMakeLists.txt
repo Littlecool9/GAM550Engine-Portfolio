@@ -1,0 +1,6 @@
+engine_add_module(animation)
+target_sources(engine_animation PRIVATE src/animation/ModelAnimation.cpp)
+target_link_libraries(engine_animation PUBLIC mir::assets mir::core)
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()

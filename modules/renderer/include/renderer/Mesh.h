@@ -9,6 +9,8 @@
 #pragma once
 
 #include <glm/vec3.hpp>
+#include <glm/vec2.hpp>
+#include <glm/vec4.hpp>
 
 #include <cstdint>
 
@@ -19,6 +21,9 @@ namespace mir
         glm::vec3 pos;
         glm::vec3 color;
         glm::vec3 normal;
+        glm::vec2 uv{};
+        float alpha = 1.0f;
+        glm::vec4 tangent{1,0,0,1};
     };
 
     struct MeshHandle

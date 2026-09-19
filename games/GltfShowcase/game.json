@@ -1,0 +1,6 @@
+{
+  "name": "GltfShowcase",
+  "title": "Mjolnir - glTF animation and morph",
+  "assetsRoot": "assets",
+  "sceneDir": "scenes/default"
+}

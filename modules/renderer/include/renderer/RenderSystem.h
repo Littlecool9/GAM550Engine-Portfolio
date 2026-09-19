@@ -20,6 +20,8 @@
 #include <glm/gtc/matrix_inverse.hpp>
 
 #include <vector>
+#include <algorithm>
+#include <cmath>
 
 namespace mir
 {
@@ -91,7 +93,7 @@ namespace mir
             }
         }
 
-        void OnUpdate(SystemContext &) override
+        void OnUpdate(SystemContext &context) override
         {
             bool haveDefaultCamera = false;
             glm::mat4 defaultCameraWorld{ 1.0f };
@@ -170,6 +172,20 @@ namespace mir
                         items.push_back(DrawItem{ renderer.mesh, viewProj * world.Matrix(), normalMatrix, renderer.tint, renderer.material });
                     });
 
+                if (const auto *models = context.world.TryResource<ModelDrawItems>())
+                    for (auto item : models->items)
+                    {
+                        item.model = viewProj * item.model;
+                        items.push_back(item);
+                    }
+                std::stable_sort(items.begin(), items.end(), [](const auto &a, const auto &b)
+                {
+                    if (a.transparent != b.transparent) return !a.transparent;
+                    if (!a.transparent) return false;
+                    const auto pa = a.model * glm::vec4(0,0,0,1), pb = b.model * glm::vec4(0,0,0,1);
+                    return pa.z / (std::abs(pa.w) > 1e-8f ? pa.w : 1e-8f) >
+                           pb.z / (std::abs(pb.w) > 1e-8f ? pb.w : 1e-8f);
+                });
                 mRenderViews.push_back(RenderView{ viewport.mRect, items });
             }
 

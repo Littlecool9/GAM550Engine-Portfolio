@@ -38,6 +38,7 @@ add_subdirectory(third_party)
 add_subdirectory(modules/audio)
 add_subdirectory(modules/app)
 add_subdirectory(modules/assets)
+add_subdirectory(modules/animation)
 add_subdirectory(modules/core)
 add_subdirectory(modules/editor)
 add_subdirectory(modules/editortheme)
@@ -63,6 +64,10 @@ engine_add_shaders(MjolnirEngine
 
 engine_add_shaders(MjolnirEngine
     SOURCE assets/shaders/unlit.slang
+    ENTRIES vertexMain:vertex fragmentMain:fragment)
+
+engine_add_shaders(MjolnirEngine
+    SOURCE assets/shaders/model.slang
     ENTRIES vertexMain:vertex fragmentMain:fragment)
 
 # Every games/*/ with a game.json is a game; its assetsRoot gets cooked
@@ -130,6 +135,11 @@ target_link_libraries(MjolnirEngine PRIVATE
 # Smoke tests run each game for a few frames and fail on any logged error.
 # They need a GPU; skip them with `ctest -LE smoke`.
 if(BUILD_TESTING)
+    add_executable(gltf_lifecycle_smoke tools/AssetCooker/tests/ModelLifecycleSmoke.cpp)
+    target_link_libraries(gltf_lifecycle_smoke PRIVATE mir::app mir::animation)
+    add_dependencies(gltf_lifecycle_smoke MjolnirEngine)
+    add_test(NAME smoke.gltf_lifecycle COMMAND gltf_lifecycle_smoke)
+    set_tests_properties(smoke.gltf_lifecycle PROPERTIES LABELS smoke TIMEOUT 120)
     foreach(game_name IN LISTS game_names)
         add_test(NAME smoke.${game_name}
             COMMAND MjolnirEngine --game games/${game_name} --frames 120)

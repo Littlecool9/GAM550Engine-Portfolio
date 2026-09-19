@@ -1,0 +1,59 @@
+{
+  "id": 1,
+  "parent": 0,
+  "components": [
+    {
+      "type": "Transform",
+      "fields": {
+        "position": [
+          -2.2,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "type": "WorldTransform",
+      "fields": {
+        "matrix": [
+          1,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          1
+        ]
+      }
+    },
+    {
+      "type": "ModelPlayer",
+      "fields": {
+        "modelName": "models/flag.glb",
+        "clip": 0,
+        "preview": true,
+        "speed": 1
+      }
+    }
+  ]
+}

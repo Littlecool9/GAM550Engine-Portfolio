@@ -11,6 +11,7 @@ target_link_libraries(engine_app
            mir::scene
            mir::script
     PRIVATE mir::input
+            mir::animation
             mir::audio
             mir::physics
             nlohmann_json::nlohmann_json
@@ -20,4 +21,5 @@ target_sources(engine_app PRIVATE
     src/app/App.cpp
     src/app/GameProject.cpp
     src/app/SceneResolve.cpp
+    src/app/ModelSystem.cpp
 )

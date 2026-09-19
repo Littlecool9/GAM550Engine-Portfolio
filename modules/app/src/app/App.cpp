@@ -10,6 +10,8 @@
 #include <app/App.h>
 
 #include "SceneResolve.h"
+#include "ModelSystem.h"
+#include <animation/ModelPlayer.h>
 #include <audio/AudioSystem.h>
 #include <core/EngineVersion.h>
 #include <core/ecs/ComponentRegistry.h>
@@ -69,7 +71,7 @@ namespace mir
         windowDesc.mWidth = desc.mWidth;
         windowDesc.mHeight = desc.mHeight;
         windowDesc.mTitle = mProject.mTitle.c_str();
-        windowDesc.mMaximized = true;
+        windowDesc.mMaximized = desc.mEnableEditorLayout;
         windowDesc.mCustomTitleBar = desc.mEnableEditorLayout;
         windowDesc.mStartHidden = true;
 
@@ -111,6 +113,9 @@ namespace mir
         RegisterRendererComponents();
         RegisterPhysicsComponents();
         RegisterScriptComponents();
+        RegisterModelPlayer();
+        mWorld.EmplaceResource<ModelDrawItems>();
+        mWorld.EmplaceResource<ModelMorphOverrides>();
 
         // defers structural change
         mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
@@ -133,6 +138,7 @@ namespace mir
 
         // should be before any other system in PostUpdate
         mScheduler.AddSystem<TransformPropagateSystem>(SystemPhase::PostUpdate);
+        mModelSystem = &mScheduler.AddSystem<ModelSystem>(SystemPhase::PostUpdate, mRenderer, Assets(), mProject.mAssetIdRoot);
 
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
@@ -239,6 +245,9 @@ namespace mir
         mScene = RestoreWorld(mWorld, mPlaySnapshot);
 
         // Play's entities are gone and the restored ones hold no handles yet
+        mModelSystem->Reset();
+        mWorld.Resource<ModelDrawItems>().items.clear();
+        mWorld.Resource<ModelMorphOverrides>().instances.clear();
         mRenderer.ReleaseSceneResources();
 
         ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
@@ -261,6 +270,9 @@ namespace mir
         UnloadScene(mWorld, mScene);
 
         // no scene entity holds a mesh or material handle now
+        if (mModelSystem) mModelSystem->Reset();
+        if (auto *draws = mWorld.TryResource<ModelDrawItems>()) draws->items.clear();
+        if (auto *overrides = mWorld.TryResource<ModelMorphOverrides>()) overrides->instances.clear();
         mRenderer.ReleaseSceneResources();
     }
 
@@ -380,10 +392,10 @@ namespace mir
 
             mRenderer.SetImGuiDrawData(mEditor.EndFrame());
 
-            mRenderSystem->SetViewportRect(0, mEditor.SceneViewportRect());
+            mRenderSystem->SetViewportRect(0, mDesc.mEnableEditorLayout ? mEditor.SceneViewportRect() : VkRect2D{});
 
             // Only feed EditorCamera input in Edit.
-            if (IsEditing(mWorld))
+            if (IsEditing(mWorld) && mDesc.mEnableEditorLayout)
             {
                 mEditor.UpdateCamera(dt);
                 mRenderSystem->SetExternalCamera(0, mEditor.SceneCamera().Matrix(), mEditor.SceneCamera().mLens);
@@ -401,6 +413,8 @@ namespace mir
             const uint32_t fixedSteps = mFixedTimestep.Advance(dt);
 
             SystemContext context = MakeContext(dt);
+            if (!mDesc.mCapturePath.empty() && mFrame + 1 == mDesc.mMaxFrames)
+                mRenderer.CaptureNextFrame(mDesc.mCapturePath);
             mScheduler.Update(context, fixedSteps, mFixedTimestep.mStep);
 
 

@@ -459,6 +459,7 @@ namespace mir
             // before mAllocator
             DestroyMeshes();
             DestroyMaterials();
+            DestroyModelResources(true);
 
             if (mPipelineLayout != VK_NULL_HANDLE)
             {
@@ -793,6 +794,7 @@ namespace mir
         const VkSurfaceFormatKHR surfaceFormat = ChooseSurfaceFormat(mPhysicalDevice, mSurface);
         const VkPresentModeKHR presentMode = ChoosePresentMode(mPhysicalDevice, mSurface);
         const VkExtent2D extent = ChooseExtent(caps, *mWindow);
+        mCanCapture = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
 
         uint32_t imageCount = caps.minImageCount + 1;
         if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount)
@@ -808,7 +810,7 @@ namespace mir
             .imageColorSpace = surfaceFormat.colorSpace,
             .imageExtent = extent,
             .imageArrayLayers = 1,
-            .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (mCanCapture ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0u),
             // One family does graphics and present, so no ownership transfers.
             .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
             .preTransform = caps.currentTransform,
@@ -986,6 +988,7 @@ namespace mir
 
     bool VulkanRenderer::CreatePipelineLayout()
     {
+        if (!CreateModelDescriptors()) return false;
         const VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .offset = 0,
@@ -993,7 +996,8 @@ namespace mir
 
         const VkPipelineLayoutCreateInfo layoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &mModelSetLayout,
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &pushConstantRange };
 
@@ -1035,20 +1039,23 @@ namespace mir
             .stride = sizeof(Vertex),
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX };
 
-        const std::array<VkVertexInputAttributeDescription, 3> vertexAttributes{ { { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, pos) },
+        const std::array<VkVertexInputAttributeDescription, 6> vertexAttributes{ { { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, pos) },
                                                                                  { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, color) },
-                                                                                 { .location = 2, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, normal) } } };
+                                                                                 { .location = 2, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, normal) },
+                                                                                 { .location = 3, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, uv) },
+                                                                                 { .location = 4, .binding = 0, .format = VK_FORMAT_R32_SFLOAT, .offset = offsetof(Vertex, alpha) },
+                                                                                 { .location = 5, .binding = 0, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = offsetof(Vertex, tangent) } } };
 
         const VkPipelineVertexInputStateCreateInfo vertexInput{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             .vertexBindingDescriptionCount = 1,
             .pVertexBindingDescriptions = &vertexBinding,
-            .vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexAttributes.size()),
+            .vertexAttributeDescriptionCount = desc.shaderName == "model" ? static_cast<uint32_t>(vertexAttributes.size()) : 3u,
             .pVertexAttributeDescriptions = vertexAttributes.data() };
 
         const VkPipelineInputAssemblyStateCreateInfo inputAssembly{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .topology = desc.topology,
             .primitiveRestartEnable = VK_FALSE };
 
         const VkPipelineViewportStateCreateInfo viewportState{
@@ -1064,7 +1071,7 @@ namespace mir
             .rasterizerDiscardEnable = VK_FALSE,
             .polygonMode = desc.polygonMode,
             .cullMode = desc.cullMode,
-            .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .frontFace = desc.frontFace,
             .depthBiasEnable = VK_FALSE,
             .lineWidth = 1.0f };
 
@@ -1074,14 +1081,20 @@ namespace mir
             .sampleShadingEnable = VK_FALSE };
 
         const VkPipelineColorBlendAttachmentState blendAttachment{
-            .blendEnable = VK_FALSE,
+            .blendEnable = desc.alphaMode == 2 ? VK_TRUE : VK_FALSE,
+            .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .colorBlendOp = VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .alphaBlendOp = VK_BLEND_OP_ADD,
             .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT };
 
         const VkPipelineDepthStencilStateCreateInfo depthStencil{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .depthTestEnable = VK_TRUE,
-            .depthWriteEnable = VK_TRUE,
+            .depthWriteEnable = desc.alphaMode == 2 ? VK_FALSE : VK_TRUE,
             .depthCompareOp = VK_COMPARE_OP_LESS,
             .depthBoundsTestEnable = VK_FALSE,
             .stencilTestEnable = VK_FALSE };
@@ -1146,7 +1159,9 @@ namespace mir
         if (pipeline == VK_NULL_HANDLE)
             return kNullMaterial;
 
-        mMaterials.push_back(GpuMaterial{ pipeline });
+        GpuMaterial material{pipeline};
+        if (!CreateMaterialSampler(material, desc)) { vkDestroyPipeline(mDevice, pipeline, nullptr); return kNullMaterial; }
+        mMaterials.push_back(material);
 
         MIR_LOG_INFO("Material created: {} (index {})", desc.shaderName, mMaterials.size() - 1);
         return MaterialHandle{ static_cast<uint32_t>(mMaterials.size() - 1), 0 };
@@ -1156,6 +1171,7 @@ namespace mir
     {
         for (GpuMaterial &material : mMaterials)
         {
+            if (material.sampler) vkDestroySampler(mDevice, material.sampler, nullptr);
             if (material.mPipeline != VK_NULL_HANDLE)
                 vkDestroyPipeline(mDevice, material.mPipeline, nullptr);
         }
@@ -1172,6 +1188,7 @@ namespace mir
 
         const std::size_t meshCount = mMeshes.size();
         DestroyMeshes();
+        DestroyModelResources(false);
 
         if (mDefaultMaterial.IsNull() || mDefaultMaterial.mIndex >= mMaterials.size())
         {
@@ -1188,6 +1205,7 @@ namespace mir
         {
             if (i == mDefaultMaterial.mIndex)
                 continue;
+            if (mMaterials[i].sampler) vkDestroySampler(mDevice, mMaterials[i].sampler, nullptr);
             if (mMaterials[i].mPipeline != VK_NULL_HANDLE)
                 vkDestroyPipeline(mDevice, mMaterials[i].mPipeline, nullptr);
             ++released;
@@ -1493,6 +1511,9 @@ namespace mir
             if (material == nullptr)
                 continue;
 
+            if (material->modelShader && !BindModelDescriptors(cmd, *material, item))
+                continue;
+
             if (material->mPipeline != boundPipeline)
             {
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, material->mPipeline);
@@ -1582,12 +1603,14 @@ namespace mir
 
         vkCmdEndRendering(cmd);
 
+        const bool captured = RecordCapture(cmd, imageIndex);
+
         // give it back
         ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            captured ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+            captured ? VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            captured ? VK_ACCESS_2_TRANSFER_READ_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
             VK_PIPELINE_STAGE_2_NONE, 0);
     }
 
@@ -1614,6 +1637,7 @@ namespace mir
 
         // wait for next image to comeback from framesin flight
         vkWaitSemaphores(mDevice, &waitInfo, UINT64_MAX);
+        ResetModelFrame(mFrameIndex);
 
         // Whole-pool reset, not per-buffer.
         vkResetCommandPool(mDevice, mCmdPools[mFrameIndex], 0);
@@ -1686,6 +1710,7 @@ namespace mir
             MIR_LOG_ERROR("vkQueueSubmit2 failed");
             return;
         }
+        if (mCaptureBuffer != VK_NULL_HANDLE) FinishCapture();
         const VkPresentInfoKHR presentInfo{
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .waitSemaphoreCount = 1,

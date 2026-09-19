@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <span>
 #include <vector>
+#include <filesystem>
 
 VK_DEFINE_HANDLE(VmaAllocator)
 VK_DEFINE_HANDLE(VmaAllocation)
@@ -52,7 +53,11 @@ namespace mir
 
         // kNullMaterial means "use the renderer's default material".
         MaterialHandle material;
+        std::span<const glm::vec4> deformation;
+        bool transparent = false;
     };
+
+    struct ModelDrawItems { std::vector<DrawItem> items; };
 
     // One camera's worth of draw items, clipped to a screen-space rect
     struct RenderView
@@ -78,6 +83,8 @@ namespace mir
 // Handle of a pipeline
 // kNullMaterial means default material
         MaterialHandle CreateMaterial(const MaterialDesc &desc);
+        uint32_t CreateTexture(uint32_t width, uint32_t height, std::span<const uint8_t> rgba);
+        void CaptureNextFrame(const std::filesystem::path &path) { mCapturePath = path; }
 
         // Destroys all meshes and materials but the default material. Old handles
         // are invalid and their indices get reused: call only after a scene unload.
@@ -111,6 +118,13 @@ namespace mir
         bool CreateRenderCompleteSemaphores();
         void DestroyRenderCompleteSemaphores();
         bool CreatePipelineLayout();
+        bool CreateModelDescriptors();
+        bool CreateMaterialSampler(GpuMaterial &material, const MaterialDesc &desc);
+        bool BindModelDescriptors(VkCommandBuffer cmd, const GpuMaterial &material, const DrawItem &item);
+        void ResetModelFrame(uint32_t frame);
+        void DestroyModelResources(bool shutdown);
+        bool RecordCapture(VkCommandBuffer cmd, uint32_t imageIndex);
+        void FinishCapture();
         // Builds one VkPipeline from a desc.
         VkPipeline BuildPipeline(const MaterialDesc &desc);
         void DestroyMeshes();
@@ -188,7 +202,22 @@ namespace mir
         struct GpuMaterial
         {
             VkPipeline mPipeline = VK_NULL_HANDLE;
+            VkSampler sampler = VK_NULL_HANDLE;
+            uint32_t texture = 0;
+            glm::vec4 parameters{};
+            bool modelShader = false;
         };
+
+        struct GpuTexture { VkImage image = VK_NULL_HANDLE; VmaAllocation allocation = VK_NULL_HANDLE; VkImageView view = VK_NULL_HANDLE; uint32_t levels = 1; };
+        struct ModelFrameBuffer { VkBuffer buffer; VmaAllocation allocation; };
+        std::vector<GpuTexture> mTextures;
+        VkDescriptorSetLayout mModelSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool mModelPools[kFramesInFlight]{};
+        std::vector<ModelFrameBuffer> mModelBuffers[kFramesInFlight];
+        std::filesystem::path mCapturePath;
+        VkBuffer mCaptureBuffer = VK_NULL_HANDLE;
+        VmaAllocation mCaptureAllocation = VK_NULL_HANDLE;
+        bool mCanCapture = false;
 
         std::vector<GpuMaterial> mMaterials;
 

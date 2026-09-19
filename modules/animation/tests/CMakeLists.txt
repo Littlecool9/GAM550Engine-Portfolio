@@ -1,0 +1,1 @@
+engine_add_module_tests(animation ModelAnimation.tests.cpp)

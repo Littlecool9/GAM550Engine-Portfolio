@@ -6,6 +6,7 @@ target_sources(engine_assets PRIVATE
     src/assets/AssetFileIo.cpp
     src/assets/AssetId.cpp
     src/assets/AssetManifest.cpp
+    src/assets/ModelAsset.cpp
 )
 
 target_link_libraries(engine_assets PUBLIC mir::core)

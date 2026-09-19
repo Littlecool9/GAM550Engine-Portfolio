@@ -36,5 +36,11 @@ namespace mir
 
         VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
         VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL;
+        VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        VkFrontFace frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        uint32_t texture = UINT32_MAX;
+        uint32_t wrapS = 10497, wrapT = 10497, minFilter = 9729, magFilter = 9729;
+        uint32_t alphaMode = 0;
+        float alphaCutoff = 0.5f;
     };
 }

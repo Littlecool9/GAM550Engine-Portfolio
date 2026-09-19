@@ -1,0 +1,10 @@
+{
+  "name": "glTF showcase",
+  "entities": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "nextId": 5
+}

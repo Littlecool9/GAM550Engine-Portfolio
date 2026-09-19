@@ -152,6 +152,10 @@ namespace mir
     {
         InputMap map;
 
+        std::error_code existsError;
+        if (!std::filesystem::exists(path, existsError) && !existsError)
+            return map;
+
         const std::optional<std::vector<std::byte>> bytes = ReadFileBytes(path);
         if (!bytes)
             return map;
