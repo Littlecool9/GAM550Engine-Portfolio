@@ -54,7 +54,6 @@ namespace mir::audio {
         }
         
 
-        // below this the orthogonalized up is degenerate and a fallback is used
         constexpr float kMinUpLengthSq = 1e-8f;
 
         AkSoundPosition MakeSoundPosition(const glm::vec3 &pos, const glm::vec3 &front, const glm::vec3 &up)
@@ -63,11 +62,6 @@ namespace mir::audio {
             const glm::vec3 f = d ? glm::vec3(0.0f, 0.0f, -1.0f) : glm::normalize(front);
             const glm::vec3 rawUp = d ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::normalize(up);
 
-            // Wwise wants front and top orthogonal as well as normalized, and
-            // rejects the whole transform otherwise - after which ApplyPosition
-            // warns once and every later position is dropped in silence. Scale
-            // alone normalizes away cleanly; shear, from a rotated child of a
-            // non-uniformly scaled parent, is what leaves these two off square.
             glm::vec3 ortho = rawUp - f * glm::dot(f, rawUp);
             if (glm::dot(ortho, ortho) <= kMinUpLengthSq)
             {
@@ -99,7 +93,6 @@ namespace mir::audio {
         }
 
         // Playing IDs handed out by PostEventOn that have not ended yet.
-        // Main thread only.
         std::unordered_set<AkPlayingID> g_livePlayingIds;
 
         // AK_EndOfEvent fires on Wwise's audio processing thread, so the callback
@@ -267,8 +260,7 @@ namespace mir::audio {
         if (!g_Initialized)
             return 0;
 
-        // every post asks for AK_EndOfEvent so the playing ID never goes stale:
-        // IsVoicePlaying is what tells an emitter its one-shot is over
+
         const AkPlayingID playingId = AK::SoundEngine::PostEvent(eventName,
             static_cast<AkGameObjectID>(gameObject), AK_EndOfEvent, &OnEventEnded);
 
@@ -292,14 +284,49 @@ namespace mir::audio {
         AK::SoundEngine::ExecuteActionOnPlayingID(AkActionOnEventType_Stop,
             static_cast<AkPlayingID>(playingId), static_cast<AkTimeMs>(fadeMs));
 
-        // the stop still fires AK_EndOfEvent; dropping it now keeps a caller from
-        // seeing a voice it has already stopped as playing for another frame
+        //the stop still fires AK_EndOfEvent, dropping it now keeps a caller from
+        //seeing a voice it has already stopped as playing for another frame
         g_livePlayingIds.erase(playingId);
     }
 
     bool IsVoicePlaying(uint32_t playingId)
     {
         return playingId != AK_INVALID_PLAYING_ID && g_livePlayingIds.count(playingId) != 0;
+    }
+
+    //al three take names rather than IDs, like PostEventOn, AK hashes the
+    //string at the call, so nothing here needs the banks string table.
+
+    bool SetRTPCValue(const char *rtpcName, float value, uint64_t gameObject)
+    {
+        if (!g_Initialized || rtpcName == nullptr)
+            return false;
+
+        //0 is the module's "no object" (RegisterEmitter hands out 1000 and up),
+        //and AK spells that AK_INVALID_GAME_OBJECT, which is its global scope.
+        const AkGameObjectID target = gameObject == 0
+            ? AK_INVALID_GAME_OBJECT
+            : static_cast<AkGameObjectID>(gameObject);
+
+        return Check(AK::SoundEngine::SetRTPCValue(rtpcName, static_cast<AkRtpcValue>(value), target),
+            "SetRTPCValue");
+    }
+
+    bool SetSwitch(const char *switchGroup, const char *switchState, uint64_t gameObject)
+    {
+        if (!g_Initialized || switchGroup == nullptr || switchState == nullptr || gameObject == 0)
+            return false;
+
+        return Check(AK::SoundEngine::SetSwitch(switchGroup, switchState,
+            static_cast<AkGameObjectID>(gameObject)), "SetSwitch");
+    }
+
+    bool SetState(const char *stateGroup, const char *state)
+    {
+        if (!g_Initialized || stateGroup == nullptr || state == nullptr)
+            return false;
+
+        return Check(AK::SoundEngine::SetState(stateGroup, state), "SetState");
     }
 
     void Terminate()
