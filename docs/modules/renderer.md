@@ -4,7 +4,7 @@ The whole Vulkan path — instance through swapchain, meshes, materials, depth a
 per-frame recording — plus the render-facing components and the one system that
 drives it from the ECS.
 
-`mir::renderer` · depends `mir::core`, `volk`, `glm` (public); `VMA`, `imgui`, `mir::assets`, `nlohmann_json` (private) · API `modules/renderer/include/renderer/` · maintainer Sumin Park · reviewed 2026-09-12
+`mir::renderer` · depends `mir::core`, `volk`, `glm` (public); `VMA`, `imgui`, `mir::serial` (private) · API `modules/renderer/include/renderer/` · maintainer Sumin Park · reviewed 2026-09-18
 
 ## Model
 
@@ -91,15 +91,22 @@ a project that is not shipping to consumers.
 
 **`RenderSettings` owns only `project_settings.json`'s `"rendering"` key**,
 the same way `InputMap` (see the `input` module) owns only `"input"`. Each
-type's `SaveFile` reads the file first and rewrites only its own section, so
-the two can be loaded and saved independently without one clobbering the
-other. A file from before sections existed has no `"rendering"` key, which
-`RenderSettings::LoadFile` reads the same as an empty one — defaults, not an
-error.
+type's `SaveFile` goes through `UpdateJsonFile` (see
+[serial.md](serial.md)), which rewrites only its own key and leaves every
+sibling key on disk untouched, so the two can be saved independently without
+one clobbering the other.
 
-`RenderSettings` reads and writes bytes through `assets/AssetFileIo.h`
-(`ReadFileBytes`/`WriteFileBytes`) rather than opening its own file streams,
-the same file-IO primitives `AssetManifest` and `AssetCache` use.
+`RenderSettings::LoadFile` returns `std::optional`. It is `nullopt` only when
+the file cannot be read as a JSON object at all. A readable file whose
+`"rendering"` key is absent, or holds something other than an object, loads as
+defaults instead — a file from before sections existed has no `"rendering"` key
+and is the ordinary case. `App::Initialize` turns the `nullopt` into defaults
+with `value_or`, so no system has to check.
+
+The key is read with `find` rather than nlohmann's `value`. `value` hands back
+the raw node when the key exists, and reading `"rayTracing"` out of a
+`"rendering"` that is `null` or a number throws `type_error 306`, which nothing
+on the startup path catches.
 
 **`volk` is compiled from source in this module**, so the platform defines are
 ours. VMA is configured with `VMA_STATIC_VULKAN_FUNCTIONS=0` and
@@ -196,6 +203,21 @@ No tests. Everything here needs a device, and the module is verified by running.
 
 ## Changed
 
+*2026-09-18* — **`RenderSettings` file IO moved to `mir::serial`.** Was:
+`RenderSettings.cpp` held its own parse, merge and dump cycle. Now it calls
+`ReadJsonFile`/`UpdateJsonFile` from [serial.md](serial.md). The `mir::assets`
+and `nlohmann_json` dependencies are gone with it, since nothing else in the
+module used either.
+
+`LoadFile` returns `std::optional<RenderSettings>` in the same change, so a
+missing or unreadable file is distinguishable from one whose `"rendering"`
+section simply is not written yet.
+
+`ReadSpirv` now reads through `core/fs/FileIO.h` as well. It copies into a
+`std::vector<uint32_t>` rather than reinterpreting the byte buffer, because
+`vkCreateShaderModule` requires `pCode` to be four-byte aligned and a
+`std::vector<std::byte>` is aligned to one.
+
 *2026-09-17* — **`RenderSettings` added, owning `project_settings.json`'s
 new `"rendering"` section.** Was: `project_settings.json` was `InputMap`'s
 file alone, root-level `"actions"` and nothing else. Now: the root has an
@@ -206,9 +228,7 @@ preserves whatever sibling section is already on disk. A pre-sections file
 (root-level `"actions"`, no `"input"`/`"rendering"` keys) still loads via
 `InputMap`'s back-compat path, and is migrated to the sectioned form the
 next time it saves. `RenderSettings` is loaded into a World resource in
-`App::Initialize`, alongside `InputMap`. Its file IO goes through
-`assets/AssetFileIo.h`'s `ReadFileBytes`/`WriteFileBytes` rather than its own
-streams, so this module now depends on `mir::assets`.
+`App::Initialize`, alongside `InputMap`.
 
 *2026-09-17* — **Device floor raised to Vulkan 1.4.** Was: instance/device
 requested 1.3. Now: both request 1.4 (`VulkanRenderer::VulkanVersion`); the

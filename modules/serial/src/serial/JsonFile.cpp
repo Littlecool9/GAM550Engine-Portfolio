@@ -11,6 +11,8 @@
 #include "core/fs/FileIO.h"
 #include "core/log/Log.h"
 
+#include <algorithm>
+#include <cctype>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -76,21 +78,29 @@ namespace mir
         std::error_code ec;
         if (std::filesystem::exists(path, ec))
         {
-            const std::optional<json> existing = ReadJsonFile(path);
-            if (!existing)
+            const std::optional<std::string> text = ReadText(path);
+            if (!text)
             {
-                MIR_LOG_ERROR("UpdateJsonFile: refusing to overwrite unreadable '{}'", path.string());
+                MIR_LOG_ERROR("UpdateJsonFile: cannot read '{}'", path.string());
                 return false;
             }
 
-            if (!existing->is_object())
+            // A blank file holds no sections worth protecting, so it starts a fresh
+            // object. Refusing it would leave the caller unable to ever save.
+            const bool blank = std::all_of(text->begin(), text->end(),
+                [](unsigned char c) { return std::isspace(c) != 0; });
+            if (!blank)
             {
-                MIR_LOG_ERROR("UpdateJsonFile: '{}' is JSON but not an object, refusing to overwrite",
-                    path.string());
-                return false;
-            }
+                const std::optional<json> existing = ParseJson(*text, path.string());
+                if (!existing || !existing->is_object())
+                {
+                    MIR_LOG_ERROR("UpdateJsonFile: refusing to overwrite '{}', not a readable JSON object",
+                        path.string());
+                    return false;
+                }
 
-            root = std::move(*existing);
+                root = std::move(*existing);
+            }
         }
 
         edit(root);

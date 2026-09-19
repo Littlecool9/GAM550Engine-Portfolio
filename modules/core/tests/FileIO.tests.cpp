@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <random>
 #include <sstream>
 #include <string>
@@ -116,6 +117,19 @@ TEST_CASE("WriteText and ReadText round trip", "[core][fileio]")
     const std::optional<std::string> read = mir::ReadText(path);
     REQUIRE(read.has_value());
     CHECK(*read == text);
+
+    std::filesystem::remove(path);
+}
+
+// vector<byte>::data() is null when empty; string(null, 0) is UB.
+TEST_CASE("ReadText on an empty file returns an empty string", "[core][fileio]")
+{
+    const std::filesystem::path path = MakeScratchFile();
+    REQUIRE(mir::WriteText(path, ""));
+
+    const std::optional<std::string> read = mir::ReadText(path);
+    REQUIRE(read.has_value());
+    CHECK(read->empty());
 
     std::filesystem::remove(path);
 }

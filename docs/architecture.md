@@ -71,6 +71,9 @@ the pieces depend on each other.
                        core           editortheme
 ```
 
+`serial` is not shown: `renderer`, `scene`, `input` and `app` reach `core`
+through it for anything touching a JSON file.
+
 | Module | Owns | Document |
 |---|---|---|
 | `core` | ECS, logging, paths, the surface contract | [core.md](modules/core.md) |
@@ -78,6 +81,7 @@ the pieces depend on each other.
 | `renderer` | The whole Vulkan path, and render-facing components | [renderer.md](modules/renderer.md) |
 | `assets` | Cooked blobs, manifest, cache | [assets.md](modules/assets.md) |
 | `scene` | Scene save and load | [scene.md](modules/scene.md) |
+| `serial` | JSON documents on disk | [serial.md](modules/serial.md) |
 | `script` | Lua embedding and ECS bindings | [script.md](modules/script.md) |
 | `audio` | Wwise lifetime and the per-frame pump | [audio.md](modules/audio.md) |
 | `editor` | ImGui context, backends and the editor shell | [editor.md](modules/editor.md) |

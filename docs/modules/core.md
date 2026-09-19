@@ -1,10 +1,10 @@
 # core
 
-The ECS, logging and asserts, executable-relative paths, and the surface contract
-between a window and a renderer. It knows nothing about windows, graphics APIs or
+The ECS, logging and asserts, executable-relative paths, file reading and
+writing, and the surface contract between a window and a renderer. It knows nothing about windows, graphics APIs or
 assets, and has to stay that way.
 
-`mir::core` · depends nothing engine-side; `glm` (public, in component headers), `spdlog` (private) · API `modules/core/include/core/` · maintainer Sumin Park · reviewed 2026-09-12
+`mir::core` · depends nothing engine-side; `glm` (public, in component headers), `spdlog` (private) · API `modules/core/include/core/` · maintainer Sumin Park · reviewed 2026-09-18
 
 ## Model
 
@@ -12,8 +12,9 @@ Four pieces share one library because they share one property: no engine
 dependencies.
 
 `ecs/` is by far the largest. `log/` gives logging and asserts without putting a
-logging library in a public header. `fs/` resolves paths against the executable
-rather than the working directory, so a copied build tree still runs.
+logging library in a public header. `fs/` does two things. It resolves paths against
+the executable rather than the working directory, so a copied build tree still
+runs, and it holds the engine's only file-reading and file-writing primitives.
 `platform/` declares `ISurfaceProvider`, which lets a renderer take a drawing
 surface from something without knowing that it is a window.
 
@@ -88,6 +89,9 @@ const ComponentOps &health = ComponentRegistry::Instance().RegisterRuntime("Heal
 | `ISurfaceProvider` | `platform/Surface.h` | Native handle plus dimensions |
 | `LaunchProcess`, `QuoteCommandLineArgument` | `platform/Process.h` | Start a process and optionally wait for its exit code; Windows argument quoting |
 | `ExecutableDir`, `ExecutablePath` | `fs/Paths.h` | The running executable's directory and full path |
+| `ReadBytes`, `ReadFirstBytes`, `ReadText` | `fs/FileIO.h` | A whole file, its first N bytes, or its text |
+| `WriteBytes`, `WriteText` | `fs/FileIO.h` | Bytes or text to a path |
+| `WriteBytesAtomic`, `WriteTextAtomic` | `fs/FileIO.h` | The same, through a temp file and a rename |
 | `InitLog`, `FlushLog`, `ShutdownLog` | `log/Log.h` | Logger lifetime; `ShutdownLog` releases the log file for another process |
 | `EngineMode`, `PlayState`, `EngineModeState` | `ecs/EngineMode.h` | Edit/Play and Play's Running/Paused sub-state, as a `World` resource |
 
@@ -207,20 +211,48 @@ components are present — `PlaySnapshot`'s capture/restore ([scene.md](scene.md
 is the one caller. A `Query` would miss any entity outside the types it was
 built for; this walks `EntityPool` directly instead.
 
+**Every file read and write in the engine goes through `fs/FileIO.h`.** No
+module opens its own `std::ifstream` or `std::ofstream`. One implementation means
+one place where a failed open, an unknown size and a short read are handled, and
+one place that logs which path failed.
+
+`ReadBytes` and `ReadFirstBytes` differ in more than how much they read.
+`ReadBytes` accepts any size, including zero, and logs a failure. `ReadFirstBytes`
+treats a file shorter than the requested count as a failure and stays silent,
+because its caller is probing a fixed-size header on a file that may legitimately
+not exist yet — `AssetCooker` reads 32 bytes to decide whether a cooked blob is
+stale rather than reading the whole asset.
+
+`ReadText` and `WriteText` open in binary mode. Text mode on Windows turns a
+newline into a carriage-return pair on the way out and back on the way in, which
+makes `file_size` disagree with what was written and makes the same file differ
+byte for byte between platforms.
+
+**Atomic writes are for content a person authored.** `WriteBytesAtomic` writes a
+sibling temp file and renames it over the target, so a reader sees either the
+whole old file or the whole new one. Settings and scenes use it. Cooked output
+uses plain `WriteBytes`, because a tool regenerates it.
+
+The temp file is a sibling rather than something in the system temp directory,
+since a rename is only atomic within one volume. Atomic here means no torn file
+is ever visible; it does not mean the write survives a power cut, because the
+flush reaches the operating system rather than the disk.
+
 **Logging is initialised in `main`, outside `App`**, so a construction failure
 inside `App` is still visible. `Trace` and `Debug` compile out in Release and are
 free to leave in hot paths.
 
 ## State
 
-*As of 2026-09-06.* Working: entities, archetype storage with tags, filtered and
+*As of 2026-09-18.* Working: entities, archetype storage with tags, filtered and
 runtime queries, deferred structural change, phase scheduling, typed resources,
 the transform hierarchy with lazy world-matrix resolution, the component registry
-with named field access, and script-declared component types.
+with named field access, script-declared component types, and the file-byte
+primitives in `fs/FileIO.h`.
 
 Tests in `modules/core/tests/`: `Archetype`, `Query`, `CommandBuffer`,
 `Resources`, `Transform`, `TransformHierarchy`, `System`, `ComponentRegistry`,
-`RuntimeQuery`, `Paths`, `Process`.
+`RuntimeQuery`, `Paths`, `Process`, `FileIO`.
 
 Logging and asserts have no tests of their own. Every other test exercises them,
 and their failure mode is loud.
@@ -251,6 +283,21 @@ hooks, and row migration when a script component's layout changes.
    `World::AddComponent` directly, rather than it being convention.
 
 ## Changed
+
+*2026-09-18* — **`fs/FileIO.h` added; `core` owns file bytes.** Was: the byte
+primitives lived in `assets/AssetFileIo.h`, so `input` and `renderer` linked
+`mir::assets` for the sole purpose of reading a file, and `scene`, `app` and the
+renderer's SPIR-V loader opened their own streams besides. Now: `ReadBytes`,
+`ReadFirstBytes`, `ReadText`, `WriteBytes`, `WriteText` and the two atomic
+writers live here, and `std::ifstream` appears nowhere in the engine outside
+`FileIO.cpp`.
+
+The functions lost their `File` infix in the move — `ReadFileBytes` became
+`ReadBytes` — and `ReadFilePrefix` became `ReadFirstBytes`, because `ReadPrefix`
+read as though it took a path prefix rather than a byte count.
+
+Interpreting those bytes is deliberately not here. JSON went to
+[serial.md](serial.md) instead, for the reason that document's Model gives.
 
 *2026-09-14* — **Starting processes, and handing the log file over.** Was: `core`
 could say where the executable lives but not start another one, and the log file

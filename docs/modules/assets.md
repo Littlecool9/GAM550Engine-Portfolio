@@ -68,8 +68,7 @@ forces a recook instead of a silent mismatch at load.
 Everything cooks as a raw passthrough blob. The type tag exists, and nothing sets
 it to anything but `kRawAssetTypeTag`.
 
-Tests in `modules/assets/tests/`: `AssetBlob`, `AssetCache`, `AssetFileIo`,
-`AssetManifest`.
+Tests in `modules/assets/tests/`: `AssetBlob`, `AssetCache`, `AssetManifest`.
 
 ## Backlog
 
@@ -83,3 +82,14 @@ Tests in `modules/assets/tests/`: `AssetBlob`, `AssetCache`, `AssetFileIo`,
    it can be added later without changing any ids.
 4. **GUIDs in sidecar files**, if renames start to hurt. They survive a rename,
    at the cost of a file per asset and a registry to keep in sync.
+
+## Changed
+
+*2026-09-18* — **The byte primitives left this module.**
+`assets/AssetFileIo.h` is gone; its functions are in `core/fs/FileIO.h`, and
+[core.md](core.md) carries that entry. Nothing about the blob or manifest formats
+changed.
+
+`AssetManifest` now exports `kAssetManifestFileName`. `app` and `AssetCooker`
+each spelled `"manifest.blob"` independently, so a rename in one would have left
+the other reading a file that is not there.

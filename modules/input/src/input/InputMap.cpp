@@ -1,5 +1,7 @@
 ﻿#include "input/InputMap.h"
 
+#include <core/log/Log.h>
+
 #include <serial/JsonFile.h>
 
 #include <nlohmann/json.hpp>
@@ -140,27 +142,49 @@ namespace mir
         return const_cast<InputMap *>(this)->Find(name);
     }
 
-    InputMap InputMap::LoadFile(const std::filesystem::path &path)
+    std::optional<InputMap> InputMap::LoadFile(const std::filesystem::path &path)
     {
-        InputMap map;
-
         const std::optional<json> root = ReadJsonFile(path);
         if (!root || !root->is_object())
-            return map;
+            return std::nullopt;
+
+        InputMap map;
 
         // Falls back to the document root so a file written before the sectioned
         // schema (actions at top level) still loads.
         const auto inputIt = root->find("input");
         const json &inputRoot = inputIt != root->end() ? *inputIt : *root;
 
+        // json::value() throws type_error 306 on a non-object receiver, so every
+        // node is checked before it is read. A junk section is a content error in
+        // one part of a readable file, so it loads as empty rather than nullopt.
+        if (!inputRoot.is_object())
+        {
+            MIR_LOG_ERROR("InputMap::LoadFile: '{}' has an \"input\" value that is not an object", path.string());
+            return map;
+        }
+
         for (const json &actionNode : inputRoot.value("actions", json::array()))
         {
+            if (!actionNode.is_object())
+            {
+                MIR_LOG_WARN("InputMap::LoadFile: '{}' has a non-object action, skipped", path.string());
+                continue;
+            }
+
             InputAction &action = map.AddAction(
                 actionNode.value("name", ""),
                 ParseActionType(actionNode.value("type", std::string("Button"))));
 
             for (const json &bindingNode : actionNode.value("bindings", json::array()))
+            {
+                if (!bindingNode.is_object())
+                {
+                    MIR_LOG_WARN("InputMap::LoadFile: '{}' has a non-object binding, skipped", path.string());
+                    continue;
+                }
                 action.bindings.push_back(BindingFromJson(bindingNode));
+            }
         }
 
         return map;

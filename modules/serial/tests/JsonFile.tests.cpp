@@ -128,6 +128,38 @@ TEST_CASE("UpdateJsonFile leaves sections it did not touch alone", "[serial][jso
 
 // A typo in a hand-edited settings file must not cost the user every other
 // section in it.
+// An empty file parses as parse_error 101, so refusing it would leave Project
+// Settings permanently unable to save. A blank file holds nothing to protect.
+TEST_CASE("UpdateJsonFile writes over an empty file", "[serial][jsonFile]")
+{
+    const std::filesystem::path path = MakeScratchFile();
+    REQUIRE(mir::WriteText(path, ""));
+
+    REQUIRE(mir::UpdateJsonFile(path, [](nlohmann::json &root)
+                                { root["rendering"] = nlohmann::json{{"rayTracing", true}}; }));
+
+    const std::optional<nlohmann::json> read = mir::ReadJsonFile(path);
+    REQUIRE(read.has_value());
+    CHECK(read->at("rendering").at("rayTracing").get<bool>());
+
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("UpdateJsonFile writes over a whitespace-only file", "[serial][jsonFile]")
+{
+    const std::filesystem::path path = MakeScratchFile();
+    REQUIRE(mir::WriteText(path, "  \n\t\n  "));
+
+    REQUIRE(mir::UpdateJsonFile(path, [](nlohmann::json &root)
+                                { root["input"] = nlohmann::json::object(); }));
+
+    const std::optional<nlohmann::json> read = mir::ReadJsonFile(path);
+    REQUIRE(read.has_value());
+    CHECK(read->contains("input"));
+
+    std::filesystem::remove(path);
+}
+
 TEST_CASE("UpdateJsonFile refuses to overwrite a malformed file", "[serial][jsonFile]")
 {
     const std::filesystem::path path = MakeScratchFile();

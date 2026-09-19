@@ -95,6 +95,10 @@ namespace mir
         if (!bytes)
             return std::nullopt;
 
+        // data() is null for an empty vector, and string(null, 0) is UB
+        if (bytes->empty())
+            return std::string{};
+
         return std::string(reinterpret_cast<const char *>(bytes->data()), bytes->size());
     }
 

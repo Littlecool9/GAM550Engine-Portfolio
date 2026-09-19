@@ -51,7 +51,7 @@ namespace mir
         mProjectToOpen.reset();
         mSwitchHookFired = false;
         mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
-  
+
         audio::Init();
 
         EnsureDpiAware();
@@ -115,8 +115,8 @@ namespace mir
         // defers structural change
         mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
 
-        mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mProject.mProjectSettingsPath));
-        mWorld.EmplaceResource<RenderSettings>(RenderSettings::LoadFile(mProject.mProjectSettingsPath));
+        mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mProject.mProjectSettingsPath).value_or(InputMap{}));
+        mWorld.EmplaceResource<RenderSettings>(RenderSettings::LoadFile(mProject.mProjectSettingsPath).value_or(RenderSettings{}));
         mWorld.EmplaceResource<InputState>();
         mWorld.EmplaceResource<EngineModeState>();
 
@@ -140,7 +140,7 @@ namespace mir
         mAvailableProjects = DiscoverGameProjects();
         mProjectMenu.clear();
         for (const GameProject &project : mAvailableProjects)
-            mProjectMenu.push_back(ProjectMenuEntry{project.mDir, project.mName});
+            mProjectMenu.push_back(ProjectMenuEntry{ project.mDir, project.mName });
 
         mSplash.SetProgress("Loading scene...", 0.9f);
         mScene = mir::NewScene("untitled");
@@ -399,7 +399,7 @@ namespace mir
 
 
             audio::Update();
-            
+
             ++mFrame;
 
             RunSwitchHook();
@@ -423,7 +423,7 @@ namespace mir
 
 
         audio::Terminate();
-        
+
         mScheduler.Reset();
 
         // Cache before manifest
