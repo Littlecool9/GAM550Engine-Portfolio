@@ -8,10 +8,10 @@
  */
 #include <app/GameProject.h>
 
-#include <assets/AssetFileIo.h>
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
 #include <renderer/RenderSettings.h>
+#include <scene/SceneIO.h>
 
 #include <serial/JsonFile.h>
 
@@ -98,7 +98,7 @@ namespace mir
             project.mTitle = json->value("title", project.mTitle);
             assetsRoot = json->value("assetsRoot", assetsRoot);
             sceneDir = json->value("sceneDir", sceneDir);
-            soundBanksRoot = json.value("soundBanksRoot", soundBanksRoot);
+            soundBanksRoot = json->value("soundBanksRoot", soundBanksRoot);
         }
 
         if (project.mName.empty())
@@ -183,22 +183,17 @@ namespace mir
         }
 
         const nlohmann::json manifest{ { "name", name },{ "title", "MjolnirEngine - " + name } };
-        const std::string manifestDump = manifest.dump(2);
-        const std::span<const std::byte> manifestBytes(
-            reinterpret_cast<const std::byte *>(manifestDump.data()), manifestDump.size());
 
         // same shape as games/EmptyScene/scenes/default/scene.json
         const nlohmann::json scene{ { "entities", nlohmann::json::array() },{ "name", "default" },{ "nextId", 1 } };
-        const std::string sceneDump = scene.dump(2);
-        const std::span<const std::byte> sceneBytes(
-            reinterpret_cast<const std::byte *>(sceneDump.data()), sceneDump.size());
 
-        if (!WriteFileBytes(root / "game.json", manifestBytes) || !WriteFileBytes(sceneDir / "scene.json", sceneBytes))
+        if (!WriteJsonFile(root / kGameManifestFileName, manifest) ||
+            !WriteJsonFile(sceneDir / kSceneManifestFileName, scene))
         {
             MIR_LOG_ERROR("CreateGameProject: could not write 'games/{}' manifest/scene", name);
             return false;
         }
 
-        return RenderSettings{ .rayTracing = useRayTracing }.SaveFile(root / "project_settings.json");
+        return RenderSettings{ .rayTracing = useRayTracing }.SaveFile(root / kProjectSettingsFileName);
     }
 }
