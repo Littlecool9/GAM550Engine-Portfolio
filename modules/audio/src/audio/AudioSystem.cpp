@@ -54,7 +54,6 @@ namespace mir::audio {
         }
         
 
-        // below this the orthogonalized up is degenerate and a fallback is used
         constexpr float kMinUpLengthSq = 1e-8f;
 
         AkSoundPosition MakeSoundPosition(const glm::vec3 &pos, const glm::vec3 &front, const glm::vec3 &up)
@@ -63,15 +62,10 @@ namespace mir::audio {
             const glm::vec3 f = d ? glm::vec3(0.0f, 0.0f, -1.0f) : glm::normalize(front);
             const glm::vec3 rawUp = d ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::normalize(up);
 
-            // Wwise wants front and top orthogonal as well as normalized, and
-            // rejects the whole transform otherwise - after which ApplyPosition
-            // warns once and every later position is dropped in silence. Scale
-            // alone normalizes away cleanly; shear, from a rotated child of a
-            // non-uniformly scaled parent, is what leaves these two off square.
             glm::vec3 ortho = rawUp - f * glm::dot(f, rawUp);
             if (glm::dot(ortho, ortho) <= kMinUpLengthSq)
             {
-                // up ran parallel to front: any perpendicular will do
+
                 const bool alignedWithY = f.y > 0.99f || f.y < -0.99f;
                 const glm::vec3 reference = alignedWithY ? glm::vec3(1.0f, 0.0f, 0.0f)
                                                          : glm::vec3(0.0f, 1.0f, 0.0f);
@@ -98,13 +92,9 @@ namespace mir::audio {
             }
         }
 
-        // Playing IDs handed out by PostEventOn that have not ended yet.
-        // Main thread only.
+
         std::unordered_set<AkPlayingID> g_livePlayingIds;
 
-        // AK_EndOfEvent fires on Wwise's audio processing thread, so the callback
-        // only parks the ID here and Update() applies it on the main thread. The
-        // lock covers a push or a swap and nothing else.
         std::mutex g_endedMutex;
         std::vector<AkPlayingID> g_endedPlayingIds;
         std::vector<AkPlayingID> g_endedScratch;
@@ -233,7 +223,6 @@ namespace mir::audio {
 
     void UnregisterEmitter(uint64_t gameObj)
     {
-        //0 = unregistered, akinvalid unregisters every object including listener aka dont change
         if (!g_Initialized || gameObj == 0 || gameObj == AK_INVALID_GAME_OBJECT)
             return;
 
@@ -267,8 +256,6 @@ namespace mir::audio {
         if (!g_Initialized)
             return 0;
 
-        // every post asks for AK_EndOfEvent so the playing ID never goes stale:
-        // IsVoicePlaying is what tells an emitter its one-shot is over
         const AkPlayingID playingId = AK::SoundEngine::PostEvent(eventName,
             static_cast<AkGameObjectID>(gameObject), AK_EndOfEvent, &OnEventEnded);
 
@@ -282,8 +269,7 @@ namespace mir::audio {
         return playingId;
     }
 
-    //unregistering a game object does NOT stop its sounds,
-    //so a loop has to be stopped through its playing ID.
+
     void StopPlaying(uint32_t playingId, int fadeMs)
     {
         if (!g_Initialized || playingId == AK_INVALID_PLAYING_ID)
@@ -292,8 +278,6 @@ namespace mir::audio {
         AK::SoundEngine::ExecuteActionOnPlayingID(AkActionOnEventType_Stop,
             static_cast<AkPlayingID>(playingId), static_cast<AkTimeMs>(fadeMs));
 
-        // the stop still fires AK_EndOfEvent; dropping it now keeps a caller from
-        // seeing a voice it has already stopped as playing for another frame
         g_livePlayingIds.erase(playingId);
     }
 
