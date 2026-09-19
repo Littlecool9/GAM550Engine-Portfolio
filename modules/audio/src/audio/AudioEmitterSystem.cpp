@@ -22,8 +22,6 @@ namespace mir
     {
         constexpr int kStopFadeMs = 10; // a hard stop mid-waveform clicks
 
-        // Wwise stops nothing when a game object is unregistered, so every path
-        // that ends a session or an entity has to release the voice itself.
         void StopVoice(AudioEmitter &emitter)
         {
             if (emitter.mPlayingId == 0)
@@ -73,7 +71,7 @@ namespace mir
 
                 if (sessionOver)
                 {
-                    // a looping voice outlives the session unless it is stopped here
+                    // a looping audio outlives the session unless it is stopped here
                     StopVoice(emitter);
                     emitter.mStarted = false;
                 }

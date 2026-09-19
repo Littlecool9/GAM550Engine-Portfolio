@@ -69,8 +69,13 @@
         "shape": 0
       },
       "type": "RigidBody"
+    },
+    {
+      "fields": {},
+      "type": "AudioListener"
     }
   ],
   "id": 2,
   "parent": 0
+
 }

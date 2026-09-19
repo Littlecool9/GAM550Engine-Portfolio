@@ -54,11 +54,31 @@ namespace mir::audio {
         }
         
 
+        // below this the orthogonalized up is degenerate and a fallback is used
+        constexpr float kMinUpLengthSq = 1e-8f;
+
         AkSoundPosition MakeSoundPosition(const glm::vec3 &pos, const glm::vec3 &front, const glm::vec3 &up)
         {
             const bool d = glm::dot(front, front) <= 0.0f || glm::dot(up, up) <= 0.0f;
             const glm::vec3 f = d ? glm::vec3(0.0f, 0.0f, -1.0f) : glm::normalize(front);
-            const glm::vec3 u = d ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::normalize(up);
+            const glm::vec3 rawUp = d ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::normalize(up);
+
+            // Wwise wants front and top orthogonal as well as normalized, and
+            // rejects the whole transform otherwise - after which ApplyPosition
+            // warns once and every later position is dropped in silence. Scale
+            // alone normalizes away cleanly; shear, from a rotated child of a
+            // non-uniformly scaled parent, is what leaves these two off square.
+            glm::vec3 ortho = rawUp - f * glm::dot(f, rawUp);
+            if (glm::dot(ortho, ortho) <= kMinUpLengthSq)
+            {
+                // up ran parallel to front: any perpendicular will do
+                const bool alignedWithY = f.y > 0.99f || f.y < -0.99f;
+                const glm::vec3 reference = alignedWithY ? glm::vec3(1.0f, 0.0f, 0.0f)
+                                                         : glm::vec3(0.0f, 1.0f, 0.0f);
+                ortho = reference - f * glm::dot(f, reference);
+            }
+
+            const glm::vec3 u = glm::normalize(ortho);
 
             AkSoundPosition out;
             out.Set(pos.x, pos.y, -pos.z, f.x, f.y, -f.z, u.x, u.y, -u.z);
@@ -262,8 +282,8 @@ namespace mir::audio {
         return playingId;
     }
 
-    // Unregistering a game object does NOT stop its sounds - it only gives up
-    // control of them - so a loop has to be stopped through its playing ID.
+    //unregistering a game object does NOT stop its sounds,
+    //so a loop has to be stopped through its playing ID.
     void StopPlaying(uint32_t playingId, int fadeMs)
     {
         if (!g_Initialized || playingId == AK_INVALID_PLAYING_ID)
