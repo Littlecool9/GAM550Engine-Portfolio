@@ -1,3 +1,13 @@
+/**
+ * @file main.cpp
+ * @author Rahul Nair
+ * @brief Cooks a game's raw assets into the manifest + blob files the
+ *        runtime AssetCache loads.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include <assets/AssetBlob.h>
 #include <core/fs/FileIO.h>
 #include <assets/AssetId.h>
@@ -40,6 +50,11 @@ namespace
     bool IsShaderSource(const std::filesystem::path &path)
     {
         return path.extension() == ".slang";
+    }
+
+    bool IsSoundBank(const std::filesystem::path &path)
+    {
+        return path.extension() == ".bnk" || path.extension() == ".wem";
     }
 
     bool BlobMatchesCurrentFormat(const std::filesystem::path &cooked)
@@ -140,6 +155,8 @@ int main(int argc, char **argv)
                 continue;
 
             if (IsShaderSource(entry.path()))
+                continue;
+            if (IsSoundBank(entry.path()))
                 continue;
 
             const std::filesystem::path relative = std::filesystem::relative(entry.path(), rootPath);

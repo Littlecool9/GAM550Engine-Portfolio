@@ -59,15 +59,24 @@ namespace mir
                                        const glm::quat &rotation = kIdentityRotation);
 
         void DestroyBody(BodyHandle body);
-
         glm::vec3 BodyPosition(BodyHandle body) const;
         glm::quat BodyRotation(BodyHandle body) const;
         glm::vec3 BodyLinearVelocity(BodyHandle body) const;
-
+        glm::vec3 BodyAngularVelocity(BodyHandle body) const;
         void SetBodyTransform(BodyHandle body, const glm::vec3 &position, const glm::quat &rotation);
-
         void SetBodyLinearVelocity(BodyHandle body, const glm::vec3 &velocity);
+        void SetBodyAngularVelocity(BodyHandle body, const glm::vec3 &velocity);
+        void AddLinearVelocity(BodyHandle body, const glm::vec3 &velocity);
+        void AddAngularVelocity(BodyHandle body, const glm::vec3 &velocity);
+
+        // Force and torque accumulate until the next Step() consumes and clears
+        // them, so a continuous push has to be re-applied every step. 
+        void AddForce(BodyHandle body, const glm::vec3 &force);
+        void AddTorque(BodyHandle body, const glm::vec3 &torque);
         void AddImpulse(BodyHandle body, const glm::vec3 &impulse);
+        void AddAngularImpulse(BodyHandle body, const glm::vec3 &angularImpulse);
+        void AddForceAtOffset(BodyHandle body, const glm::vec3 &force, const glm::vec3 &localOffset);
+        void AddImpulseAtOffset(BodyHandle body, const glm::vec3 &impulse, const glm::vec3 &localOffset);
 
         std::size_t BodyCount() const;
 

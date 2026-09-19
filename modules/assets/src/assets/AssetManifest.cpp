@@ -1,3 +1,13 @@
+/**
+ * @file AssetManifest.cpp
+ * @author Rahul Nair
+ * @brief The cooked asset manifest - AssetId -> type/version/path, built at
+ *        cook time and loaded at runtime.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include "assets/AssetManifest.h"
 
 #include "assets/AssetBlob.h"

@@ -1,4 +1,15 @@
-﻿#include "input/InputMap.h"
+﻿/**
+ * @file InputMap.cpp
+ * @author Rahul Nair
+ * @brief The authored action -> binding table (Project Settings' input
+ *        section). A World resource - InputSystem reads it every frame, so
+ *        editing it live (e.g. from a future rebind UI) takes effect at once.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
+#include "input/InputMap.h"
 
 #include <core/log/Log.h>
 

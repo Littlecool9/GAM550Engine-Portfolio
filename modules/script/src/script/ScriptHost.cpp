@@ -1,7 +1,17 @@
+/**
+ * @file ScriptHost.cpp
+ * @author Rahul Nair
+ * @brief Lua-backed IScriptHost
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include <script/ScriptHost.h>
 
 #include "bindings/EntityBindings.h"
 #include "bindings/InputBindings.h"
+#include "bindings/PhysicsBindings.h"
 #include "bindings/WorldBindings.h"
 
 #include <core/ecs/World.h>
@@ -43,7 +53,9 @@ namespace mir
 
             RegisterEntityBindings(mLua);
             RegisterWorldBindings(mLua);
-            RegisterInputBindings(mLua); // extends World - must come after RegisterWorldBindings
+
+            RegisterInputBindings(mLua);
+            RegisterPhysicsBindings(mLua);
         }
 
         struct ScriptInstance

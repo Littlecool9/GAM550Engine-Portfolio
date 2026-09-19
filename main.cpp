@@ -1,3 +1,14 @@
+/**
+ * @file main.cpp
+ * @author Sumin Park
+ * @brief Process entry point - parses launch args, resolves the game
+ *        project, and drives App through one run (including a
+ *        project-switch relaunch).
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include <app/App.h>
 #include <app/GameProject.h>
 #include <core/fs/Paths.h>

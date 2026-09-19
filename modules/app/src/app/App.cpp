@@ -10,7 +10,9 @@
 #include <app/App.h>
 
 #include "SceneResolve.h"
+#include <audio/AudioEmitterSystem.h>
 #include <audio/AudioSystem.h>
+#include <audio/ComponentRegistration.h>
 #include <core/EngineVersion.h>
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/DeferredAccess.h>
@@ -52,7 +54,7 @@ namespace mir
         mSwitchHookFired = false;
         mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
 
-        audio::Init();
+        audio::Init(mProject.mSoundBankDir);
 
         EnsureDpiAware();
 
@@ -91,7 +93,7 @@ namespace mir
         }
 
         mSplash.SetProgress("Initializing editor...", 0.5f);
-        if (!mEditor.Initialize(*mWindow, mRenderer, mProject.mProjectSettingsPath))
+        if (!mEditor.Initialize(*mWindow, mRenderer, mProject.mProjectSettingsPath, mWorld))
         {
             MIR_LOG_ERROR("Editor initialization failed");
             mRenderer.Shutdown();
@@ -111,6 +113,7 @@ namespace mir
         RegisterRendererComponents();
         RegisterPhysicsComponents();
         RegisterScriptComponents();
+        RegisterAudioComponents();
 
         // defers structural change
         mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
@@ -133,6 +136,9 @@ namespace mir
 
         // should be before any other system in PostUpdate
         mScheduler.AddSystem<TransformPropagateSystem>(SystemPhase::PostUpdate);
+
+        // after TransformPropagateSystem: it reads the WorldTransform that system writes
+        mScheduler.AddSystem<AudioEmitterSystem>(SystemPhase::PostUpdate);
 
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
@@ -342,7 +348,7 @@ namespace mir
             {
                 const EditorActions actions = mEditor.DrawLayout(
                     mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<RenderSettings>(),
-                    mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir);
+                    mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir, mWorld);
 
                 switch (actions.mScene)
                 {
@@ -370,6 +376,12 @@ namespace mir
 
                 if (!actions.mOpenProject.empty())
                     RequestOpenProject(actions.mOpenProject);
+
+                if (!actions.mCreateProjectName.empty() &&
+                    CreateGameProject(actions.mCreateProjectName, actions.mCreateProjectRayTracing))
+                {
+                    RequestOpenProject("games/" + actions.mCreateProjectName);
+                }
             }
 
             mRenderer.SetImGuiDrawData(mEditor.EndFrame());

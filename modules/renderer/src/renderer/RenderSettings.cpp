@@ -1,3 +1,13 @@
+/**
+ * @file RenderSettings.cpp
+ * @author Rahul Nair
+ * @brief Project Settings' "rendering" section. A World resource, loaded and
+ *        saved the same way InputMap is (see input/InputMap.h).
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include "renderer/RenderSettings.h"
 
 #include <serial/JsonFile.h>

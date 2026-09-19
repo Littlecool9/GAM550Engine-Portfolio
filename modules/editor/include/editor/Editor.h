@@ -12,6 +12,8 @@
 #include <core/ecs/EngineMode.h>
 #include <core/platform/Surface.h>
 #include <editor/EditorCamera.h>
+#include <editor/panels/HierarchyPanel.h>
+#include <editor/panels/InspectorPanel.h>
 #include <editor/panels/LogPanel.h>
 #include <editor/panels/ProjectSettingsPanel.h>
 #include <renderer/RenderSettings.h>
@@ -39,6 +41,13 @@ namespace mir
         Stop,
     };
 
+    enum class GizmoOperation
+    {
+        Translate,
+        Rotate,
+        Scale,
+    };
+
     struct ProjectMenuEntry
     {
         std::string mDir;
@@ -49,6 +58,11 @@ namespace mir
     {
         SceneMenuAction mScene = SceneMenuAction::None;
         std::string mOpenProject;
+
+        // non-empty mCreateProjectName requests CreateGameProject(name, RT),
+        // then the same open-into-new-directory path as mOpenProject
+        std::string mCreateProjectName;
+        bool mCreateProjectRayTracing = false;
     };
 
     class Editor
@@ -62,7 +76,7 @@ namespace mir
         Editor(Editor &&) = delete;
         Editor &operator=(Editor &&) = delete;
 
-        bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath);
+        bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath, World &world);
 
         void Shutdown(VulkanRenderer &renderer);
 
@@ -70,7 +84,7 @@ namespace mir
 
         EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                                  const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-                                 std::string_view currentProject);
+                                 std::string_view currentProject, World &world);
 
         ImDrawData *EndFrame();
 
@@ -89,6 +103,8 @@ namespace mir
         void DrawTitleBar();
         void DrawOpenProjectMenu(std::span<const ProjectMenuEntry> projects, std::string_view currentProject);
         void DrawOpenProjectConfirm(EditorActions &actions);
+        void DrawViewportGizmo(const EngineModeState &mode, World &world);
+        void DrawNewProjectModal(EditorActions &actions, std::span<const ProjectMenuEntry> projects);
 
         SceneMenuAction DrawPlayControls(const EngineModeState &mode);
 
@@ -101,11 +117,20 @@ namespace mir
         Window *mWindow = nullptr;
         std::vector<PixelRect> mTitleBarInteractiveRects;
         LogPanel mLogPanel;
+        HierarchyPanel mHierarchyPanel;
+        InspectorPanel mInspectorPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
         EditorCamera mCamera;
 
         // waiting on the confirm dialog
         ProjectMenuEntry mPendingProject;
         bool mOpenConfirmRequested = false;
+
+        GizmoOperation mGizmoOperation = GizmoOperation::Translate;
+
+        // New Project modal
+        bool mNewProjectRequested = false;
+        char mNewProjectName[64] = {};
+        bool mNewProjectRayTracing = false;
     };
 }

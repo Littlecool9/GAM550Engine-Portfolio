@@ -1,3 +1,13 @@
+/**
+ * @file AssetId.cpp
+ * @author Rahul Nair
+ * @brief Content-addressed asset identity - hashing a path (or raw bytes)
+ *        into an AssetId.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include "assets/AssetId.h"
 
 namespace mir

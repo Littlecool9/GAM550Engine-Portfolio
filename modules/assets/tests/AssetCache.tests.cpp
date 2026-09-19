@@ -1,3 +1,13 @@
+/**
+ * @file AssetCache.tests.cpp
+ * @author Rahul Nair
+ * @brief Tests for assets/AssetCache: load/get/invalidate against a
+ *        manifest-backed cooked root.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include <assets/AssetCache.h>
 
 #include <assets/AssetBlob.h>

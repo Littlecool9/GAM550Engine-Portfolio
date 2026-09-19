@@ -8,8 +8,10 @@
  */
 #include <app/GameProject.h>
 
+#include <assets/AssetFileIo.h>
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
+#include <renderer/RenderSettings.h>
 
 #include <serial/JsonFile.h>
 
@@ -87,6 +89,7 @@ namespace mir
         // assetsRoot default must match CMakeLists.txt
         std::string assetsRoot = "assets";
         std::string sceneDir = "scenes/default";
+        std::string soundBanksRoot = "assets/audio/SoundBanks";
 
         // A malformed manifest keeps the defaults; ReadJsonFile logged why.
         if (const std::optional<nlohmann::json> json = ReadJsonFile(manifestPath); json && json->is_object())
@@ -95,6 +98,7 @@ namespace mir
             project.mTitle = json->value("title", project.mTitle);
             assetsRoot = json->value("assetsRoot", assetsRoot);
             sceneDir = json->value("sceneDir", sceneDir);
+            soundBanksRoot = json.value("soundBanksRoot", soundBanksRoot);
         }
 
         if (project.mName.empty())
@@ -108,6 +112,8 @@ namespace mir
         project.mAssetIdRoot = std::move(idRoot);
         project.mSceneDir = root / sceneDir;
         project.mProjectSettingsPath = root / kProjectSettingsFileName;
+        project.mSoundBankDir = root / soundBanksRoot;
+
         return project;
     }
 
@@ -148,5 +154,51 @@ namespace mir
                 return a.mDir < b.mDir;
             });
         return projects;
+    }
+
+    bool CreateGameProject(const std::string &name, bool useRayTracing)
+    {
+        if (name.empty() || name.find('/') != std::string::npos || name.find('\\') != std::string::npos ||
+            name == "." || name == "..")
+        {
+            MIR_LOG_ERROR("CreateGameProject: '{}' is not a valid project name", name);
+            return false;
+        }
+
+        const std::filesystem::path root = ExecutableDir() / "games" / name;
+
+        std::error_code ec;
+        if (std::filesystem::exists(root, ec))
+        {
+            MIR_LOG_ERROR("CreateGameProject: 'games/{}' already exists", name);
+            return false;
+        }
+
+        const std::filesystem::path sceneDir = root / "scenes" / "default";
+        if (!std::filesystem::create_directories(sceneDir, ec) ||
+            !std::filesystem::create_directories(root / "assets", ec))
+        {
+            MIR_LOG_ERROR("CreateGameProject: could not create 'games/{}': {}", name, ec.message());
+            return false;
+        }
+
+        const nlohmann::json manifest{ { "name", name },{ "title", "MjolnirEngine - " + name } };
+        const std::string manifestDump = manifest.dump(2);
+        const std::span<const std::byte> manifestBytes(
+            reinterpret_cast<const std::byte *>(manifestDump.data()), manifestDump.size());
+
+        // same shape as games/EmptyScene/scenes/default/scene.json
+        const nlohmann::json scene{ { "entities", nlohmann::json::array() },{ "name", "default" },{ "nextId", 1 } };
+        const std::string sceneDump = scene.dump(2);
+        const std::span<const std::byte> sceneBytes(
+            reinterpret_cast<const std::byte *>(sceneDump.data()), sceneDump.size());
+
+        if (!WriteFileBytes(root / "game.json", manifestBytes) || !WriteFileBytes(sceneDir / "scene.json", sceneBytes))
+        {
+            MIR_LOG_ERROR("CreateGameProject: could not write 'games/{}' manifest/scene", name);
+            return false;
+        }
+
+        return RenderSettings{ .rayTracing = useRayTracing }.SaveFile(root / "project_settings.json");
     }
 }

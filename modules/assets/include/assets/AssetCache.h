@@ -1,3 +1,12 @@
+/**
+ * @file AssetCache.h
+ * @author Rahul Nair
+ * @brief Runtime cache of cooked asset blobs - loads and parses them on
+ *        demand, keyed by AssetId, resolved through an AssetManifest.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 
 #include "assets/AssetBlob.h"

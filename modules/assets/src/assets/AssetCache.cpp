@@ -1,3 +1,13 @@
+/**
+ * @file AssetCache.cpp
+ * @author Rahul Nair
+ * @brief Runtime cache of cooked asset blobs - loads and parses them on
+ *        demand, keyed by AssetId, resolved through an AssetManifest.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include "assets/AssetCache.h"
 
 #include "core/fs/FileIO.h"

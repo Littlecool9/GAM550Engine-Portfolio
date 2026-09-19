@@ -159,6 +159,7 @@ namespace mir
 
         mByHash.emplace(ops.mType.hash, stored);
         mBySeq.emplace(ops.mType.seq, stored);
+        mAllOps.push_back(stored);
         return *stored;
     }
 
@@ -246,6 +247,7 @@ namespace mir
 
         mByHash.emplace(hash, stored);
         mBySeq.emplace(seq, stored);
+        mAllOps.push_back(stored);
         return *stored;
     }
 
