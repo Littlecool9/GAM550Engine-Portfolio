@@ -72,15 +72,10 @@ namespace mir
 
         // abstraction from imgui
         void SetImGuiDrawData(ImDrawData *drawData) { mImguiDrawData = drawData; }
-        MeshHandle CreateMesh(std::span<const Vertex> vertices,
-            std::span<const uint32_t> indices);
+        MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
 
-// Handle of a pipeline
-// kNullMaterial means default material
         MaterialHandle CreateMaterial(const MaterialDesc &desc);
 
-        // Destroys all meshes and materials but the default material. Old handles
-        // are invalid and their indices get reused: call only after a scene unload.
         void ReleaseSceneResources();
 
         VkExtent2D SwapchainExtent() const { return mSwapchainExtent; }
