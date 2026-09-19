@@ -11,6 +11,7 @@
 
 #include "SceneResolve.h"
 #include <audio/AudioEmitterSystem.h>
+#include <audio/AudioListenerSystem.h>
 #include <audio/AudioSystem.h>
 #include <audio/ComponentRegistration.h>
 #include <core/EngineVersion.h>
@@ -139,6 +140,7 @@ namespace mir
 
         // after TransformPropagateSystem: it reads the WorldTransform that system writes
         mScheduler.AddSystem<AudioEmitterSystem>(SystemPhase::PostUpdate);
+        mScheduler.AddSystem<AudioListenerSystem>(SystemPhase::PostUpdate);
 
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 

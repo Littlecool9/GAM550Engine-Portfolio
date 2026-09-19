@@ -35,7 +35,16 @@ namespace mir::audio
                             const glm::vec3 &up);
 
     bool PostEvent(const char *eventName);
-    bool PostEventOn(const char *eventName, uint64_t gameObject);
+
+    uint32_t PostEventOn(const char *eventName, uint64_t gameObject);
+
+    // A fadeMs of 10-20 keeps a stopped voice from clicking.
+    void StopPlaying(uint32_t playingId, int fadeMs = 0);
+
+    // True until Wwise reports audio has ended. Ends are collected on
+    // the audio thread and applied in Update(), so this answers for last frame.
+    bool IsVoicePlaying(uint32_t playingId);
+
     bool IsInitialized();
 
 }

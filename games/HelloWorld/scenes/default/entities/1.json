@@ -66,6 +66,7 @@
     {
       "fields": {
         "eventName": "Play_chargeDown",
+        "loop": true,
         "playOnStart": true
       },
       "type": "AudioEmitter"

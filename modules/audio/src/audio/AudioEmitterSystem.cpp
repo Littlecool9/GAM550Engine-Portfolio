@@ -18,6 +18,20 @@
 
 namespace mir
 {
+    namespace
+    {
+        constexpr int kStopFadeMs = 10; // a hard stop mid-waveform clicks
+
+        void StopVoice(AudioEmitter &emitter)
+        {
+            if (emitter.mPlayingId == 0)
+                return;
+
+            audio::StopPlaying(emitter.mPlayingId, kStopFadeMs);
+            emitter.mPlayingId = 0;
+        }
+    }
+
     void AudioEmitterSystem::OnStart(SystemContext &context)
     {
         mQuery = &context.world.GetOrCreateQuery<const WorldTransform, AudioEmitter>();
@@ -57,13 +71,24 @@ namespace mir
 
                 if (sessionOver)
                 {
+                    // a looping audio outlives the session unless it is stopped here
+                    StopVoice(emitter);
                     emitter.mStarted = false;
                 }
-                else if (simulating && emitter.mPlayOnStart && !emitter.mStarted
-                    && emitter.mEventName[0] != '\0')
+                else if (simulating && emitter.mEventName[0] != '\0')
                 {
-                    audio::PostEventOn(emitter.mEventName, emitter.mGameObject);
-                    emitter.mStarted = true;
+                    if (emitter.mPlayingId != 0 && !audio::IsVoicePlaying(emitter.mPlayingId))
+                        emitter.mPlayingId = 0;
+
+                    // mLoop reposts whatever this emitter started, once it ends
+                    const bool start = emitter.mPlayOnStart && !emitter.mStarted;
+                    const bool repost = emitter.mLoop && emitter.mStarted && emitter.mPlayingId == 0;
+
+                    if (start || repost)
+                    {
+                        emitter.mPlayingId = audio::PostEventOn(emitter.mEventName, emitter.mGameObject);
+                        emitter.mStarted = true;
+                    }
                 }
             });
     }
@@ -75,6 +100,7 @@ namespace mir
             mQuery->ForEach(
                 [](Entity, const WorldTransform &, AudioEmitter &emitter)
                 {
+                    StopVoice(emitter);
                     audio::UnregisterEmitter(emitter.mGameObject);
                     emitter.mGameObject = 0;
                     emitter.mStarted = false;
@@ -90,6 +116,8 @@ namespace mir
         if (emitter == nullptr || emitter->mGameObject == 0)
             return;
 
+        // stop first: unregistering leaves a loop playing, just beyond reach
+        StopVoice(*emitter);
         audio::UnregisterEmitter(emitter->mGameObject);
         emitter->mGameObject = 0;
     }

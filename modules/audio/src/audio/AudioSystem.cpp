@@ -23,7 +23,10 @@
 #include "core/log/Log.h"
 #include <filesystem>
 #include <glm/geometric.hpp>
+#include <mutex>
 #include <system_error>
+#include <unordered_set>
+#include <vector>
 
 namespace mir::audio {
     namespace {
@@ -51,11 +54,25 @@ namespace mir::audio {
         }
         
 
+        constexpr float kMinUpLengthSq = 1e-8f;
+
         AkSoundPosition MakeSoundPosition(const glm::vec3 &pos, const glm::vec3 &front, const glm::vec3 &up)
         {
             const bool d = glm::dot(front, front) <= 0.0f || glm::dot(up, up) <= 0.0f;
             const glm::vec3 f = d ? glm::vec3(0.0f, 0.0f, -1.0f) : glm::normalize(front);
-            const glm::vec3 u = d ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::normalize(up);
+            const glm::vec3 rawUp = d ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::normalize(up);
+
+            glm::vec3 ortho = rawUp - f * glm::dot(f, rawUp);
+            if (glm::dot(ortho, ortho) <= kMinUpLengthSq)
+            {
+
+                const bool alignedWithY = f.y > 0.99f || f.y < -0.99f;
+                const glm::vec3 reference = alignedWithY ? glm::vec3(1.0f, 0.0f, 0.0f)
+                                                         : glm::vec3(0.0f, 1.0f, 0.0f);
+                ortho = reference - f * glm::dot(f, reference);
+            }
+
+            const glm::vec3 u = glm::normalize(ortho);
 
             AkSoundPosition out;
             out.Set(pos.x, pos.y, -pos.z, f.x, f.y, -f.z, u.x, u.y, -u.z);
@@ -73,6 +90,22 @@ namespace mir::audio {
                     what, gameObject);
                 g_warnedSetPositionFailed = true;
             }
+        }
+
+
+        std::unordered_set<AkPlayingID> g_livePlayingIds;
+
+        std::mutex g_endedMutex;
+        std::vector<AkPlayingID> g_endedPlayingIds;
+        std::vector<AkPlayingID> g_endedScratch;
+
+        void OnEventEnded(AkCallbackType type, AkEventCallbackInfo *eventInfo, void *, void *)
+        {
+            if (type != AK_EndOfEvent || eventInfo == nullptr)
+                return;
+
+            std::lock_guard<std::mutex> lock(g_endedMutex);
+            g_endedPlayingIds.push_back(eventInfo->playingID);
         }
     }
 
@@ -156,10 +189,20 @@ namespace mir::audio {
 
     void Update()
     {
-        if (g_Initialized)
+        if (!g_Initialized)
+            return;
+
+        AK::SoundEngine::RenderAudio();
+
         {
-            AK::SoundEngine::RenderAudio();
+            std::lock_guard<std::mutex> lock(g_endedMutex);
+            g_endedScratch.swap(g_endedPlayingIds);
         }
+
+        for (const AkPlayingID playingId : g_endedScratch)
+            g_livePlayingIds.erase(playingId);
+
+        g_endedScratch.clear();
     }
 
     bool IsInitialized()
@@ -180,7 +223,6 @@ namespace mir::audio {
 
     void UnregisterEmitter(uint64_t gameObj)
     {
-        //0 = unregistered, akinvalid unregisters every object including listener aka dont change
         if (!g_Initialized || gameObj == 0 || gameObj == AK_INVALID_GAME_OBJECT)
             return;
 
@@ -206,20 +248,42 @@ namespace mir::audio {
 
     bool PostEvent(const char* eventName)
     {
-        return PostEventOn(eventName, kGlobalObject);
+        return PostEventOn(eventName, kGlobalObject) != 0;
     }
 
-    bool PostEventOn(const char* eventName, uint64_t gameObject)
+    uint32_t PostEventOn(const char* eventName, uint64_t gameObject)
     {
         if (!g_Initialized)
-            return false;
+            return 0;
 
-        if (AK::SoundEngine::PostEvent(eventName, static_cast<AkGameObjectID>(gameObject)) == AK_INVALID_PLAYING_ID)
+        const AkPlayingID playingId = AK::SoundEngine::PostEvent(eventName,
+            static_cast<AkGameObjectID>(gameObject), AK_EndOfEvent, &OnEventEnded);
+
+        if (playingId == AK_INVALID_PLAYING_ID)
         {
             MIR_LOG_ERROR("wwise postevent ({}) on object {} failed", eventName, gameObject);
-            return false;
+            return 0;
         }
-        return true;
+
+        g_livePlayingIds.insert(playingId);
+        return playingId;
+    }
+
+
+    void StopPlaying(uint32_t playingId, int fadeMs)
+    {
+        if (!g_Initialized || playingId == AK_INVALID_PLAYING_ID)
+            return;
+
+        AK::SoundEngine::ExecuteActionOnPlayingID(AkActionOnEventType_Stop,
+            static_cast<AkPlayingID>(playingId), static_cast<AkTimeMs>(fadeMs));
+
+        g_livePlayingIds.erase(playingId);
+    }
+
+    bool IsVoicePlaying(uint32_t playingId)
+    {
+        return playingId != AK_INVALID_PLAYING_ID && g_livePlayingIds.count(playingId) != 0;
     }
 
     void Terminate()
@@ -245,6 +309,12 @@ namespace mir::audio {
 
         if (AK::MemoryMgr::IsInitialized())
             AK::MemoryMgr::Term();
+
+        g_livePlayingIds.clear();
+        {
+            std::lock_guard<std::mutex> lock(g_endedMutex);
+            g_endedPlayingIds.clear();
+        }
 
         g_Initialized = false;
     }
