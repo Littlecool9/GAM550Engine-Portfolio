@@ -51,6 +51,10 @@
         "nearZ": 0.10000000149011612
       },
       "type": "Camera"
+    },
+    {
+      "fields": {},
+      "type": "AudioListener"
     }
   ],
   "id": 3,

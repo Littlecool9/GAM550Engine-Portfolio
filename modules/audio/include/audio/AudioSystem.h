@@ -35,7 +35,18 @@ namespace mir::audio
                             const glm::vec3 &up);
 
     bool PostEvent(const char *eventName);
-    bool PostEventOn(const char *eventName, uint64_t gameObject);
+
+    // Returns the Wwise playing ID, or 0 when the post failed. Keep it: an
+    // authored looping event never ends on its own and has to be stopped.
+    uint32_t PostEventOn(const char *eventName, uint64_t gameObject);
+
+    // A fadeMs of 10-20 keeps a stopped voice from clicking.
+    void StopPlaying(uint32_t playingId, int fadeMs = 0);
+
+    // True until Wwise reports this playing ID has ended. Ends are collected on
+    // the audio thread and applied in Update(), so this answers for last frame.
+    bool IsVoicePlaying(uint32_t playingId);
+
     bool IsInitialized();
 
 }

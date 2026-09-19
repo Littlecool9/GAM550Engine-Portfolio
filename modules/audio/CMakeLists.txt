@@ -7,7 +7,9 @@ target_sources(engine_audio PRIVATE
     "${WWISE_SDK_ROOT}/samples/SoundEngine/Common/AkMultipleFileLocation.cpp"
     "${WWISE_SDK_ROOT}/samples/SoundEngine/Win32/AkDefaultIOHookDeferred.cpp"
     include/audio/components/AudioEmitter.h
+    include/audio/components/AudioListener.h
     src/audio/AudioEmitterSystem.cpp
+    src/audio/AudioListenerSystem.cpp
     src/audio/AudioSystem.cpp
     src/audio/ComponentRegistration.cpp
     src/audio/Wwise.cpp

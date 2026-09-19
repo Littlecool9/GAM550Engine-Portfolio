@@ -23,7 +23,10 @@
 #include "core/log/Log.h"
 #include <filesystem>
 #include <glm/geometric.hpp>
+#include <mutex>
 #include <system_error>
+#include <unordered_set>
+#include <vector>
 
 namespace mir::audio {
     namespace {
@@ -73,6 +76,26 @@ namespace mir::audio {
                     what, gameObject);
                 g_warnedSetPositionFailed = true;
             }
+        }
+
+        // Playing IDs handed out by PostEventOn that have not ended yet.
+        // Main thread only.
+        std::unordered_set<AkPlayingID> g_livePlayingIds;
+
+        // AK_EndOfEvent fires on Wwise's audio processing thread, so the callback
+        // only parks the ID here and Update() applies it on the main thread. The
+        // lock covers a push or a swap and nothing else.
+        std::mutex g_endedMutex;
+        std::vector<AkPlayingID> g_endedPlayingIds;
+        std::vector<AkPlayingID> g_endedScratch;
+
+        void OnEventEnded(AkCallbackType type, AkEventCallbackInfo *eventInfo, void *, void *)
+        {
+            if (type != AK_EndOfEvent || eventInfo == nullptr)
+                return;
+
+            std::lock_guard<std::mutex> lock(g_endedMutex);
+            g_endedPlayingIds.push_back(eventInfo->playingID);
         }
     }
 
@@ -156,10 +179,20 @@ namespace mir::audio {
 
     void Update()
     {
-        if (g_Initialized)
+        if (!g_Initialized)
+            return;
+
+        AK::SoundEngine::RenderAudio();
+
         {
-            AK::SoundEngine::RenderAudio();
+            std::lock_guard<std::mutex> lock(g_endedMutex);
+            g_endedScratch.swap(g_endedPlayingIds);
         }
+
+        for (const AkPlayingID playingId : g_endedScratch)
+            g_livePlayingIds.erase(playingId);
+
+        g_endedScratch.clear();
     }
 
     bool IsInitialized()
@@ -206,20 +239,47 @@ namespace mir::audio {
 
     bool PostEvent(const char* eventName)
     {
-        return PostEventOn(eventName, kGlobalObject);
+        return PostEventOn(eventName, kGlobalObject) != 0;
     }
 
-    bool PostEventOn(const char* eventName, uint64_t gameObject)
+    uint32_t PostEventOn(const char* eventName, uint64_t gameObject)
     {
         if (!g_Initialized)
-            return false;
+            return 0;
 
-        if (AK::SoundEngine::PostEvent(eventName, static_cast<AkGameObjectID>(gameObject)) == AK_INVALID_PLAYING_ID)
+        // every post asks for AK_EndOfEvent so the playing ID never goes stale:
+        // IsVoicePlaying is what tells an emitter its one-shot is over
+        const AkPlayingID playingId = AK::SoundEngine::PostEvent(eventName,
+            static_cast<AkGameObjectID>(gameObject), AK_EndOfEvent, &OnEventEnded);
+
+        if (playingId == AK_INVALID_PLAYING_ID)
         {
             MIR_LOG_ERROR("wwise postevent ({}) on object {} failed", eventName, gameObject);
-            return false;
+            return 0;
         }
-        return true;
+
+        g_livePlayingIds.insert(playingId);
+        return playingId;
+    }
+
+    // Unregistering a game object does NOT stop its sounds - it only gives up
+    // control of them - so a loop has to be stopped through its playing ID.
+    void StopPlaying(uint32_t playingId, int fadeMs)
+    {
+        if (!g_Initialized || playingId == AK_INVALID_PLAYING_ID)
+            return;
+
+        AK::SoundEngine::ExecuteActionOnPlayingID(AkActionOnEventType_Stop,
+            static_cast<AkPlayingID>(playingId), static_cast<AkTimeMs>(fadeMs));
+
+        // the stop still fires AK_EndOfEvent; dropping it now keeps a caller from
+        // seeing a voice it has already stopped as playing for another frame
+        g_livePlayingIds.erase(playingId);
+    }
+
+    bool IsVoicePlaying(uint32_t playingId)
+    {
+        return playingId != AK_INVALID_PLAYING_ID && g_livePlayingIds.count(playingId) != 0;
     }
 
     void Terminate()
@@ -245,6 +305,12 @@ namespace mir::audio {
 
         if (AK::MemoryMgr::IsInitialized())
             AK::MemoryMgr::Term();
+
+        g_livePlayingIds.clear();
+        {
+            std::lock_guard<std::mutex> lock(g_endedMutex);
+            g_endedPlayingIds.clear();
+        }
 
         g_Initialized = false;
     }
