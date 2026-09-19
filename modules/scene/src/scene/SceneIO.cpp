@@ -198,21 +198,6 @@ namespace mir
         for (const auto &[id, entity] : scene.mEntities)
             toStableId[PackEntity(entity)] = id;
 
-        // mEntities is a std::map, so the manifest comes out in ascending id
-        // order every run
-        json manifest;
-        manifest["name"] = scene.mName;
-        manifest["nextId"] = scene.mNextId;
-        manifest["entities"] = json::array();
-        for (const auto &[id, entity] : scene.mEntities)
-            manifest["entities"].push_back(id);
-
-        if (!WriteJsonFile(SceneManifestPath(sceneDir), manifest))
-        {
-            MIR_LOG_ERROR("SaveScene: could not write {} in '{}'", kSceneManifestFileName, sceneDir.string());
-            return false;
-        }
-
         ComponentRegistry &registry = ComponentRegistry::Instance();
 
         for (const auto &[id, entity] : scene.mEntities)
@@ -264,6 +249,20 @@ namespace mir
                 MIR_LOG_ERROR("SaveScene: could not write entity file for id {}", id);
                 return false;
             }
+        }
+
+        // The manifest is written last
+        json manifest;
+        manifest["name"] = scene.mName;
+        manifest["nextId"] = scene.mNextId;
+        manifest["entities"] = json::array();
+        for (const auto &[id, entity] : scene.mEntities)
+            manifest["entities"].push_back(id);
+
+        if (!WriteJsonFile(SceneManifestPath(sceneDir), manifest))
+        {
+            MIR_LOG_ERROR("SaveScene: could not write {} in '{}'", kSceneManifestFileName, sceneDir.string());
+            return false;
         }
 
         return true;
