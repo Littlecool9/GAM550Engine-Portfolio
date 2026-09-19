@@ -8,7 +8,9 @@
  *
  */
 #pragma once
+#include <cstdint>
 #include <filesystem>
+#include <glm/vec3.hpp>
 namespace mir::audio
 {
 
@@ -19,6 +21,21 @@ namespace mir::audio
 
     void Terminate();
 
-    bool PostEvent(const char* eventName);
+    uint64_t RegisterEmitter(const char *debugName);
+    
+    void UnregisterEmitter(uint64_t gameObject);
+
+    void SetEmitterPosition(uint64_t gameObject,
+                            const glm::vec3 &position,
+                            const glm::vec3 &front,
+                            const glm::vec3 &up);
+
+    void SetListenerPosition(const glm::vec3 &position,
+                            const glm::vec3 &front,
+                            const glm::vec3 &up);
+
+    bool PostEvent(const char *eventName);
+    bool PostEventOn(const char *eventName, uint64_t gameObject);
+    bool IsInitialized();
 
 }
