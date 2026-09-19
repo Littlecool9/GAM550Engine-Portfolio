@@ -15,11 +15,11 @@
 #include "core/ecs/World.h"
 #include "core/log/Log.h"
 
+#include <serial/JsonFile.h>
+
 #include <algorithm>
 #include <charconv>
 #include <cmath>
-#include <fstream>
-#include <nlohmann/json.hpp>
 
 namespace mir
 {
@@ -35,9 +35,11 @@ namespace mir
             std::byte mBytes[64];
         };
 
+        constexpr std::string_view kEntitiesDirName = "entities";
+
         fs::path EntityFilePath(const fs::path &sceneDir, StableId id)
         {
-            return sceneDir / "entities" / (std::to_string(id) + ".json");
+            return sceneDir / kEntitiesDirName / (std::to_string(id) + ".json");
         }
 
         double CleanFloat(float value)
@@ -67,39 +69,39 @@ namespace mir
             case FieldKind::Float:
                 return CleanFloat(*static_cast<const float *>(bytes));
             case FieldKind::Vec3:
-            {
-                const auto &v = *static_cast<const glm::vec3 *>(bytes);
-                return json::array({CleanFloat(v.x), CleanFloat(v.y), CleanFloat(v.z)});
-            }
+                {
+                    const auto &v = *static_cast<const glm::vec3 *>(bytes);
+                    return json::array({ CleanFloat(v.x), CleanFloat(v.y), CleanFloat(v.z) });
+                }
             case FieldKind::Vec4:
-            {
-                const auto &v = *static_cast<const glm::vec4 *>(bytes);
-                return json::array({CleanFloat(v.x), CleanFloat(v.y), CleanFloat(v.z), CleanFloat(v.w)});
-            }
+                {
+                    const auto &v = *static_cast<const glm::vec4 *>(bytes);
+                    return json::array({ CleanFloat(v.x), CleanFloat(v.y), CleanFloat(v.z), CleanFloat(v.w) });
+                }
             case FieldKind::Quat:
-            {
-                const auto &q = *static_cast<const glm::quat *>(bytes);
-                return json::array({CleanFloat(q.x), CleanFloat(q.y), CleanFloat(q.z), CleanFloat(q.w)});
-            }
+                {
+                    const auto &q = *static_cast<const glm::quat *>(bytes);
+                    return json::array({ CleanFloat(q.x), CleanFloat(q.y), CleanFloat(q.z), CleanFloat(q.w) });
+                }
             case FieldKind::Mat4:
-            {
-                const float *m = &static_cast<const glm::mat4 *>(bytes)->operator[](0).x;
-                json arr = json::array();
-                for (int i = 0; i < 16; ++i)
-                    arr.push_back(CleanFloat(m[i]));
-                return arr;
-            }
+                {
+                    const float *m = &static_cast<const glm::mat4 *>(bytes)->operator[](0).x;
+                    json arr = json::array();
+                    for (int i = 0; i < 16; ++i)
+                        arr.push_back(CleanFloat(m[i]));
+                    return arr;
+                }
             case FieldKind::Handle:
-            {
-                const auto *h = static_cast<const uint32_t *>(bytes);
-                return json::array({h[0], h[1]});
-            }
+                {
+                    const auto *h = static_cast<const uint32_t *>(bytes);
+                    return json::array({ h[0], h[1] });
+                }
             case FieldKind::String:
-            {
-                // buffer is always null-terminated (JsonToField below and every
-                // writer guarantee it), so this is just reading a C string.
-                return std::string(static_cast<const char *>(bytes));
-            }
+                {
+                    // buffer is always null-terminated (JsonToField below and every
+                    // writer guarantee it), so this is just reading a C string.
+                    return std::string(static_cast<const char *>(bytes));
+                }
             case FieldKind::EntityRef:
                 break; // handled by the caller, needs the id map
             }
@@ -120,64 +122,69 @@ namespace mir
                 *static_cast<float *>(outBytes) = value.get<float>();
                 break;
             case FieldKind::Vec3:
-            {
-                auto &v = *static_cast<glm::vec3 *>(outBytes);
-                v.x = value.at(0).get<float>();
-                v.y = value.at(1).get<float>();
-                v.z = value.at(2).get<float>();
-                break;
-            }
+                {
+                    auto &v = *static_cast<glm::vec3 *>(outBytes);
+                    v.x = value.at(0).get<float>();
+                    v.y = value.at(1).get<float>();
+                    v.z = value.at(2).get<float>();
+                    break;
+                }
             case FieldKind::Vec4:
-            {
-                auto &v = *static_cast<glm::vec4 *>(outBytes);
-                v.x = value.at(0).get<float>();
-                v.y = value.at(1).get<float>();
-                v.z = value.at(2).get<float>();
-                v.w = value.at(3).get<float>();
-                break;
-            }
+                {
+                    auto &v = *static_cast<glm::vec4 *>(outBytes);
+                    v.x = value.at(0).get<float>();
+                    v.y = value.at(1).get<float>();
+                    v.z = value.at(2).get<float>();
+                    v.w = value.at(3).get<float>();
+                    break;
+                }
             case FieldKind::Quat:
-            {
-                auto &q = *static_cast<glm::quat *>(outBytes);
-                q.x = value.at(0).get<float>();
-                q.y = value.at(1).get<float>();
-                q.z = value.at(2).get<float>();
-                q.w = value.at(3).get<float>();
-                break;
-            }
+                {
+                    auto &q = *static_cast<glm::quat *>(outBytes);
+                    q.x = value.at(0).get<float>();
+                    q.y = value.at(1).get<float>();
+                    q.z = value.at(2).get<float>();
+                    q.w = value.at(3).get<float>();
+                    break;
+                }
             case FieldKind::Mat4:
-            {
-                auto *m = static_cast<float *>(outBytes);
-                for (int i = 0; i < 16; ++i)
-                    m[i] = value.at(i).get<float>();
-                break;
-            }
+                {
+                    auto *m = static_cast<float *>(outBytes);
+                    for (int i = 0; i < 16; ++i)
+                        m[i] = value.at(i).get<float>();
+                    break;
+                }
             case FieldKind::Handle:
-            {
-                auto *h = static_cast<uint32_t *>(outBytes);
-                h[0] = value.at(0).get<uint32_t>();
-                h[1] = value.at(1).get<uint32_t>();
-                break;
-            }
+                {
+                    auto *h = static_cast<uint32_t *>(outBytes);
+                    h[0] = value.at(0).get<uint32_t>();
+                    h[1] = value.at(1).get<uint32_t>();
+                    break;
+                }
             case FieldKind::String:
-            {
-                const std::string s = value.get<std::string>();
-                auto *out = static_cast<char *>(outBytes);
-                const std::size_t n = std::min(s.size(), std::size_t{kFieldStringCapacity} - 1);
-                std::memcpy(out, s.data(), n);
-                out[n] = '\0';
-                break;
-            }
+                {
+                    const std::string s = value.get<std::string>();
+                    auto *out = static_cast<char *>(outBytes);
+                    const std::size_t n = std::min(s.size(), std::size_t{ kFieldStringCapacity } - 1);
+                    std::memcpy(out, s.data(), n);
+                    out[n] = '\0';
+                    break;
+                }
             case FieldKind::EntityRef:
                 break; // handled by the caller, needs the id map
             }
         }
     }
 
+    fs::path SceneManifestPath(const fs::path &sceneDir)
+    {
+        return sceneDir / kSceneManifestFileName;
+    }
+
     bool SaveScene(World &world, const fs::path &sceneDir, const LoadedScene &scene)
     {
         std::error_code ec;
-        fs::create_directories(sceneDir / "entities", ec);
+        fs::create_directories(sceneDir / kEntitiesDirName, ec);
         if (ec)
         {
             MIR_LOG_ERROR("SaveScene: could not create '{}': {}", sceneDir.string(), ec.message());
@@ -190,25 +197,6 @@ namespace mir
         toStableId.reserve(scene.mEntities.size());
         for (const auto &[id, entity] : scene.mEntities)
             toStableId[PackEntity(entity)] = id;
-
-        // mEntities is a std::map, so the manifest comes out in ascending id
-        // order every run
-        json manifest;
-        manifest["name"] = scene.mName;
-        manifest["nextId"] = scene.mNextId;
-        manifest["entities"] = json::array();
-        for (const auto &[id, entity] : scene.mEntities)
-            manifest["entities"].push_back(id);
-
-        {
-            std::ofstream out(sceneDir / "scene.json");
-            if (!out)
-            {
-                MIR_LOG_ERROR("SaveScene: could not write scene.json in '{}'", sceneDir.string());
-                return false;
-            }
-            out << manifest.dump(2);
-        }
 
         ComponentRegistry &registry = ComponentRegistry::Instance();
 
@@ -256,13 +244,25 @@ namespace mir
             }
             file["components"] = std::move(components);
 
-            std::ofstream out(EntityFilePath(sceneDir, id));
-            if (!out)
+            if (!WriteJsonFile(EntityFilePath(sceneDir, id), file))
             {
                 MIR_LOG_ERROR("SaveScene: could not write entity file for id {}", id);
                 return false;
             }
-            out << file.dump(2);
+        }
+
+        // The manifest is written last
+        json manifest;
+        manifest["name"] = scene.mName;
+        manifest["nextId"] = scene.mNextId;
+        manifest["entities"] = json::array();
+        for (const auto &[id, entity] : scene.mEntities)
+            manifest["entities"].push_back(id);
+
+        if (!WriteJsonFile(SceneManifestPath(sceneDir), manifest))
+        {
+            MIR_LOG_ERROR("SaveScene: could not write {} in '{}'", kSceneManifestFileName, sceneDir.string());
+            return false;
         }
 
         return true;
@@ -272,16 +272,16 @@ namespace mir
     {
         LoadedScene loaded;
 
-        std::ifstream manifestFile(sceneDir / "scene.json");
-        if (!manifestFile)
+        const std::optional<json> manifestJson = ReadJsonFile(SceneManifestPath(sceneDir));
+        if (!manifestJson || !manifestJson->is_object())
         {
-            MIR_LOG_ERROR("LoadScene: no scene.json in '{}'", sceneDir.string());
+            MIR_LOG_ERROR("LoadScene: '{}' has no usable {}, loading an empty scene", sceneDir.string(),
+                kSceneManifestFileName);
             return loaded;
         }
-        json manifest;
-        manifestFile >> manifest;
+        const json &manifest = *manifestJson;
         loaded.mName = manifest.value("name", "");
-        loaded.mNextId = manifest.value("nextId", StableId{1});
+        loaded.mNextId = manifest.value("nextId", StableId{ 1 });
 
         ComponentRegistry &registry = ComponentRegistry::Instance();
 
@@ -307,21 +307,20 @@ namespace mir
         {
             StableId id = idJson.get<StableId>();
 
-            std::ifstream entityFile(EntityFilePath(sceneDir, id));
-            if (!entityFile)
+            const std::optional<json> entityJson = ReadJsonFile(EntityFilePath(sceneDir, id));
+            if (!entityJson || !entityJson->is_object())
             {
-                MIR_LOG_ERROR("LoadScene: entity file for id {} listed in manifest but missing", id);
+                MIR_LOG_ERROR("LoadScene: entity file for id {} listed in manifest but missing or unreadable", id);
                 continue; // 0030 leaves this failure mode open; skip rather than abort the load
             }
-            json ejson;
-            entityFile >> ejson;
+            const json &ejson = *entityJson;
 
             Entity entity = world.CreateEntity();
             loaded.mEntities[id] = entity;
 
             StableId parent = ejson.value("parent", kNullStableId);
             if (parent != kNullStableId)
-                pendingParents.push_back({entity, parent});
+                pendingParents.push_back({ entity, parent });
 
             for (const auto &blob : ejson.value("components", json::array()))
             {
@@ -345,7 +344,7 @@ namespace mir
 
                     if (field.mKind == FieldKind::EntityRef)
                     {
-                        pendingRefs.push_back({entity, ops, std::string(field.mName), it->get<StableId>()});
+                        pendingRefs.push_back({ entity, ops, std::string(field.mName), it->get<StableId>() });
                         continue;
                     }
 

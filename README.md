@@ -26,11 +26,12 @@ cmake/                build helpers
   Branding.cmake        icon and splash copying
 
 modules/              one static library each, mir::<name>
-  core/                 ECS, logging, paths, the surface contract
+  core/                 ECS, logging, paths, file IO, the surface contract
   window/               GLFW window behind an interface
   renderer/             Vulkan 1.3 renderer, render components, RenderSystem
   assets/               cooked blobs, manifest, cache
   scene/                scene save and load
+  serial/               JSON documents on disk
   script/               Lua embedding and ECS bindings
   audio/                Wwise lifetime and the per-frame pump
   editor/               ImGui context, backends, editor shell

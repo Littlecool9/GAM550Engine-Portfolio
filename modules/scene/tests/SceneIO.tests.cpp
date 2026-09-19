@@ -56,7 +56,7 @@ namespace
     // process-wide (0022).
     const ComponentOps &SceneRefOps()
     {
-        static const RuntimeFieldDecl fields[] = {{"target", FieldKind::EntityRef}};
+        static const RuntimeFieldDecl fields[] = { { "target", FieldKind::EntityRef } };
         return ComponentRegistry::Instance().RegisterRuntime("SceneIOTestRef", fields);
     }
 
@@ -73,7 +73,7 @@ TEST_CASE("SaveScene then LoadScene round-trips a Transform", "[scene]")
     World world;
     LoadedScene scene = NewScene("test");
     Entity entity = CreateSceneEntity(world, scene);
-    mir::AddTransform(world, entity, Transform{glm::vec3(1.0f, 2.0f, 3.0f)});
+    mir::AddTransform(world, entity, Transform{ glm::vec3(1.0f, 2.0f, 3.0f) });
 
     TempSceneDir dir("transform_roundtrip");
     REQUIRE(mir::SaveScene(world, dir.mPath, scene));
@@ -99,7 +99,7 @@ TEST_CASE("SaveScene writes a clean decimal for a float that isn't exactly repre
     World world;
     LoadedScene scene = NewScene("test");
     Entity entity = CreateSceneEntity(world, scene);
-    mir::AddTransform(world, entity, Transform{glm::vec3(1.8f, 0.0f, 0.0f)});
+    mir::AddTransform(world, entity, Transform{ glm::vec3(1.8f, 0.0f, 0.0f) });
 
     TempSceneDir dir("clean_float");
     REQUIRE(mir::SaveScene(world, dir.mPath, scene));
@@ -220,6 +220,56 @@ TEST_CASE("LoadScene skips a component name it does not recognise", "[scene]")
     const Transform *transform = loadedWorld.GetComponent<Transform>(loadedEntity);
     REQUIRE(transform != nullptr);
     CHECK(transform->Position() == glm::vec3(4.0f, 5.0f, 6.0f));
+}
+
+// A malformed scene.json used to reach nlohmann's operator>> with no try/catch,
+// so a hand-edited file threw out of LoadScene instead of loading empty.
+TEST_CASE("LoadScene reports a malformed scene.json instead of throwing", "[scene]")
+{
+    mir::RegisterCoreComponents();
+
+    TempSceneDir dir("malformed_manifest");
+    std::filesystem::create_directories(dir.mPath);
+
+    {
+        std::ofstream manifest(dir.mPath / "scene.json");
+        manifest << R"({"name":"test","entities":[1)";
+    }
+
+    World loadedWorld;
+    LoadedScene loaded = mir::LoadScene(loadedWorld, dir.mPath);
+
+    CHECK(loaded.mEntities.empty());
+}
+
+TEST_CASE("LoadScene skips a malformed entity file instead of throwing", "[scene]")
+{
+    mir::RegisterCoreComponents();
+
+    TempSceneDir dir("malformed_entity");
+    std::filesystem::create_directories(dir.mPath / "entities");
+
+    {
+        std::ofstream manifest(dir.mPath / "scene.json");
+        manifest << R"({"name":"test","nextId":3,"entities":[1,2]})";
+    }
+    {
+        std::ofstream entityFile(dir.mPath / "entities" / "1.json");
+        entityFile << R"({"id": 1, "parent": 0, "components": [)";
+    }
+    {
+        std::ofstream entityFile(dir.mPath / "entities" / "2.json");
+        entityFile << R"({"id":2,"parent":0,"components":[{"type":"Transform","fields":{"position":[1.0,2.0,3.0]}}]})";
+    }
+
+    World loadedWorld;
+    LoadedScene loaded = mir::LoadScene(loadedWorld, dir.mPath);
+
+    // The good entity still loads; only the broken one is skipped.
+    REQUIRE(loaded.mEntities.size() == 1);
+    const Transform *transform = loadedWorld.GetComponent<Transform>(loaded.mEntities.at(2));
+    REQUIRE(transform != nullptr);
+    CHECK(transform->Position() == glm::vec3(1.0f, 2.0f, 3.0f));
 }
 
 TEST_CASE("UnloadScene destroys exactly the entities it loaded", "[scene]")

@@ -45,6 +45,7 @@ add_subdirectory(modules/input)
 add_subdirectory(modules/physics)
 add_subdirectory(modules/renderer)
 add_subdirectory(modules/scene)
+add_subdirectory(modules/serial)
 add_subdirectory(modules/script)
 add_subdirectory(modules/window)
 

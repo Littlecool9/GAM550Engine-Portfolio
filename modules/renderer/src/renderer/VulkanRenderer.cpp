@@ -11,6 +11,7 @@
 #include <core/log/Log.h>
 #include <core/log/Assert.h>
 #include <core/fs/Paths.h>
+#include <core/fs/FileIO.h>
 
 #include <vk_mem_alloc.h>
 
@@ -23,7 +24,6 @@
 #include <vector>
 #include <cstring>
 #include <algorithm>
-#include <fstream>
 #include <optional>
 #include <array>
 #include <chrono>
@@ -274,29 +274,21 @@ namespace mir
         }
         std::optional<std::vector<uint32_t>> ReadSpirv(const std::filesystem::path &path)
         {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
-            if (!file)
+            const std::optional<std::vector<std::byte>> bytes = ReadBytes(path);
+            if (!bytes)
+                // ReadBytes takes care of logging onfailure
+                return std::nullopt;
+
+            if (bytes->empty() || bytes->size() % sizeof(uint32_t) != 0)
             {
-                MIR_LOG_CRITICAL("Cannot open SPIR-V: {}", path.string());
+                MIR_LOG_CRITICAL("Bad SPIR-V size ({} bytes): {}", bytes->size(), path.string());
                 return std::nullopt;
             }
 
-            const std::streamsize byteSize = file.tellg();
-            if (byteSize <= 0 || byteSize % 4 != 0)
-            {
-                MIR_LOG_CRITICAL("Bad SPIR-V size ({} bytes): {}", byteSize, path.string());
-                return std::nullopt;
-            }
-
-            std::vector<uint32_t> words(static_cast<size_t>(byteSize) / 4);
-            file.seekg(0);
-            file.read(reinterpret_cast<char *>(words.data()), byteSize);
-
-            if (!file)
-            {
-                MIR_LOG_CRITICAL("Short read on SPIR-V: {}", path.string());
-                return std::nullopt;
-            }
+            // Copied, not reinterpreted: vkCreateShaderModule needs pCode 4-byte
+            // aligned and a vector<byte> is only aligned to 1.
+            std::vector<uint32_t> words(bytes->size() / sizeof(uint32_t));
+            std::memcpy(words.data(), bytes->data(), bytes->size());
             return words;
         }
 
@@ -1195,7 +1187,7 @@ namespace mir
 
         mMaterials.clear();
         mMaterials.push_back(defaultMaterial);
-        mDefaultMaterial = MaterialHandle{0, 0};
+        mDefaultMaterial = MaterialHandle{ 0, 0 };
 
         MIR_LOG_INFO("Released {} meshes and {} materials", meshCount, released);
     }

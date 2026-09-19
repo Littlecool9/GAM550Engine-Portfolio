@@ -3,7 +3,6 @@
 target_sources(engine_assets PRIVATE
     src/assets/AssetBlob.cpp
     src/assets/AssetCache.cpp
-    src/assets/AssetFileIo.cpp
     src/assets/AssetId.cpp
     src/assets/AssetManifest.cpp
 )

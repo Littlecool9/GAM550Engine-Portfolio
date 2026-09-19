@@ -11,6 +11,7 @@ target_sources(engine_core PRIVATE
     src/core/log/Log.cpp
     src/core/log/LogHistory.cpp
     src/core/fs/Paths.cpp
+    src/core/fs/FileIO.cpp
     src/core/platform/Process.cpp
     src/core/ecs/TransformHierarchy.cpp
     src/core/ecs/HierarchyIndex.cpp

@@ -54,7 +54,7 @@ namespace mir
         mProjectToOpen.reset();
         mSwitchHookFired = false;
         mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
-  
+
         audio::Init(mProject.mSoundBankDir);
 
         EnsureDpiAware();
@@ -119,8 +119,8 @@ namespace mir
         // defers structural change
         mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
 
-        mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mProject.mProjectSettingsPath));
-        mWorld.EmplaceResource<RenderSettings>(RenderSettings::LoadFile(mProject.mProjectSettingsPath));
+        mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mProject.mProjectSettingsPath).value_or(InputMap{}));
+        mWorld.EmplaceResource<RenderSettings>(RenderSettings::LoadFile(mProject.mProjectSettingsPath).value_or(RenderSettings{}));
         mWorld.EmplaceResource<InputState>();
         mWorld.EmplaceResource<EngineModeState>();
 
@@ -148,7 +148,7 @@ namespace mir
         mAvailableProjects = DiscoverGameProjects();
         mProjectMenu.clear();
         for (const GameProject &project : mAvailableProjects)
-            mProjectMenu.push_back(ProjectMenuEntry{project.mDir, project.mName});
+            mProjectMenu.push_back(ProjectMenuEntry{ project.mDir, project.mName });
 
         mSplash.SetProgress("Loading scene...", 0.9f);
         mScene = mir::NewScene("untitled");
@@ -210,9 +210,9 @@ namespace mir
             return false;
         }
 
-        if (!std::filesystem::exists(mProject.mSceneDir / "scene.json"))
+        if (!std::filesystem::exists(SceneManifestPath(mProject.mSceneDir)))
         {
-            MIR_LOG_ERROR("App::LoadScene: no scene.json in '{}'", mProject.mSceneDir.string());
+            MIR_LOG_ERROR("App::LoadScene: no {} in '{}'", kSceneManifestFileName, mProject.mSceneDir.string());
             return false;
         }
 
@@ -275,10 +275,10 @@ namespace mir
     void App::LoadProjectScene()
     {
         std::error_code ec;
-        if (std::filesystem::exists(mProject.mSceneDir / "scene.json", ec))
+        if (std::filesystem::exists(SceneManifestPath(mProject.mSceneDir), ec))
             LoadScene();
         else
-            MIR_LOG_INFO("No scene.json in '{}', starting with an empty scene", mProject.mSceneDir.string());
+            MIR_LOG_INFO("No {} in '{}', starting with an empty scene", kSceneManifestFileName, mProject.mSceneDir.string());
     }
 
     void App::RunSwitchHook()
@@ -302,7 +302,7 @@ namespace mir
         if (mAssetLoadFailed)
             return nullptr; // already tried and logged; do not re-stat the disk every call
 
-        const std::filesystem::path manifestPath = CookedAssetsDir() / "manifest.blob";
+        const std::filesystem::path manifestPath = CookedAssetsDir() / kAssetManifestFileName;
         mAssetManifest = AssetManifest::LoadFile(manifestPath);
         if (!mAssetManifest.has_value())
         {
@@ -413,7 +413,7 @@ namespace mir
 
 
             audio::Update();
-            
+
             ++mFrame;
 
             RunSwitchHook();
@@ -437,7 +437,7 @@ namespace mir
 
 
         audio::Terminate();
-        
+
         mScheduler.Reset();
 
         // Cache before manifest

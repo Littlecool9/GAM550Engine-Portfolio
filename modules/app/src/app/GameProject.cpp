@@ -8,15 +8,14 @@
  */
 #include <app/GameProject.h>
 
-#include <assets/AssetFileIo.h>
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
 #include <renderer/RenderSettings.h>
+#include <scene/SceneIO.h>
 
-#include <nlohmann/json.hpp>
+#include <serial/JsonFile.h>
 
 #include <algorithm>
-#include <fstream>
 #include <system_error>
 #include <utility>
 
@@ -24,28 +23,17 @@ namespace mir
 {
     std::optional<std::string> ReadDefaultGame()
     {
-        const std::filesystem::path path = ExecutableDir() / "engine.json";
+        const std::filesystem::path path = ExecutableDir() / kEngineManifestFileName;
 
-        std::ifstream in(path);
-        if (!in)
+        const std::optional<nlohmann::json> json = ReadJsonFile(path);
+        if (!json)
         {
-            MIR_LOG_ERROR("no --game given and could not open '{}'", path.string());
+            MIR_LOG_ERROR("no --game given and could not read '{}'", path.string());
             return std::nullopt;
         }
 
-        nlohmann::json json;
-        try
-        {
-            in >> json;
-        }
-        catch (const nlohmann::json::parse_error &e)
-        {
-            MIR_LOG_ERROR("'{}' is not valid JSON ({})", path.string(), e.what());
-            return std::nullopt;
-        }
-
-        const auto it = json.find("defaultGame");
-        if (it == json.end() || !it->is_string() || it->get<std::string>().empty())
+        const auto it = json->find("defaultGame");
+        if (it == json->end() || !it->is_string() || it->get<std::string>().empty())
         {
             MIR_LOG_ERROR("no --game given and '{}' names no defaultGame", path.string());
             return std::nullopt;
@@ -85,12 +73,12 @@ namespace mir
     std::optional<GameProject> LoadGameProject(const std::filesystem::path &gameDir)
     {
         const std::filesystem::path root = ExecutableDir() / gameDir;
-        const std::filesystem::path manifestPath = root / "game.json";
+        const std::filesystem::path manifestPath = root / kGameManifestFileName;
 
-        std::ifstream in(manifestPath);
-        if (!in)
+        std::error_code manifestEc;
+        if (!std::filesystem::is_regular_file(manifestPath, manifestEc))
         {
-            MIR_LOG_ERROR("LoadGameProject: no game.json in '{}', not a game directory", root.string());
+            MIR_LOG_ERROR("LoadGameProject: no {} in '{}', not a game directory", kGameManifestFileName, root.string());
             return std::nullopt;
         }
 
@@ -103,23 +91,14 @@ namespace mir
         std::string sceneDir = "scenes/default";
         std::string soundBanksRoot = "assets/audio/SoundBanks";
 
-        nlohmann::json json;
-        try
+        // A malformed manifest keeps the defaults; ReadJsonFile logged why.
+        if (const std::optional<nlohmann::json> json = ReadJsonFile(manifestPath); json && json->is_object())
         {
-            in >> json;
-        }
-        catch (const nlohmann::json::parse_error &e)
-        {
-            MIR_LOG_ERROR("LoadGameProject: '{}' is not valid JSON ({}), using defaults", manifestPath.string(), e.what());
-        }
-
-        if (json.is_object())
-        {
-            project.mName = json.value("name", project.mName);
-            project.mTitle = json.value("title", project.mTitle);
-            assetsRoot = json.value("assetsRoot", assetsRoot);
-            sceneDir = json.value("sceneDir", sceneDir);
-            soundBanksRoot = json.value("soundBanksRoot", soundBanksRoot);
+            project.mName = json->value("name", project.mName);
+            project.mTitle = json->value("title", project.mTitle);
+            assetsRoot = json->value("assetsRoot", assetsRoot);
+            sceneDir = json->value("sceneDir", sceneDir);
+            soundBanksRoot = json->value("soundBanksRoot", soundBanksRoot);
         }
 
         if (project.mName.empty())
@@ -132,8 +111,8 @@ namespace mir
 
         project.mAssetIdRoot = std::move(idRoot);
         project.mSceneDir = root / sceneDir;
+        project.mProjectSettingsPath = root / kProjectSettingsFileName;
         project.mSoundBankDir = root / soundBanksRoot;
-        project.mProjectSettingsPath = root / "project_settings.json";
 
         return project;
     }
@@ -159,7 +138,7 @@ namespace mir
         {
             std::error_code entryEc;
             if (!entry.is_directory(entryEc) ||
-                !std::filesystem::is_regular_file(entry.path() / "game.json", entryEc))
+                !std::filesystem::is_regular_file(entry.path() / kGameManifestFileName, entryEc))
                 continue;
 
             if (std::optional<GameProject> project = LoadGameProject(std::filesystem::path("games") / entry.path().filename()))
@@ -170,8 +149,10 @@ namespace mir
             MIR_LOG_WARN("DiscoverGameProjects: could not list '{}': {}", gamesDir.string(), ec.message());
 
         std::sort(projects.begin(), projects.end(),
-                  [](const GameProject &a, const GameProject &b)
-                  { return a.mDir < b.mDir; });
+            [](const GameProject &a, const GameProject &b)
+            {
+                return a.mDir < b.mDir;
+            });
         return projects;
     }
 
@@ -201,23 +182,18 @@ namespace mir
             return false;
         }
 
-        const nlohmann::json manifest{{"name", name}, {"title", "MjolnirEngine - " + name}};
-        const std::string manifestDump = manifest.dump(2);
-        const std::span<const std::byte> manifestBytes(
-            reinterpret_cast<const std::byte *>(manifestDump.data()), manifestDump.size());
+        const nlohmann::json manifest{ { "name", name },{ "title", "MjolnirEngine - " + name } };
 
         // same shape as games/EmptyScene/scenes/default/scene.json
-        const nlohmann::json scene{{"entities", nlohmann::json::array()}, {"name", "default"}, {"nextId", 1}};
-        const std::string sceneDump = scene.dump(2);
-        const std::span<const std::byte> sceneBytes(
-            reinterpret_cast<const std::byte *>(sceneDump.data()), sceneDump.size());
+        const nlohmann::json scene{ { "entities", nlohmann::json::array() },{ "name", "default" },{ "nextId", 1 } };
 
-        if (!WriteFileBytes(root / "game.json", manifestBytes) || !WriteFileBytes(sceneDir / "scene.json", sceneBytes))
+        if (!WriteJsonFile(root / kGameManifestFileName, manifest) ||
+            !WriteJsonFile(sceneDir / kSceneManifestFileName, scene))
         {
             MIR_LOG_ERROR("CreateGameProject: could not write 'games/{}' manifest/scene", name);
             return false;
         }
 
-        return RenderSettings{ .rayTracing = useRayTracing }.SaveFile(root / "project_settings.json");
+        return RenderSettings{ .rayTracing = useRayTracing }.SaveFile(root / kProjectSettingsFileName);
     }
 }

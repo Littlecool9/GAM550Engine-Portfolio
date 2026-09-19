@@ -10,6 +10,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 
 namespace mir
 {
@@ -17,7 +18,9 @@ namespace mir
     {
         bool rayTracing = false;
 
-        static RenderSettings LoadFile(const std::filesystem::path &path);
+        // nullopt if the file is missing or unreadable; a file with no
+        // "rendering" section loads as defaults.
+        static std::optional<RenderSettings> LoadFile(const std::filesystem::path &path);
         bool SaveFile(const std::filesystem::path &path) const;
     };
 }
