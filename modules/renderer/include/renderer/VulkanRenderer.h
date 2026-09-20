@@ -19,6 +19,7 @@
 #include <glm/mat4x4.hpp>
 #include <glm/vec4.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -43,7 +44,6 @@ namespace mir
     {
         MeshHandle mesh;
 
-        // model * view projection
         glm::mat4 model{ 1.0f };
 
         // transpose(inverse(mat3(model)))
@@ -60,6 +60,7 @@ namespace mir
     {
         VkRect2D rect{};
         std::span<const DrawItem> items;
+        glm::mat4 viewProj{ 1.0f };
     };
 
     class VulkanRenderer
@@ -115,6 +116,8 @@ namespace mir
         bool CreatePipelineLayout();
         bool CreateTextureSampler();
         bool CreateDefaultTextures();
+        bool CreateCameraResources();
+        void DestroyCameraResources();
         // Builds one VkPipeline from a desc.
         VkPipeline BuildPipeline(const MaterialDesc &desc);
         void DestroyMeshes();
@@ -125,8 +128,11 @@ namespace mir
         const GpuTexture *FindTexture(TextureHandle handle) const;
         void NameObject(VkObjectType type, uint64_t handle, const char *name);
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
-        // Draws one view's items, clipped to its rect
-        void RecordView(VkCommandBuffer cmd, const RenderView &view);
+        // Draws one view's items, clipped to its rect. viewIndex selects this
+        // view's slot in the current frame's camera UBO.
+        void RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex);
+        // Writes view's viewProj into this frame's camera UBO at viewIndex.
+        void WriteCameraData(const glm::mat4 &viewProj, uint32_t viewIndex);
 
     private:
         constexpr static uint32_t VulkanVersion{ VK_API_VERSION_1_4 };
@@ -183,6 +189,20 @@ namespace mir
 
         // One shared sampler.
         VkSampler mTextureSampler = VK_NULL_HANDLE;
+
+        // set 1: binding 0 = per-view viewProj, as a dynamic uniform buffer.
+        constexpr static uint32_t kMaxViewsPerFrame = 16;
+
+        VkDescriptorSetLayout mCameraSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool mCameraDescriptorPool = VK_NULL_HANDLE;
+        VkDescriptorSet mCameraDescriptorSets[kFramesInFlight]{};
+
+        VkBuffer mCameraBuffers[kFramesInFlight]{};
+        VmaAllocation mCameraAllocations[kFramesInFlight]{};
+        // Persistently mapped; one kMaxViewsPerFrame-slice buffer per frame.
+        std::byte *mCameraMapped[kFramesInFlight]{};
+        // sizeof(CameraData) rounded up to minUniformBufferOffsetAlignment.
+        VkDeviceSize mCameraAlignedSize = 0;
 
         // One buffer pair per mesh
         struct GpuMesh

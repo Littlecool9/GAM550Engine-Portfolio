@@ -14,7 +14,7 @@ struct VSOutput
 
 struct PushData
 {
-    float4x4 transform;
+    float4x4 model;
     // Normal matrix, carried as three columns rather than a float3x3: see
     // the C++-side PushData comment in VulkanRenderer.cpp for why the byte
     // layout has to be spelled out like this instead of trusting a native
@@ -28,6 +28,15 @@ struct PushData
 [[vk::push_constant]]
 PushData pushData;
 
+// set 1, binding 0: per-view camera data (VulkanRenderer's camera UBO).
+// A dynamic uniform buffer, so this reads like an ordinary cbuffer here -
+// only the C++-side descriptor type picks the view's slice.
+[[vk::binding(0, 1)]]
+cbuffer CameraData
+{
+    float4x4 viewProj;
+};
+
 // Single hardcoded directional light, Gouraud-shaded (computed here in the
 // vertex stage, not per-pixel) - the simplest thing that makes the cube's
 // faces read as a 3D object instead of a flat-colour silhouette.
@@ -39,7 +48,7 @@ static const float kDiffuse = 0.85;
 VSOutput vertexMain(VSInput input)
 {
     VSOutput output;
-    output.position = mul(pushData.transform, float4(input.pos, 1.0));
+    output.position = mul(viewProj, mul(pushData.model, float4(input.pos, 1.0)));
 
     // Column-major matrix * vector, done by hand: this avoids depending on
     // whichever row/column convention float3x3(v0, v1, v2) would apply.

@@ -59,12 +59,26 @@ namespace mir
         // vulkan pads every column to 16 anyways
         struct PushData
         {
-            glm::mat4 transform;  // 64
+            glm::mat4 model;      // 64
             glm::vec4 normalCol0; // 16
             glm::vec4 normalCol1; // 16
             glm::vec4 normalCol2; // 16
             glm::vec4 tint;       // 16
         };
+
+        // set 1, binding 0. One per RenderView, sliced into the per-frame
+        // camera UBO (see mCameraAlignedSize).
+        struct CameraData
+        {
+            glm::mat4 viewProj;
+        };
+
+        VkDeviceSize AlignUp(VkDeviceSize size, VkDeviceSize alignment)
+        {
+            if (alignment == 0)
+                return size;
+            return (size + alignment - 1) & ~(alignment - 1);
+        }
         VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
             VkDebugUtilsMessageSeverityFlagBitsEXT severity,
             VkDebugUtilsMessageTypeFlagsEXT,
@@ -369,6 +383,9 @@ namespace mir
         if (!CreateDefaultTextures())
             return false;
 
+        if (!CreateCameraResources())
+            return false;
+
         if (!CreatePipelineLayout())
             return false;
 
@@ -467,6 +484,8 @@ namespace mir
             // before mMaterialDescriptorPool: frees each material's set
             DestroyMaterials();
             DestroyTextures();
+            // before mAllocator: frees the camera UBO buffers
+            DestroyCameraResources();
 
             if (mTextureSampler != VK_NULL_HANDLE)
             {
@@ -1059,10 +1078,14 @@ namespace mir
             .offset = 0,
             .size = sizeof(PushData) };
 
+        // set 0 = material (textures), set 1 = per-view camera UBO.
+        const std::array<VkDescriptorSetLayout, 2> setLayouts{
+            mMaterialSetLayout, mCameraSetLayout };
+
         const VkPipelineLayoutCreateInfo layoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 1,
-            .pSetLayouts = &mMaterialSetLayout,
+            .setLayoutCount = static_cast<uint32_t>(setLayouts.size()),
+            .pSetLayouts = setLayouts.data(),
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &pushConstantRange };
 
@@ -1123,6 +1146,137 @@ namespace mir
         NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mDefaultNormalTexture.mIndex].mImage), "Default normal texture");
 
         return true;
+    }
+
+    bool VulkanRenderer::CreateCameraResources()
+    {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(mPhysicalDevice, &props);
+        mCameraAlignedSize = AlignUp(sizeof(CameraData), props.limits.minUniformBufferOffsetAlignment);
+
+        const VkDescriptorSetLayoutBinding binding{
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT };
+
+        const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = 1,
+            .pBindings = &binding };
+
+        if (vkCreateDescriptorSetLayout(mDevice, &setLayoutInfo, nullptr, &mCameraSetLayout) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateCameraResources: vkCreateDescriptorSetLayout failed");
+            return false;
+        }
+
+        const VkDescriptorPoolSize poolSize{
+            .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+            .descriptorCount = kFramesInFlight };
+
+        const VkDescriptorPoolCreateInfo poolInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .maxSets = kFramesInFlight,
+            .poolSizeCount = 1,
+            .pPoolSizes = &poolSize };
+
+        if (vkCreateDescriptorPool(mDevice, &poolInfo, nullptr, &mCameraDescriptorPool) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateCameraResources: vkCreateDescriptorPool failed");
+            return false;
+        }
+
+        const VkDeviceSize bufferSize = mCameraAlignedSize * kMaxViewsPerFrame;
+
+        for (uint32_t i = 0; i < kFramesInFlight; ++i)
+        {
+            VmaAllocationInfo allocInfo{};
+            if (!CreateBuffer(mAllocator, bufferSize,
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                mCameraBuffers[i], mCameraAllocations[i], &allocInfo))
+            {
+                MIR_LOG_CRITICAL("CreateCameraResources: camera buffer allocation failed for frame {}", i);
+                return false;
+            }
+            mCameraMapped[i] = static_cast<std::byte *>(allocInfo.pMappedData);
+
+            const VkDescriptorSetAllocateInfo setAllocInfo{
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                .descriptorPool = mCameraDescriptorPool,
+                .descriptorSetCount = 1,
+                .pSetLayouts = &mCameraSetLayout };
+
+            if (vkAllocateDescriptorSets(mDevice, &setAllocInfo, &mCameraDescriptorSets[i]) != VK_SUCCESS)
+            {
+                MIR_LOG_CRITICAL("CreateCameraResources: descriptor set allocation failed for frame {}", i);
+                return false;
+            }
+
+            // range = one view's slice; the dynamic offset walks between them.
+            const VkDescriptorBufferInfo bufferInfo{
+                .buffer = mCameraBuffers[i],
+                .offset = 0,
+                .range = sizeof(CameraData) };
+
+            const VkWriteDescriptorSet write{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = mCameraDescriptorSets[i],
+                .dstBinding = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                .pBufferInfo = &bufferInfo };
+
+            vkUpdateDescriptorSets(mDevice, 1, &write, 0, nullptr);
+
+            NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mCameraBuffers[i]),
+                std::format("Camera UBO {}", i).c_str());
+        }
+
+        return true;
+    }
+
+    void VulkanRenderer::DestroyCameraResources()
+    {
+        for (uint32_t i = 0; i < kFramesInFlight; ++i)
+        {
+            if (mCameraBuffers[i] != VK_NULL_HANDLE)
+            {
+                vmaDestroyBuffer(mAllocator, mCameraBuffers[i], mCameraAllocations[i]);
+                mCameraBuffers[i] = VK_NULL_HANDLE;
+                mCameraAllocations[i] = VK_NULL_HANDLE;
+                mCameraMapped[i] = nullptr;
+            }
+        }
+
+        // Freeing the pool frees its descriptor sets too.
+        if (mCameraDescriptorPool != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorPool(mDevice, mCameraDescriptorPool, nullptr);
+            mCameraDescriptorPool = VK_NULL_HANDLE;
+        }
+
+        if (mCameraSetLayout != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorSetLayout(mDevice, mCameraSetLayout, nullptr);
+            mCameraSetLayout = VK_NULL_HANDLE;
+        }
+    }
+
+    void VulkanRenderer::WriteCameraData(const glm::mat4 &viewProj, uint32_t viewIndex)
+    {
+        const CameraData data{ viewProj };
+        const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
+
+        std::byte *const dst = mCameraMapped[mFrameIndex] + offset;
+        std::memcpy(dst, &data, sizeof(CameraData));
+
+        // No-op if the memory type is already host-coherent; required
+        // otherwise, since nothing else guarantees this write is flushed
+        // before the render commands using it are submitted.
+        vmaFlushAllocation(mAllocator, mCameraAllocations[mFrameIndex], offset, sizeof(CameraData));
     }
 
     VkPipeline VulkanRenderer::BuildPipeline(const MaterialDesc &desc)
@@ -1813,7 +1967,7 @@ namespace mir
         }
         mRenderComplete.clear();
     }
-    void VulkanRenderer::RecordView(VkCommandBuffer cmd, const RenderView &view)
+    void VulkanRenderer::RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex)
     {
         const VkRect2D requestedRect = (view.rect.extent.width > 0 && view.rect.extent.height > 0)
             ? view.rect
@@ -1835,6 +1989,11 @@ namespace mir
             .maxDepth = 1.0f };
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &rect);
+
+        WriteCameraData(view.viewProj, viewIndex);
+        const uint32_t cameraOffset = static_cast<uint32_t>(viewIndex * mCameraAlignedSize);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
+            1, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
 
         VkPipeline boundPipeline = VK_NULL_HANDLE;
         VkDescriptorSet boundDescriptorSet = VK_NULL_HANDLE;
@@ -1871,7 +2030,7 @@ namespace mir
             vkCmdBindIndexBuffer(cmd, mesh->mIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
             const PushData pushData{
-                .transform = item.model,
+                .model = item.model,
                 .normalCol0 = glm::vec4(item.normalMatrix[0], 0.0f),
                 .normalCol1 = glm::vec4(item.normalMatrix[1], 0.0f),
                 .normalCol2 = glm::vec4(item.normalMatrix[2], 0.0f),
@@ -1937,8 +2096,15 @@ namespace mir
             vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
         }
 
-        for (const RenderView &view : views)
-            RecordView(cmd, view);
+        if (views.size() > kMaxViewsPerFrame)
+        {
+            MIR_LOG_ERROR("RecordCommands: {} views this frame, only the first {} (kMaxViewsPerFrame) are drawn",
+                views.size(), kMaxViewsPerFrame);
+        }
+
+        const size_t viewCount = std::min<size_t>(views.size(), kMaxViewsPerFrame);
+        for (size_t i = 0; i < viewCount; ++i)
+            RecordView(cmd, views[i], static_cast<uint32_t>(i));
 
         if (mImguiDrawData != nullptr)
             ImGui_ImplVulkan_RenderDrawData(mImguiDrawData, cmd);

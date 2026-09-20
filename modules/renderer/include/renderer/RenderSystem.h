@@ -164,13 +164,13 @@ namespace mir
                 const glm::mat4 viewProj = MakeViewProjection(cameraWorld, camera.mFovYDegrees,
                     camera.mNearZ, camera.mFarZ, aspect);
 
-                mMeshQuery->ForEach([&items, &viewProj](Entity, const WorldTransform &world, const MeshRenderer &renderer)
+                mMeshQuery->ForEach([&items](Entity, const WorldTransform &world, const MeshRenderer &renderer)
                     {
                         const glm::mat3 normalMatrix = glm::inverseTranspose(glm::mat3(world.Matrix()));
-                        items.push_back(DrawItem{ renderer.mesh, viewProj * world.Matrix(), normalMatrix, renderer.tint, renderer.material });
+                        items.push_back(DrawItem{ renderer.mesh, world.Matrix(), normalMatrix, renderer.tint, renderer.material });
                     });
 
-                mRenderViews.push_back(RenderView{ viewport.mRect, items });
+                mRenderViews.push_back(RenderView{ viewport.mRect, items, viewProj });
             }
 
             if (warnNoCamera && !mWarnedNoCamera)
