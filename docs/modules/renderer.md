@@ -45,8 +45,9 @@ barriers, and frame pacing is one timeline semaphore rather than a fence pool.
 bool Initialize(const RendererDesc &desc);   // takes an ISurfaceProvider, never a Window
 
 MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
+TextureHandle CreateTexture(const TextureDesc &desc);
 MaterialHandle CreateMaterial(const MaterialDesc &desc);
-void ReleaseSceneResources();                // every mesh and material but the default
+void ReleaseSceneResources();                // every mesh, material and texture but the defaults
 
 void DrawFrame(std::span<const RenderView> views);
 void SetClearColor(const glm::vec4 &color);
@@ -71,9 +72,10 @@ void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera
 | Type | Header | Role |
 |---|---|---|
 | `Vertex`, `MeshHandle` | `renderer/Mesh.h` | `{pos, color, normal}`; a `{index, generation}` handle |
-| `MaterialDesc`, `MaterialHandle` | `renderer/Material.h` | `{shaderName, cullMode, polygonMode}`; `kNullMaterial` means the default |
-| `DrawItem` | `renderer/Renderer.h` | `{mesh, model, normalMatrix, tint, material}` |
-| `RenderView` | `renderer/VulkanRenderer.h` | `{rect, items}` — one camera's `DrawItem`s, clipped to a screen rect |
+| `TextureDesc`, `TextureHandle` | `renderer/Texture.h` | `{width, height, pixels, srgb}`, tightly-packed RGBA8; `kNullTexture` falls back to a default in `CreateMaterial` |
+| `MaterialDesc`, `MaterialHandle` | `renderer/Material.h` | `{shaderName, cullMode, polygonMode, baseColorTexture, normalTexture}`; `kNullMaterial` means the default |
+| `DrawItem` | `renderer/Renderer.h` | `{mesh, model, normalMatrix, tint, material}` — `model` is the world transform, not premultiplied by any camera |
+| `RenderView` | `renderer/VulkanRenderer.h` | `{rect, items, viewProj}` — one camera's `DrawItem`s, clipped to a screen rect |
 | `Viewport`, `ViewportId` | `renderer/RenderSystem.h` | `RenderSystem`'s per-viewport state: rect plus a World `Entity`, an external camera, or neither (fallback) |
 | `MeshRenderer`, `Camera` | `renderer/components/` | Handles, and `fovY`/`near`/`far`, declared here rather than in `core` |
 | `RenderSystem` | `renderer/RenderSystem.h` | The ECS-to-renderer bridge, `SystemPhase::Render` |
@@ -116,19 +118,37 @@ ours. VMA is configured with `VMA_STATIC_VULKAN_FUNCTIONS=0` and
 size through that interface after a resize, which is why it is an interface
 rather than a handle and two integers passed once.
 
-**One `VkPipeline` per material, built eagerly at `CreateMaterial`.** The cost is
-a shader module load plus `vkCreateGraphicsPipelines`, paid at load time.
-Everything is created at scene-build time anyway, before the loop starts.
+**One `VkPipeline` and one `VkDescriptorSet` per material, built eagerly at
+`CreateMaterial`.** The cost is a shader module load, `vkCreateGraphicsPipelines`
+and a descriptor set write, paid at load time. Everything is created at
+scene-build time anyway, before the loop starts. Every material's pipeline
+layout carries the same set-0 layout: binding 0 is the base color texture,
+binding 1 is the normal map, both combined image samplers read in the
+fragment stage.
 
-**An invalid material falls back to the default** rather than failing the draw,
-so one bad handle does not blank the frame.
+**Set 1 is the camera, a dynamic uniform buffer bound once per `RenderView`.**
+One buffer per frame-in-flight, sliced into up to `kMaxViewsPerFrame` views;
+`RecordView` writes its `RenderView::viewProj` into its slice and binds set 1
+with a dynamic offset before its per-item loop, so several viewports/cameras
+can share one command buffer without colliding. Only `DrawItem::model` (the
+world transform) and the normal matrix still travel per-item, in the push
+constant.
+
+**An invalid material falls back to the default** rather than failing the
+draw, so one bad handle does not blank the frame. The same rule applies one
+level down: `CreateMaterial` resolves `MaterialDesc::baseColorTexture` and
+`normalTexture` through `CreateTexture`'s table, and a null or stale texture
+handle falls back to a flat white base color / flat normal map rather than
+failing material creation.
 
 **`ReleaseSceneResources` is all or nothing, and the caller vouches for the
-handles.** It waits for the device to go idle, destroys every mesh and every
-material except the default, and the next `CreateMesh` or `CreateMaterial` reuses
-index 0. Mesh generations are not bumped, so a handle kept across the call names
-whatever is created next in its slot, with no error. `App` calls it only right
-after unloading a scene, when no `MeshRenderer` is left.
+handles.** It waits for the device to go idle, destroys every mesh, every
+material except the default, and every texture except the two defaults, and
+the next `CreateMesh`/`CreateMaterial`/`CreateTexture` reuses index 0 (index 2
+for textures, since the two defaults keep 0 and 1). Mesh and texture
+generations are not bumped, so a handle kept across the call names whatever is
+created next in its slot, with no error. `App` calls it only right after
+unloading a scene, when no `MeshRenderer` is left.
 
 **`RenderSystem` runs in `Render` because `TransformPropagateSystem` runs in
 `PostUpdate`.** Placed any earlier, it would draw the previous frame's matrices.
@@ -181,27 +201,39 @@ No tests. Everything here needs a device, and the module is verified by running.
 
 ## Backlog
 
-1. **Descriptor sets and uniform buffers.** The view-projection is premultiplied
-   on the CPU into each `DrawItem`'s push constant, which caps what else can
-   travel with a draw call at the 128-byte guaranteed minimum.
-2. **Per-handle destroy for meshes and materials.** `ReleaseSceneResources` frees
+1. **Per-handle destroy for meshes and materials.** `ReleaseSceneResources` frees
    everything at once. Nothing can free a single mesh, and a stale handle is not
    detected.
-3. **Draw-item sorting and batching.** There is one pipeline bind per item today,
+2. **Draw-item sorting and batching.** There is one pipeline bind per item today,
    so a frame scales with the number of distinct materials rather than with draw
    count.
-4. **Lighting** beyond what the `unlit` and `triangle` shaders hardcode.
-5. **Per-config shader output paths.** Release currently ships unoptimised
+3. **Lighting** beyond what the `unlit` and `triangle` shaders hardcode.
+4. **Per-config shader output paths.** Release currently ships unoptimised
    shaders, and the debug flags cannot become conditional while both
    configurations write to a path that carries no configuration component.
-6. **A real renderer interface.** It is the prerequisite for a headless mode, and
+5. **A real renderer interface.** It is the prerequisite for a headless mode, and
    therefore for testing anything in this module or in `app`.
-7. **A second viewport actually on screen at once.** The mechanism (`AddViewport`)
+6. **A second viewport actually on screen at once.** The mechanism (`AddViewport`)
    exists and is tested by `App` using only viewport 0; nothing yet adds a second
    one for, say, an editor-camera view alongside the game view during a paused
    Play session.
 
 ## Changed
+
+*2026-09-19* — **Descriptor sets and a per-frame camera UBO replaced the
+premultiplied view-projection push constant.** Was: `RenderSystem` baked
+`viewProj * world.Matrix()` into `DrawItem::model`, so the camera rode along
+in every push constant and the pipeline layout carried only the set-0
+material (texture) layout. Now: `DrawItem::model` is the plain world
+transform, `RenderView` gained a `viewProj` field, and `VulkanRenderer` added
+set 1 — a `VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC` binding, one buffer per
+frame-in-flight sliced into up to `kMaxViewsPerFrame` (16) views.
+`RecordView` writes its view's `viewProj` into its slice and binds set 1 with
+a dynamic offset once per view, ahead of the existing per-item set-0
+(material) and push-constant (model + normal + tint) binds. `triangle.slang`
+and `unlit.slang` now read `viewProj` from a `[[vk::binding(0, 1)]] cbuffer`
+and multiply it by the push-constant model matrix in the vertex shader
+instead of consuming an already-combined matrix.
 
 *2026-09-18* — **`RenderSettings` file IO moved to `mir::serial`.** Was:
 `RenderSettings.cpp` held its own parse, merge and dump cycle. Now it calls

@@ -8,6 +8,8 @@
  */
 #pragma once
 
+#include <renderer/Texture.h>
+
 #include <volk.h>
 
 #include <cstdint>
@@ -31,10 +33,12 @@ namespace mir
 
     struct MaterialDesc
     {
-        // Compiled entry points are expected to be named vertexMain/fragmentMain
         std::string shaderName = "triangle";
 
         VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
         VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL;
+
+        TextureHandle baseColorTexture;
+        TextureHandle normalTexture;
     };
 }

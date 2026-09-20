@@ -323,12 +323,19 @@ table. See [script.md](modules/script.md).
    `VulkanRenderer` directly, so there is no headless mode, and nothing in
    `app`, `renderer` or `editor` is unit tested.
 3. No typed assets. Everything cooks as a raw passthrough blob.
-4. No descriptor sets or uniform buffers. The camera's view-projection travels as
-   a premultiplied push constant.
-5. Linux sources exist, but there is no Linux preset. macOS fails at configure.
-6. No CI. Tests are run by hand.
+4. Linux sources exist, but there is no Linux preset. macOS fails at configure.
+5. No CI. Tests are run by hand.
 
 ## Changed
+
+*2026-09-19* — **Descriptor sets and a per-frame camera UBO replaced the
+premultiplied view-projection push constant.** Was: `RenderSystem` baked
+`viewProj * world.Matrix()` into `DrawItem::model` on the CPU, so the camera
+travelled as part of the 128-byte push constant. Now: `DrawItem::model` is
+just the world transform, `RenderView` carries its own `viewProj`, and
+`VulkanRenderer` writes it into a per-frame, per-view slice of a dynamic
+uniform buffer (set 1) that the vertex shader combines with the model push
+constant. See [renderer.md](modules/renderer.md).
 
 *2026-09-18* — **File bytes moved to `core`, and JSON to `serial`.** Was:
 `assets/AssetFileIo.h` held the byte primitives, so `input` and `renderer` linked

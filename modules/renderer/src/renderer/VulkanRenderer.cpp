@@ -59,12 +59,26 @@ namespace mir
         // vulkan pads every column to 16 anyways
         struct PushData
         {
-            glm::mat4 transform;  // 64
+            glm::mat4 model;      // 64
             glm::vec4 normalCol0; // 16
             glm::vec4 normalCol1; // 16
             glm::vec4 normalCol2; // 16
             glm::vec4 tint;       // 16
         };
+
+        // set 1, binding 0. One per RenderView, sliced into the per-frame
+        // camera UBO (see mCameraAlignedSize).
+        struct CameraData
+        {
+            glm::mat4 viewProj;
+        };
+
+        VkDeviceSize AlignUp(VkDeviceSize size, VkDeviceSize alignment)
+        {
+            if (alignment == 0)
+                return size;
+            return (size + alignment - 1) & ~(alignment - 1);
+        }
         VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
             VkDebugUtilsMessageSeverityFlagBitsEXT severity,
             VkDebugUtilsMessageTypeFlagsEXT,
@@ -355,6 +369,15 @@ namespace mir
         if (!CreateFrameResources())
             return false;
 
+        if (!CreateTextureSampler())
+            return false;
+
+        if (!CreateDefaultTextures())
+            return false;
+
+        if (!CreateCameraResources())
+            return false;
+
         if (!CreatePipelineLayout())
             return false;
 
@@ -450,7 +473,29 @@ namespace mir
 
             // before mAllocator
             DestroyMeshes();
+            // before mMaterialDescriptorPool: frees each material's set
             DestroyMaterials();
+            DestroyTextures();
+            // before mAllocator: frees the camera UBO buffers
+            DestroyCameraResources();
+
+            if (mTextureSampler != VK_NULL_HANDLE)
+            {
+                vkDestroySampler(mDevice, mTextureSampler, nullptr);
+                mTextureSampler = VK_NULL_HANDLE;
+            }
+
+            if (mMaterialDescriptorPool != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorPool(mDevice, mMaterialDescriptorPool, nullptr);
+                mMaterialDescriptorPool = VK_NULL_HANDLE;
+            }
+
+            if (mMaterialSetLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(mDevice, mMaterialSetLayout, nullptr);
+                mMaterialSetLayout = VK_NULL_HANDLE;
+            }
 
             if (mPipelineLayout != VK_NULL_HANDLE)
             {
@@ -978,14 +1023,61 @@ namespace mir
 
     bool VulkanRenderer::CreatePipelineLayout()
     {
+        // binding 0 = base color, binding 1 = normal map. Every material
+        // uses this same layout, whether or not its shader samples them.
+        const std::array<VkDescriptorSetLayoutBinding, 2> setBindings{ {
+            { .binding = 0,
+             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             .descriptorCount = 1,
+             .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT },
+            { .binding = 1,
+             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             .descriptorCount = 1,
+             .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT } } };
+
+        const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = static_cast<uint32_t>(setBindings.size()),
+            .pBindings = setBindings.data() };
+
+        if (vkCreateDescriptorSetLayout(mDevice, &setLayoutInfo, nullptr, &mMaterialSetLayout) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("vkCreateDescriptorSetLayout failed");
+            return false;
+        }
+
+        // One set per material.
+        constexpr uint32_t kMaxMaterials = 256;
+        const VkDescriptorPoolSize poolSize{
+            .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = kMaxMaterials * static_cast<uint32_t>(setBindings.size()) };
+
+        const VkDescriptorPoolCreateInfo poolInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+            .maxSets = kMaxMaterials,
+            .poolSizeCount = 1,
+            .pPoolSizes = &poolSize };
+
+        if (vkCreateDescriptorPool(mDevice, &poolInfo, nullptr, &mMaterialDescriptorPool) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("vkCreateDescriptorPool failed");
+            return false;
+        }
+
         const VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .offset = 0,
             .size = sizeof(PushData) };
 
+        // set 0 = material (textures), set 1 = per-view camera UBO.
+        const std::array<VkDescriptorSetLayout, 2> setLayouts{
+            mMaterialSetLayout, mCameraSetLayout };
+
         const VkPipelineLayoutCreateInfo layoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 0,
+            .setLayoutCount = static_cast<uint32_t>(setLayouts.size()),
+            .pSetLayouts = setLayouts.data(),
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &pushConstantRange };
 
@@ -996,6 +1088,187 @@ namespace mir
         }
 
         return true;
+    }
+
+    bool VulkanRenderer::CreateTextureSampler()
+    {
+        const VkSamplerCreateInfo info{
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .magFilter = VK_FILTER_LINEAR,
+            .minFilter = VK_FILTER_LINEAR,
+            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+            .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .anisotropyEnable = VK_FALSE,
+            .compareEnable = VK_FALSE,
+            .minLod = 0.0f,
+            .maxLod = 0.0f,
+            .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK };
+
+        if (vkCreateSampler(mDevice, &info, nullptr, &mTextureSampler) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("vkCreateSampler failed");
+            return false;
+        }
+
+        return true;
+    }
+
+    bool VulkanRenderer::CreateDefaultTextures()
+    {
+        const std::array<std::byte, 4> white{
+            std::byte{ 255 }, std::byte{ 255 }, std::byte{ 255 }, std::byte{ 255 } };
+
+        const std::array<std::byte, 4> flatNormal{
+            std::byte{ 128 }, std::byte{ 128 }, std::byte{ 255 }, std::byte{ 255 } };
+
+        mDefaultWhiteTexture = CreateTexture(TextureDesc{
+            .width = 1, .height = 1, .pixels = white, .srgb = true });
+        mDefaultNormalTexture = CreateTexture(TextureDesc{
+            .width = 1, .height = 1, .pixels = flatNormal, .srgb = false });
+
+        if (mDefaultWhiteTexture.IsNull() || mDefaultNormalTexture.IsNull())
+        {
+            MIR_LOG_CRITICAL("CreateDefaultTextures: default texture upload failed");
+            return false;
+        }
+
+        NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mDefaultWhiteTexture.mIndex].mImage), "Default white texture");
+        NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mDefaultNormalTexture.mIndex].mImage), "Default normal texture");
+
+        return true;
+    }
+
+    bool VulkanRenderer::CreateCameraResources()
+    {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(mPhysicalDevice, &props);
+        mCameraAlignedSize = AlignUp(sizeof(CameraData), props.limits.minUniformBufferOffsetAlignment);
+
+        const VkDescriptorSetLayoutBinding binding{
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT };
+
+        const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = 1,
+            .pBindings = &binding };
+
+        if (vkCreateDescriptorSetLayout(mDevice, &setLayoutInfo, nullptr, &mCameraSetLayout) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateCameraResources: vkCreateDescriptorSetLayout failed");
+            return false;
+        }
+
+        const VkDescriptorPoolSize poolSize{
+            .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+            .descriptorCount = kFramesInFlight };
+
+        const VkDescriptorPoolCreateInfo poolInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .maxSets = kFramesInFlight,
+            .poolSizeCount = 1,
+            .pPoolSizes = &poolSize };
+
+        if (vkCreateDescriptorPool(mDevice, &poolInfo, nullptr, &mCameraDescriptorPool) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateCameraResources: vkCreateDescriptorPool failed");
+            return false;
+        }
+
+        const VkDeviceSize bufferSize = mCameraAlignedSize * kMaxViewsPerFrame;
+
+        for (uint32_t i = 0; i < kFramesInFlight; ++i)
+        {
+            VmaAllocationInfo allocInfo{};
+            if (!CreateBuffer(mAllocator, bufferSize,
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                mCameraBuffers[i], mCameraAllocations[i], &allocInfo))
+            {
+                MIR_LOG_CRITICAL("CreateCameraResources: camera buffer allocation failed for frame {}", i);
+                return false;
+            }
+            mCameraMapped[i] = static_cast<std::byte *>(allocInfo.pMappedData);
+
+            const VkDescriptorSetAllocateInfo setAllocInfo{
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                .descriptorPool = mCameraDescriptorPool,
+                .descriptorSetCount = 1,
+                .pSetLayouts = &mCameraSetLayout };
+
+            if (vkAllocateDescriptorSets(mDevice, &setAllocInfo, &mCameraDescriptorSets[i]) != VK_SUCCESS)
+            {
+                MIR_LOG_CRITICAL("CreateCameraResources: descriptor set allocation failed for frame {}", i);
+                return false;
+            }
+
+            // range = one view's slice; the dynamic offset walks between them.
+            const VkDescriptorBufferInfo bufferInfo{
+                .buffer = mCameraBuffers[i],
+                .offset = 0,
+                .range = sizeof(CameraData) };
+
+            const VkWriteDescriptorSet write{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = mCameraDescriptorSets[i],
+                .dstBinding = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                .pBufferInfo = &bufferInfo };
+
+            vkUpdateDescriptorSets(mDevice, 1, &write, 0, nullptr);
+
+            NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mCameraBuffers[i]),
+                std::format("Camera UBO {}", i).c_str());
+        }
+
+        return true;
+    }
+
+    void VulkanRenderer::DestroyCameraResources()
+    {
+        for (uint32_t i = 0; i < kFramesInFlight; ++i)
+        {
+            if (mCameraBuffers[i] != VK_NULL_HANDLE)
+            {
+                vmaDestroyBuffer(mAllocator, mCameraBuffers[i], mCameraAllocations[i]);
+                mCameraBuffers[i] = VK_NULL_HANDLE;
+                mCameraAllocations[i] = VK_NULL_HANDLE;
+                mCameraMapped[i] = nullptr;
+            }
+        }
+
+        // Freeing the pool frees its descriptor sets too.
+        if (mCameraDescriptorPool != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorPool(mDevice, mCameraDescriptorPool, nullptr);
+            mCameraDescriptorPool = VK_NULL_HANDLE;
+        }
+
+        if (mCameraSetLayout != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorSetLayout(mDevice, mCameraSetLayout, nullptr);
+            mCameraSetLayout = VK_NULL_HANDLE;
+        }
+    }
+
+    void VulkanRenderer::WriteCameraData(const glm::mat4 &viewProj, uint32_t viewIndex)
+    {
+        const CameraData data{ viewProj };
+        const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
+
+        std::byte *const dst = mCameraMapped[mFrameIndex] + offset;
+        std::memcpy(dst, &data, sizeof(CameraData));
+
+        // No-op if the memory type is already host-coherent; required
+        // otherwise, since nothing else guarantees this write is flushed
+        // before the render commands using it are submitted.
+        vmaFlushAllocation(mAllocator, mCameraAllocations[mFrameIndex], offset, sizeof(CameraData));
     }
 
     VkPipeline VulkanRenderer::BuildPipeline(const MaterialDesc &desc)
@@ -1138,7 +1411,61 @@ namespace mir
         if (pipeline == VK_NULL_HANDLE)
             return kNullMaterial;
 
-        mMaterials.push_back(GpuMaterial{ pipeline });
+        const GpuTexture *baseColor = FindTexture(desc.baseColorTexture);
+        if (baseColor == nullptr)
+            baseColor = FindTexture(mDefaultWhiteTexture);
+
+        const GpuTexture *normal = FindTexture(desc.normalTexture);
+        if (normal == nullptr)
+            normal = FindTexture(mDefaultNormalTexture);
+
+        if (baseColor == nullptr || normal == nullptr)
+        {
+            MIR_LOG_CRITICAL("CreateMaterial: default textures unavailable");
+            vkDestroyPipeline(mDevice, pipeline, nullptr);
+            return kNullMaterial;
+        }
+
+        VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+        const VkDescriptorSetAllocateInfo setAllocInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = mMaterialDescriptorPool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &mMaterialSetLayout };
+
+        if (vkAllocateDescriptorSets(mDevice, &setAllocInfo, &descriptorSet) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateMaterial: descriptor set allocation failed");
+            vkDestroyPipeline(mDevice, pipeline, nullptr);
+            return kNullMaterial;
+        }
+
+        const VkDescriptorImageInfo baseColorInfo{
+            .sampler = mTextureSampler,
+            .imageView = baseColor->mView,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        const VkDescriptorImageInfo normalInfo{
+            .sampler = mTextureSampler,
+            .imageView = normal->mView,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+
+        const std::array<VkWriteDescriptorSet, 2> writes{ {
+            { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+             .dstSet = descriptorSet,
+             .dstBinding = 0,
+             .descriptorCount = 1,
+             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             .pImageInfo = &baseColorInfo },
+            { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+             .dstSet = descriptorSet,
+             .dstBinding = 1,
+             .descriptorCount = 1,
+             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             .pImageInfo = &normalInfo } } };
+
+        vkUpdateDescriptorSets(mDevice, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+
+        mMaterials.push_back(GpuMaterial{ pipeline, descriptorSet });
 
         MIR_LOG_INFO("Material created: {} (index {})", desc.shaderName, mMaterials.size() - 1);
         return MaterialHandle{ static_cast<uint32_t>(mMaterials.size() - 1), 0 };
@@ -1148,6 +1475,8 @@ namespace mir
     {
         for (GpuMaterial &material : mMaterials)
         {
+            if (material.mDescriptorSet != VK_NULL_HANDLE)
+                vkFreeDescriptorSets(mDevice, mMaterialDescriptorPool, 1, &material.mDescriptorSet);
             if (material.mPipeline != VK_NULL_HANDLE)
                 vkDestroyPipeline(mDevice, material.mPipeline, nullptr);
         }
@@ -1165,11 +1494,25 @@ namespace mir
         const std::size_t meshCount = mMeshes.size();
         DestroyMeshes();
 
+        // keep the two default textures: CreateMaterial falls back to them
+        const std::size_t keptTextures = std::min<std::size_t>(mTextures.size(), 2);
+        std::size_t releasedTextures = 0;
+        for (std::size_t i = keptTextures; i < mTextures.size(); ++i)
+        {
+            GpuTexture &texture = mTextures[i];
+            if (texture.mView != VK_NULL_HANDLE)
+                vkDestroyImageView(mDevice, texture.mView, nullptr);
+            if (texture.mImage != VK_NULL_HANDLE)
+                vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
+            ++releasedTextures;
+        }
+        mTextures.resize(keptTextures);
+
         if (mDefaultMaterial.IsNull() || mDefaultMaterial.mIndex >= mMaterials.size())
         {
             const std::size_t materialCount = mMaterials.size();
             DestroyMaterials();
-            MIR_LOG_INFO("Released {} meshes and {} materials", meshCount, materialCount);
+            MIR_LOG_INFO("Released {} meshes, {} materials and {} textures", meshCount, materialCount, releasedTextures);
             return;
         }
 
@@ -1180,6 +1523,8 @@ namespace mir
         {
             if (i == mDefaultMaterial.mIndex)
                 continue;
+            if (mMaterials[i].mDescriptorSet != VK_NULL_HANDLE)
+                vkFreeDescriptorSets(mDevice, mMaterialDescriptorPool, 1, &mMaterials[i].mDescriptorSet);
             if (mMaterials[i].mPipeline != VK_NULL_HANDLE)
                 vkDestroyPipeline(mDevice, mMaterials[i].mPipeline, nullptr);
             ++released;
@@ -1189,7 +1534,7 @@ namespace mir
         mMaterials.push_back(defaultMaterial);
         mDefaultMaterial = MaterialHandle{ 0, 0 };
 
-        MIR_LOG_INFO("Released {} meshes and {} materials", meshCount, released);
+        MIR_LOG_INFO("Released {} meshes, {} materials and {} textures", meshCount, released, releasedTextures);
     }
 
     const VulkanRenderer::GpuMaterial *VulkanRenderer::FindMaterial(MaterialHandle handle) const
@@ -1227,9 +1572,6 @@ namespace mir
             return kNullMesh;
         }
 
-        // MAPPED_BIT means pMappedData is already valid - no vmaMapMemory or
-        // matching unmap. SEQUENTIAL_WRITE says these writes are forward-only,
-        // which lets VMA pick write-combined memory; never read this pointer.
         std::byte *const mapped = static_cast<std::byte *>(stagingInfo.pMappedData);
         std::memcpy(mapped, vertices.data(), vertexBytes);
         std::memcpy(mapped + vertexBytes, indices.data(), indexBytes);
@@ -1250,8 +1592,7 @@ namespace mir
         if (!buffersCreated)
         {
             MIR_LOG_CRITICAL("CreateMesh: device buffer allocation failed");
-            // The && above short-circuits, so one of the two may be null here.
-            // Both destroys are guarded, so this handles either case.
+
             if (mesh.mVertexBuffer != VK_NULL_HANDLE)
                 vmaDestroyBuffer(mAllocator, mesh.mVertexBuffer, mesh.mVertexAllocation);
             if (mesh.mIndexBuffer != VK_NULL_HANDLE)
@@ -1260,8 +1601,6 @@ namespace mir
             return kNullMesh;
         }
 
-        // Throwaway pool, not a frame pool: the frame loop resets those, and
-        // this may run before the loop has started.
         VkCommandPool uploadPool = VK_NULL_HANDLE;
         const VkCommandPoolCreateInfo poolInfo{
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -1347,6 +1686,179 @@ namespace mir
                 vmaDestroyBuffer(mAllocator, mesh.mIndexBuffer, mesh.mIndexAllocation);
         }
         mMeshes.clear();
+    }
+
+    TextureHandle VulkanRenderer::CreateTexture(const TextureDesc &desc)
+    {
+        const VkDeviceSize expectedBytes = VkDeviceSize{ desc.width } * desc.height * 4;
+        if (desc.width == 0 || desc.height == 0 || desc.pixels.size_bytes() != expectedBytes)
+        {
+            MIR_LOG_ERROR("CreateTexture: {}x{} expects {} bytes of RGBA8, got {}",
+                desc.width, desc.height, expectedBytes, desc.pixels.size_bytes());
+            return kNullTexture;
+        }
+
+        VkBuffer staging = VK_NULL_HANDLE;
+        VmaAllocation stagingAllocation = VK_NULL_HANDLE;
+        VmaAllocationInfo stagingInfo{};
+
+        if (!CreateBuffer(mAllocator, expectedBytes,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+            VMA_ALLOCATION_CREATE_MAPPED_BIT,
+            staging, stagingAllocation, &stagingInfo))
+        {
+            MIR_LOG_CRITICAL("CreateTexture: staging buffer allocation failed");
+            return kNullTexture;
+        }
+
+        std::memcpy(stagingInfo.pMappedData, desc.pixels.data(), desc.pixels.size_bytes());
+
+        GpuTexture texture{};
+        texture.mGeneration = 1;
+
+        const VkFormat format = desc.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+        const VkImageCreateInfo imageInfo{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = format,
+            .extent{ desc.width, desc.height, 1 },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
+
+        const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
+
+        if (vmaCreateImage(mAllocator, &imageInfo, &allocInfo,
+            &texture.mImage, &texture.mAllocation, nullptr) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateTexture: vmaCreateImage failed");
+            vmaDestroyBuffer(mAllocator, staging, stagingAllocation);
+            return kNullTexture;
+        }
+
+        VkCommandPool uploadPool = VK_NULL_HANDLE;
+        const VkCommandPoolCreateInfo poolInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .queueFamilyIndex = mGfxQueueFamIdx };
+
+        if (vkCreateCommandPool(mDevice, &poolInfo, nullptr, &uploadPool) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateTexture: upload command pool creation failed");
+            vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
+            vmaDestroyBuffer(mAllocator, staging, stagingAllocation);
+            return kNullTexture;
+        }
+
+        VkCommandBuffer uploadCmd = VK_NULL_HANDLE;
+        const VkCommandBufferAllocateInfo cmdAllocInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = uploadPool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1 };
+        vkAllocateCommandBuffers(mDevice, &cmdAllocInfo, &uploadCmd);
+
+        const VkCommandBufferBeginInfo beginInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
+        vkBeginCommandBuffer(uploadCmd, &beginInfo);
+
+        ImageBarrier(uploadCmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+        const VkBufferImageCopy region{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1 },
+            .imageOffset{ 0, 0, 0 },
+            .imageExtent{ desc.width, desc.height, 1 } };
+        vkCmdCopyBufferToImage(uploadCmd, staging, texture.mImage,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+        ImageBarrier(uploadCmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+
+        vkEndCommandBuffer(uploadCmd);
+
+        const VkSubmitInfo submitInfo{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &uploadCmd };
+
+        vkQueueSubmit(mGfxQueue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(mGfxQueue);
+
+        vkDestroyCommandPool(mDevice, uploadPool, nullptr);
+        vmaDestroyBuffer(mAllocator, staging, stagingAllocation);
+
+        const VkImageViewCreateInfo viewInfo{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = texture.mImage,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = format,
+            .subresourceRange{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1 } };
+
+        if (vkCreateImageView(mDevice, &viewInfo, nullptr, &texture.mView) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateTexture: vkCreateImageView failed");
+            vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
+            return kNullTexture;
+        }
+
+        const uint32_t index = static_cast<uint32_t>(mTextures.size());
+        mTextures.push_back(texture);
+
+        NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(texture.mImage),
+            std::format("Texture {}", index).c_str());
+
+        MIR_LOG_INFO("Texture {} uploaded: {}x{}, {} bytes", index, desc.width, desc.height, expectedBytes);
+
+        return TextureHandle{ index, texture.mGeneration };
+    }
+
+    const VulkanRenderer::GpuTexture *VulkanRenderer::FindTexture(TextureHandle handle) const
+    {
+        if (handle.IsNull() || handle.mIndex >= mTextures.size())
+            return nullptr;
+
+        const GpuTexture &texture = mTextures[handle.mIndex];
+
+        if (texture.mGeneration != handle.mGeneration)
+            return nullptr;
+
+        return &texture;
+    }
+
+    void VulkanRenderer::DestroyTextures()
+    {
+        for (GpuTexture &texture : mTextures)
+        {
+            if (texture.mView != VK_NULL_HANDLE)
+                vkDestroyImageView(mDevice, texture.mView, nullptr);
+            if (texture.mImage != VK_NULL_HANDLE)
+                vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
+        }
+        mTextures.clear();
+        mDefaultWhiteTexture = kNullTexture;
+        mDefaultNormalTexture = kNullTexture;
     }
 
     void VulkanRenderer::NameObject(VkObjectType type, uint64_t handle, const char *name)
@@ -1447,7 +1959,7 @@ namespace mir
         }
         mRenderComplete.clear();
     }
-    void VulkanRenderer::RecordView(VkCommandBuffer cmd, const RenderView &view)
+    void VulkanRenderer::RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex)
     {
         const VkRect2D requestedRect = (view.rect.extent.width > 0 && view.rect.extent.height > 0)
             ? view.rect
@@ -1470,7 +1982,13 @@ namespace mir
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &rect);
 
+        WriteCameraData(view.viewProj, viewIndex);
+        const uint32_t cameraOffset = static_cast<uint32_t>(viewIndex * mCameraAlignedSize);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
+            1, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
+
         VkPipeline boundPipeline = VK_NULL_HANDLE;
+        VkDescriptorSet boundDescriptorSet = VK_NULL_HANDLE;
 
         // no mesh/material batching yet, just draw per item
         for (const DrawItem &item : view.items)
@@ -1491,13 +2009,20 @@ namespace mir
                 boundPipeline = material->mPipeline;
             }
 
+            if (material->mDescriptorSet != boundDescriptorSet)
+            {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
+                    0, 1, &material->mDescriptorSet, 0, nullptr);
+                boundDescriptorSet = material->mDescriptorSet;
+            }
+
             const VkDeviceSize vertexOffset = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->mVertexBuffer, &vertexOffset);
 
             vkCmdBindIndexBuffer(cmd, mesh->mIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
             const PushData pushData{
-                .transform = item.model,
+                .model = item.model,
                 .normalCol0 = glm::vec4(item.normalMatrix[0], 0.0f),
                 .normalCol1 = glm::vec4(item.normalMatrix[1], 0.0f),
                 .normalCol2 = glm::vec4(item.normalMatrix[2], 0.0f),
@@ -1563,8 +2088,15 @@ namespace mir
             vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
         }
 
-        for (const RenderView &view : views)
-            RecordView(cmd, view);
+        if (views.size() > kMaxViewsPerFrame)
+        {
+            MIR_LOG_ERROR("RecordCommands: {} views this frame, only the first {} (kMaxViewsPerFrame) are drawn",
+                views.size(), kMaxViewsPerFrame);
+        }
+
+        const size_t viewCount = std::min<size_t>(views.size(), kMaxViewsPerFrame);
+        for (size_t i = 0; i < viewCount; ++i)
+            RecordView(cmd, views[i], static_cast<uint32_t>(i));
 
         if (mImguiDrawData != nullptr)
             ImGui_ImplVulkan_RenderDrawData(mImguiDrawData, cmd);

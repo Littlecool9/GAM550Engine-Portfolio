@@ -108,7 +108,13 @@ namespace mir
 
             const VkExtent2D swapchainExtent = mRenderer.SwapchainExtent();
 
-            mDrawItemsPerViewport.resize(mViewports.size());
+            mDrawItems.clear();
+            mMeshQuery->ForEach([this](Entity, const WorldTransform &world, const MeshRenderer &renderer)
+                {
+                    const glm::mat3 normalMatrix = glm::inverseTranspose(glm::mat3(world.Matrix()));
+                    mDrawItems.push_back(DrawItem{ renderer.mesh, world.Matrix(), normalMatrix, renderer.tint, renderer.material });
+                });
+
             mRenderViews.clear();
 
             bool warnNoCamera = false;
@@ -116,8 +122,6 @@ namespace mir
             for (size_t i = 0; i < mViewports.size(); ++i)
             {
                 const Viewport &viewport = mViewports[i];
-                std::vector<DrawItem> &items = mDrawItemsPerViewport[i];
-                items.clear();
 
                 glm::mat4 cameraWorld{ 1.0f };
                 Camera camera{};
@@ -164,13 +168,7 @@ namespace mir
                 const glm::mat4 viewProj = MakeViewProjection(cameraWorld, camera.mFovYDegrees,
                     camera.mNearZ, camera.mFarZ, aspect);
 
-                mMeshQuery->ForEach([&items, &viewProj](Entity, const WorldTransform &world, const MeshRenderer &renderer)
-                    {
-                        const glm::mat3 normalMatrix = glm::inverseTranspose(glm::mat3(world.Matrix()));
-                        items.push_back(DrawItem{ renderer.mesh, viewProj * world.Matrix(), normalMatrix, renderer.tint, renderer.material });
-                    });
-
-                mRenderViews.push_back(RenderView{ viewport.mRect, items });
+                mRenderViews.push_back(RenderView{ viewport.mRect, mDrawItems, viewProj });
             }
 
             if (warnNoCamera && !mWarnedNoCamera)
@@ -189,7 +187,7 @@ namespace mir
 
         std::vector<Viewport> mViewports;
 
-        std::vector<std::vector<DrawItem>> mDrawItemsPerViewport;
+        std::vector<DrawItem> mDrawItems;
         std::vector<RenderView> mRenderViews;
 
         bool mWarnedNoCamera = false;
