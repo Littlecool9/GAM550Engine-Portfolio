@@ -60,7 +60,7 @@ TEST_CASE("AddAction with an existing name returns the existing action instead o
 {
     mir::InputMap map;
     mir::InputAction &first = map.AddAction("Jump", mir::InputActionType::Button);
-    first.bindings.push_back(mir::InputBinding{.device = mir::DeviceKind::Keyboard, .key = mir::Key::Space});
+    first.bindings.push_back(mir::InputBinding{ .device = mir::DeviceKind::Keyboard, .key = mir::Key::Space });
 
     mir::InputAction &second = map.AddAction("Jump", mir::InputActionType::Axis1D);
 
@@ -88,34 +88,89 @@ TEST_CASE("RemoveAction removes exactly the named action", "[input]")
     REQUIRE_FALSE(map.RemoveAction("Jump"));
 }
 
-TEST_CASE("LoadFile on a missing path returns an empty map", "[input]")
+TEST_CASE("LoadFile on a missing path returns nullopt", "[input]")
 {
-    const mir::InputMap map = mir::InputMap::LoadFile("no/such/project_settings.json");
-    REQUIRE(map.Actions().empty());
+    CHECK_FALSE(mir::InputMap::LoadFile("no/such/project_settings.json").has_value());
+}
+
+// A file that exists but has no "input" section is a different answer from no
+// file at all: the caller gets an empty map, not nullopt.
+TEST_CASE("LoadFile on a file with no input section returns an empty map", "[input]")
+{
+    TempInputMapFile file{ "no_input_section.json" };
+    file.Write(R"({"rendering": {"rayTracing": true}})");
+
+    const std::optional<mir::InputMap> map = mir::InputMap::LoadFile(file.mPath);
+    REQUIRE(map.has_value());
+    CHECK(map->Actions().empty());
+}
+
+TEST_CASE("LoadFile on a malformed file returns nullopt", "[input]")
+{
+    TempInputMapFile file{ "malformed.json" };
+    file.Write(R"({"input": broken)");
+
+    CHECK_FALSE(mir::InputMap::LoadFile(file.mPath).has_value());
 }
 
 TEST_CASE("LoadFile reads a legacy unsectioned file back-compat", "[input]")
 {
-    TempInputMapFile file{"legacy_unsectioned.json"};
+    TempInputMapFile file{ "legacy_unsectioned.json" };
     file.Write(R"({"actions": [{"name": "Jump", "type": "Button", "bindings": []}]})");
 
-    const mir::InputMap map = mir::InputMap::LoadFile(file.mPath);
-    REQUIRE(map.Find("Jump") != nullptr);
+    const std::optional<mir::InputMap> map = mir::InputMap::LoadFile(file.mPath);
+    REQUIRE(map.has_value());
+    REQUIRE(map->Find("Jump") != nullptr);
 }
 
 TEST_CASE("LoadFile reads the sectioned 'input' key and ignores a sibling 'rendering' key", "[input]")
 {
-    TempInputMapFile file{"sectioned.json"};
+    TempInputMapFile file{ "sectioned.json" };
     file.Write(R"({"input": {"actions": [{"name": "Jump", "type": "Button", "bindings": []}]}, "rendering": {"rayTracing": true}})");
 
-    const mir::InputMap map = mir::InputMap::LoadFile(file.mPath);
-    REQUIRE(map.Find("Jump") != nullptr);
-    REQUIRE(map.Actions().size() == 1);
+    const std::optional<mir::InputMap> map = mir::InputMap::LoadFile(file.mPath);
+    REQUIRE(map.has_value());
+    REQUIRE(map->Find("Jump") != nullptr);
+    REQUIRE(map->Actions().size() == 1);
+}
+
+// json::value() throws type_error 306 on a non-object receiver, and nothing on
+// the startup path catches it. Each of these three used to terminate the process.
+TEST_CASE("LoadFile survives an input key that is not an object", "[input]")
+{
+    TempInputMapFile file{ "input_not_object.json" };
+    file.Write(R"({"input": null})");
+
+    const std::optional<mir::InputMap> map = mir::InputMap::LoadFile(file.mPath);
+    REQUIRE(map.has_value());
+    CHECK(map->Actions().empty());
+}
+
+TEST_CASE("LoadFile skips a non-object action", "[input]")
+{
+    TempInputMapFile file{ "action_not_object.json" };
+    file.Write(R"({"input": {"actions": [7, {"name": "Jump", "type": "Button", "bindings": []}]}})");
+
+    const std::optional<mir::InputMap> map = mir::InputMap::LoadFile(file.mPath);
+    REQUIRE(map.has_value());
+    CHECK(map->Actions().size() == 1);
+    CHECK(map->Find("Jump") != nullptr);
+}
+
+TEST_CASE("LoadFile skips a non-object binding", "[input]")
+{
+    TempInputMapFile file{ "binding_not_object.json" };
+    file.Write(R"({"input": {"actions": [{"name": "Jump", "type": "Button", "bindings": ["nope"]}]}})");
+
+    const std::optional<mir::InputMap> map = mir::InputMap::LoadFile(file.mPath);
+    REQUIRE(map.has_value());
+    REQUIRE(map->Find("Jump") != nullptr);
+    CHECK(map->Find("Jump")->bindings.empty());
 }
 
 TEST_CASE("SaveFile preserves a sibling 'rendering' section instead of clobbering it", "[input]")
 {
-    TempInputMapFile file{"sibling_preserved.json"};
+    TempInputMapFile file{ "sibling_preserved.json" };
     file.Write(R"({"rendering": {"rayTracing": true}})");
 
     mir::InputMap saved;
@@ -125,25 +180,27 @@ TEST_CASE("SaveFile preserves a sibling 'rendering' section instead of clobberin
     const std::string contents = file.Read();
     REQUIRE(contents.find("\"rayTracing\": true") != std::string::npos);
 
-    const mir::InputMap loaded = mir::InputMap::LoadFile(file.mPath);
-    REQUIRE(loaded.Find("Jump") != nullptr);
+    const std::optional<mir::InputMap> loaded = mir::InputMap::LoadFile(file.mPath);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->Find("Jump") != nullptr);
 }
 
 TEST_CASE("SaveFile then LoadFile round-trips a Button action with mixed-device bindings", "[input]")
 {
-    TempInputMapFile file{"button_roundtrip.json"};
+    TempInputMapFile file{ "button_roundtrip.json" };
 
     mir::InputMap saved;
     mir::InputAction &jump = saved.AddAction("Jump", mir::InputActionType::Button);
-    jump.bindings.push_back(mir::InputBinding{.device = mir::DeviceKind::Keyboard, .key = mir::Key::Space});
-    mir::InputBinding padBinding{.device = mir::DeviceKind::Gamepad};
+    jump.bindings.push_back(mir::InputBinding{ .device = mir::DeviceKind::Keyboard, .key = mir::Key::Space });
+    mir::InputBinding padBinding{ .device = mir::DeviceKind::Gamepad };
     padBinding.gamepadButton = mir::GamepadButton::A;
     jump.bindings.push_back(padBinding);
 
     REQUIRE(saved.SaveFile(file.mPath));
 
-    const mir::InputMap loaded = mir::InputMap::LoadFile(file.mPath);
-    const mir::InputAction *loadedJump = loaded.Find("Jump");
+    const std::optional<mir::InputMap> loaded = mir::InputMap::LoadFile(file.mPath);
+    REQUIRE(loaded.has_value());
+    const mir::InputAction *loadedJump = loaded->Find("Jump");
     REQUIRE(loadedJump != nullptr);
     REQUIRE(loadedJump->type == mir::InputActionType::Button);
     REQUIRE(loadedJump->bindings.size() == 2);
@@ -157,14 +214,14 @@ TEST_CASE("SaveFile then LoadFile round-trips a Button action with mixed-device 
 
 TEST_CASE("SaveFile then LoadFile round-trips an Axis1D action's scale and an analog gamepad axis", "[input]")
 {
-    TempInputMapFile file{"axis1d_roundtrip.json"};
+    TempInputMapFile file{ "axis1d_roundtrip.json" };
 
     mir::InputMap saved;
     mir::InputAction &move = saved.AddAction("Move", mir::InputActionType::Axis1D);
-    move.bindings.push_back(mir::InputBinding{.device = mir::DeviceKind::Keyboard, .key = mir::Key::D, .scale = 1.0f});
-    move.bindings.push_back(mir::InputBinding{.device = mir::DeviceKind::Keyboard, .key = mir::Key::A, .scale = -1.0f});
+    move.bindings.push_back(mir::InputBinding{ .device = mir::DeviceKind::Keyboard, .key = mir::Key::D, .scale = 1.0f });
+    move.bindings.push_back(mir::InputBinding{ .device = mir::DeviceKind::Keyboard, .key = mir::Key::A, .scale = -1.0f });
 
-    mir::InputBinding stick{.device = mir::DeviceKind::Gamepad};
+    mir::InputBinding stick{ .device = mir::DeviceKind::Gamepad };
     stick.useGamepadAxis = true;
     stick.gamepadAxis = mir::GamepadAxis::LeftX;
     stick.deadzone = 0.25f;
@@ -172,8 +229,9 @@ TEST_CASE("SaveFile then LoadFile round-trips an Axis1D action's scale and an an
 
     REQUIRE(saved.SaveFile(file.mPath));
 
-    const mir::InputMap loaded = mir::InputMap::LoadFile(file.mPath);
-    const mir::InputAction *loadedMove = loaded.Find("Move");
+    const std::optional<mir::InputMap> loaded = mir::InputMap::LoadFile(file.mPath);
+    REQUIRE(loaded.has_value());
+    const mir::InputAction *loadedMove = loaded->Find("Move");
     REQUIRE(loadedMove != nullptr);
     REQUIRE(loadedMove->type == mir::InputActionType::Axis1D);
     REQUIRE(loadedMove->bindings.size() == 3);
@@ -190,23 +248,24 @@ TEST_CASE("SaveFile then LoadFile round-trips an Axis1D action's scale and an an
 
 TEST_CASE("SaveFile then LoadFile round-trips an Axis2D action's per-binding channel", "[input]")
 {
-    TempInputMapFile file{"axis2d_roundtrip.json"};
+    TempInputMapFile file{ "axis2d_roundtrip.json" };
 
     mir::InputMap saved;
     mir::InputAction &look = saved.AddAction("Look", mir::InputActionType::Axis2D);
-    look.bindings.push_back(mir::InputBinding{.device = mir::DeviceKind::Gamepad,
+    look.bindings.push_back(mir::InputBinding{ .device = mir::DeviceKind::Gamepad,
                                                .channel = mir::AxisChannel::X,
                                                .useGamepadAxis = true,
-                                               .gamepadAxis = mir::GamepadAxis::RightX});
-    look.bindings.push_back(mir::InputBinding{.device = mir::DeviceKind::Gamepad,
+                                               .gamepadAxis = mir::GamepadAxis::RightX });
+    look.bindings.push_back(mir::InputBinding{ .device = mir::DeviceKind::Gamepad,
                                                .channel = mir::AxisChannel::Y,
                                                .useGamepadAxis = true,
-                                               .gamepadAxis = mir::GamepadAxis::RightY});
+                                               .gamepadAxis = mir::GamepadAxis::RightY });
 
     REQUIRE(saved.SaveFile(file.mPath));
 
-    const mir::InputMap loaded = mir::InputMap::LoadFile(file.mPath);
-    const mir::InputAction *loadedLook = loaded.Find("Look");
+    const std::optional<mir::InputMap> loaded = mir::InputMap::LoadFile(file.mPath);
+    REQUIRE(loaded.has_value());
+    const mir::InputAction *loadedLook = loaded->Find("Look");
     REQUIRE(loadedLook != nullptr);
     REQUIRE(loadedLook->type == mir::InputActionType::Axis2D);
     REQUIRE(loadedLook->bindings.size() == 2);

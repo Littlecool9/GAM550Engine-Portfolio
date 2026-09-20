@@ -16,13 +16,31 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <random>
+#include <sstream>
 #include <string>
 #include <type_traits>
 
 namespace
 {
+    // catch_discover_tests runs each TEST_CASE in its own process, so a counter
+    // alone restarts at 0 and two cases under `ctest --parallel` share a path -
+    // where ~ScratchDir's remove_all then deletes the other's directory mid-test.
+    const std::string &ProcessToken()
+    {
+        static const std::string token = []
+            {
+                std::random_device rd;
+                std::ostringstream out;
+                out << std::hex << ((static_cast<std::uint64_t>(rd()) << 32) ^ rd());
+                return out.str();
+            }();
+        return token;
+    }
+
     struct ScratchDir
     {
         std::filesystem::path path;
@@ -31,7 +49,7 @@ namespace
         {
             static std::atomic<int> counter{0};
             path = std::filesystem::temp_directory_path() /
-                   ("mjolnir_assetcache_test_" + std::to_string(counter.fetch_add(1)));
+                   ("mjolnir_assetcache_test_" + ProcessToken() + "_" + std::to_string(counter.fetch_add(1)));
             std::filesystem::create_directories(path);
         }
 

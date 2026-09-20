@@ -24,6 +24,8 @@
 
 namespace mir
 {
+    inline constexpr std::string_view kAssetManifestFileName = "manifest.blob";
+
     inline constexpr uint32_t kAssetManifestTypeTag = 0x4D414E46u;
     inline constexpr uint32_t kAssetManifestContentVersion = 1u;
 

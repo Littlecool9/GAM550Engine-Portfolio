@@ -5,7 +5,7 @@ other module exists. It contains no gameplay and no subsystem of its own, and it
 is not a framework — there is no registry, no service locator, and no virtual
 `Game` to subclass.
 
-`mir::app` · depends `mir::core`, `assets`, `window`, `renderer`, `editor`, `scene`, `script`, all public; `input`, `nlohmann_json` private · API `modules/app/include/app/` · maintainer Sumin Park · reviewed 2026-09-12
+`mir::app` · depends `mir::core`, `assets`, `window`, `renderer`, `editor`, `scene`, `script`, all public; `input`, `audio`, `physics`, `serial` private · API `modules/app/include/app/` · maintainer Sumin Park · reviewed 2026-09-18
 
 ## Model
 
@@ -292,6 +292,25 @@ logged error.
    cheap for a large scene.
 
 ## Changed
+
+*2026-09-18* — **`GameProject` reads through `mir::serial`, and owns the project
+filenames.** Was: `ReadDefaultGame` and `LoadGameProject` opened their own
+`std::ifstream` and parsed with `operator>>`, and `"engine.json"`, `"game.json"`
+and `"project_settings.json"` were literals spread across the file. Now they call
+`ReadJsonFile`, and the three names are `kEngineManifestFileName`,
+`kGameManifestFileName` and `kProjectSettingsFileName` in `GameProject.h`.
+
+`LoadGameProject` tests for `game.json` with `is_regular_file` before reading it.
+`ReadJsonFile` returns `nullopt` for both a missing and a malformed file, and this
+function needs them apart: a missing manifest means the directory is not a game,
+while a malformed one means a game whose manifest falls back to defaults.
+
+`App` no longer spells `"scene.json"` or `"manifest.blob"`. It asks
+`SceneManifestPath` (see [scene.md](scene.md)) and uses `kAssetManifestFileName`
+(see [assets.md](assets.md)) instead.
+
+`SceneResolve`'s mesh parsing uses `ParseJson`, which takes the asset id as the
+context for its error message, since a cooked blob has no path to report.
 
 *2026-09-17* — **`RenderSettings` loaded alongside `InputMap`.** `Initialize`
 now also emplaces a `RenderSettings` World resource, loaded from the same
