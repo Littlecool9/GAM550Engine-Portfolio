@@ -29,8 +29,6 @@ struct PushData
 PushData pushData;
 
 // set 1, binding 0: per-view camera data (VulkanRenderer's camera UBO).
-// A dynamic uniform buffer, so this reads like an ordinary cbuffer here -
-// only the C++-side descriptor type picks the view's slice.
 [[vk::binding(0, 1)]]
 cbuffer CameraData
 {
