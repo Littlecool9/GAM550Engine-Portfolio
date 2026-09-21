@@ -45,36 +45,68 @@ namespace
     };
 }
 
-TEST_CASE("LoadFile on a missing path returns defaults", "[renderer]")
+TEST_CASE("LoadFile on a missing path returns nullopt", "[renderer]")
 {
-    const mir::RenderSettings settings = mir::RenderSettings::LoadFile("no/such/project_settings.json");
-    REQUIRE_FALSE(settings.rayTracing);
+    CHECK_FALSE(mir::RenderSettings::LoadFile("no/such/project_settings.json").has_value());
 }
 
+TEST_CASE("LoadFile on a malformed file returns nullopt", "[renderer]")
+{
+    TempSettingsFile file{ "malformed.json" };
+    file.Write(R"({"rendering": broken)");
+
+    CHECK_FALSE(mir::RenderSettings::LoadFile(file.mPath).has_value());
+}
+
+// An existing file with no "rendering" section still loads - defaults, not nullopt.
 TEST_CASE("LoadFile on a legacy unsectioned input-only file returns defaults", "[renderer]")
 {
-    TempSettingsFile file{"legacy_unsectioned.json"};
+    TempSettingsFile file{ "legacy_unsectioned.json" };
     file.Write(R"({"actions": []})");
 
-    const mir::RenderSettings settings = mir::RenderSettings::LoadFile(file.mPath);
-    REQUIRE_FALSE(settings.rayTracing);
+    const std::optional<mir::RenderSettings> settings = mir::RenderSettings::LoadFile(file.mPath);
+    REQUIRE(settings.has_value());
+    CHECK_FALSE(settings->rayTracing);
+}
+
+// value() hands back the raw node, so a scalar "rendering" used to throw
+// type_error 306 out of App::Initialize and terminate the process.
+TEST_CASE("LoadFile survives a rendering key that is not an object", "[renderer]")
+{
+    TempSettingsFile file{ "rendering_not_object.json" };
+    file.Write(R"({"rendering": null})");
+
+    const std::optional<mir::RenderSettings> settings = mir::RenderSettings::LoadFile(file.mPath);
+    REQUIRE(settings.has_value());
+    CHECK_FALSE(settings->rayTracing);
+}
+
+TEST_CASE("LoadFile survives a scalar rendering key", "[renderer]")
+{
+    TempSettingsFile file{ "rendering_scalar.json" };
+    file.Write(R"({"rendering": 3})");
+
+    const std::optional<mir::RenderSettings> settings = mir::RenderSettings::LoadFile(file.mPath);
+    REQUIRE(settings.has_value());
+    CHECK_FALSE(settings->rayTracing);
 }
 
 TEST_CASE("SaveFile then LoadFile round-trips rayTracing", "[renderer]")
 {
-    TempSettingsFile file{"roundtrip.json"};
+    TempSettingsFile file{ "roundtrip.json" };
 
     mir::RenderSettings saved;
     saved.rayTracing = true;
     REQUIRE(saved.SaveFile(file.mPath));
 
-    const mir::RenderSettings loaded = mir::RenderSettings::LoadFile(file.mPath);
-    REQUIRE(loaded.rayTracing);
+    const std::optional<mir::RenderSettings> loaded = mir::RenderSettings::LoadFile(file.mPath);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->rayTracing);
 }
 
 TEST_CASE("SaveFile preserves a sibling 'input' section instead of clobbering it", "[renderer]")
 {
-    TempSettingsFile file{"sibling_preserved.json"};
+    TempSettingsFile file{ "sibling_preserved.json" };
     file.Write(R"({"input": {"actions": [{"name": "ZZZ_MARKER_ACTION", "type": "Button", "bindings": []}]}})");
 
     mir::RenderSettings saved;

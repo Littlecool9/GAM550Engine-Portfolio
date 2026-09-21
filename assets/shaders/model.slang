@@ -17,16 +17,26 @@ struct VSOutput
 };
 struct PushData
 {
-    float4x4 transform;
+    float4x4 model;
     float4 normalCol0;
     float4 normalCol1;
     float4 normalCol2;
     float4 tint;
 };
 [[vk::push_constant]] PushData pushData;
-[[vk::binding(0, 0)]] Texture2D<float4> baseColor;
-[[vk::binding(1, 0)]] SamplerState baseSampler;
-[[vk::binding(2, 0)]] StructuredBuffer<float4> deformation;
+
+// set 0, binding 0: base color, combined with this material's sampler.
+[[vk::binding(0, 0)]] Sampler2D<float4> baseColor;
+
+// set 1, binding 0: per-view camera data (VulkanRenderer's camera UBO).
+[[vk::binding(0, 1)]] cbuffer CameraData
+{
+    float4x4 viewProj;
+};
+
+// set 2, binding 0: this draw's morph/skin data. Slot 2 is the material
+// channel the renderer writes in; see BindModelDescriptors.
+[[vk::binding(0, 2)]] StructuredBuffer<float4> deformation;
 
 [shader("vertex")] VSOutput vertexMain(VSInput input, uint vertex : SV_VertexID) {
     float3 p = input.pos, n = input.normal, t = input.tangent.xyz;
@@ -63,7 +73,7 @@ struct PushData
         }
     }
     VSOutput output;
-    output.position = mul(pushData.transform, float4(p, 1));
+    output.position = mul(viewProj, mul(pushData.model, float4(p, 1)));
     output.color = float4(input.color, input.alpha) * pushData.tint;
     output.uv = input.uv;
     output.normal = pushData.normalCol0.xyz * n.x + pushData.normalCol1.xyz * n.y + pushData.normalCol2.xyz * n.z;
@@ -72,7 +82,7 @@ struct PushData
 }[shader("fragment")] float4 fragmentMain(VSOutput input, bool front : SV_IsFrontFace)
     : SV_Target
 {
-    float4 color = baseColor.Sample(baseSampler, input.uv) * input.color;
+    float4 color = baseColor.Sample(input.uv) * input.color;
     float4 material = deformation[2];
     if (material.x == 1 && color.a < material.y)
         discard;

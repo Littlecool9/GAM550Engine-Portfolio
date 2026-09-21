@@ -12,7 +12,10 @@
 #include "ModelSystem.h"
 #include "SceneResolve.h"
 #include <animation/ModelPlayer.h>
+#include <audio/AudioEmitterSystem.h>
+#include <audio/AudioListenerSystem.h>
 #include <audio/AudioSystem.h>
+#include <audio/ComponentRegistration.h>
 #include <core/EngineVersion.h>
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/DeferredAccess.h>
@@ -50,7 +53,7 @@ namespace mir
         mProject = desc.mProject;
         mProjectToOpen.reset();
         mSwitchHookFired = false;
-        mFixedTimestep = FixedTimestep{.mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps};
+        mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
         mAssetImport.Initialize(mProject);
 
         audio::Init(mProject.mSoundBankDir);
@@ -111,15 +114,17 @@ namespace mir
         RegisterRendererComponents();
         RegisterPhysicsComponents();
         RegisterScriptComponents();
+        RegisterAudioComponents();
         RegisterModelPlayer();
+
         mWorld.EmplaceResource<ModelDrawItems>();
         mWorld.EmplaceResource<ModelMorphOverrides>();
 
         // defers structural change
         mWorld.EmplaceResource<FrameCommands>(FrameCommands{&mCommands});
 
-        mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mProject.mProjectSettingsPath));
-        mWorld.EmplaceResource<RenderSettings>(RenderSettings::LoadFile(mProject.mProjectSettingsPath));
+        mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mProject.mProjectSettingsPath).value_or(InputMap{}));
+        mWorld.EmplaceResource<RenderSettings>(RenderSettings::LoadFile(mProject.mProjectSettingsPath).value_or(RenderSettings{}));
         mWorld.EmplaceResource<InputState>();
         mWorld.EmplaceResource<EngineModeState>();
 
@@ -139,13 +144,17 @@ namespace mir
         mModelSystem =
             &mScheduler.AddSystem<ModelSystem>(SystemPhase::PostUpdate, mRenderer, Assets(), mProject.mAssetIdRoot);
 
+        // after TransformPropagateSystem: it reads the WorldTransform that system writes
+        mScheduler.AddSystem<AudioEmitterSystem>(SystemPhase::PostUpdate);
+        mScheduler.AddSystem<AudioListenerSystem>(SystemPhase::PostUpdate);
+
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
         // scanned once: a new game needs a build to cook its assets anyway
         mAvailableProjects = DiscoverGameProjects();
         mProjectMenu.clear();
         for (const GameProject &project : mAvailableProjects)
-            mProjectMenu.push_back(ProjectMenuEntry{project.mDir, project.mName});
+            mProjectMenu.push_back(ProjectMenuEntry{ project.mDir, project.mName });
 
         mSplash.SetProgress("Loading scene...", 0.9f);
         mScene = mir::NewScene("untitled");
@@ -207,9 +216,9 @@ namespace mir
             return false;
         }
 
-        if (!std::filesystem::exists(mProject.mSceneDir / "scene.json"))
+        if (!std::filesystem::exists(SceneManifestPath(mProject.mSceneDir)))
         {
-            MIR_LOG_ERROR("App::LoadScene: no scene.json in '{}'", mProject.mSceneDir.string());
+            MIR_LOG_ERROR("App::LoadScene: no {} in '{}'", kSceneManifestFileName, mProject.mSceneDir.string());
             return false;
         }
 
@@ -281,10 +290,10 @@ namespace mir
     void App::LoadProjectScene()
     {
         std::error_code ec;
-        if (std::filesystem::exists(mProject.mSceneDir / "scene.json", ec))
+        if (std::filesystem::exists(SceneManifestPath(mProject.mSceneDir), ec))
             LoadScene();
         else
-            MIR_LOG_INFO("No scene.json in '{}', starting with an empty scene", mProject.mSceneDir.string());
+            MIR_LOG_INFO("No {} in '{}', starting with an empty scene", kSceneManifestFileName, mProject.mSceneDir.string());
     }
 
     void App::RunSwitchHook()
@@ -309,7 +318,7 @@ namespace mir
             return nullptr; // already tried and logged; do not re-stat the disk every
                             // call
 
-        const std::filesystem::path manifestPath = CookedAssetsDir() / "manifest.blob";
+        const std::filesystem::path manifestPath = CookedAssetsDir() / kAssetManifestFileName;
         mAssetManifest = AssetManifest::LoadFile(manifestPath);
         if (!mAssetManifest.has_value())
         {
@@ -462,7 +471,7 @@ namespace mir
 
     void App::ApplyImportedAssets()
     {
-        auto candidateManifest = AssetManifest::LoadFile(CookedAssetsDir() / "manifest.blob");
+        auto candidateManifest = AssetManifest::LoadFile(CookedAssetsDir() / kAssetManifestFileName);
         if (!candidateManifest)
         {
             mAssetImport.MarkApplyFailed("the new asset manifest could not be loaded");

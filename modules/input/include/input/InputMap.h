@@ -13,6 +13,7 @@
 #include <input/InputTypes.h>
 
 #include <filesystem>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -31,10 +32,8 @@ namespace mir
 
         std::vector<InputAction> &MutableActions() { return mActions; }
 
-        // Malformed/missing files load as an empty map (logged, not fatal) -
-        // same rationale as LoadGameProject: a bad config is a content
-        // problem, not a reason anything downstream should stop working.
-        static InputMap LoadFile(const std::filesystem::path &path);
+        // nullopt only when the file cannot be read as a JSON object at all.
+        static std::optional<InputMap> LoadFile(const std::filesystem::path &path);
         bool SaveFile(const std::filesystem::path &path) const;
 
     private:

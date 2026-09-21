@@ -13,7 +13,7 @@ struct VSOutput
 
 struct PushData
 {
-    float4x4 transform;
+    float4x4 model;
     float4 normalCol0;
     float4 normalCol1;
     float4 normalCol2;
@@ -23,11 +23,18 @@ struct PushData
 [[vk::push_constant]]
 PushData pushData;
 
+// set 1, binding 0: per-view camera data (VulkanRenderer's camera UBO).
+[[vk::binding(0, 1)]]
+cbuffer CameraData
+{
+    float4x4 viewProj;
+};
+
 [shader("vertex")]
 VSOutput vertexMain(VSInput input)
 {
     VSOutput output;
-    output.position = mul(pushData.transform, float4(input.pos, 1.0));
+    output.position = mul(viewProj, mul(pushData.model, float4(input.pos, 1.0)));
     output.color = input.color * pushData.tint.rgb;
     return output;
 }

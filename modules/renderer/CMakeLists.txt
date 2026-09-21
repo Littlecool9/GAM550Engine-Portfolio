@@ -5,7 +5,6 @@ find_package(volk CONFIG REQUIRED)
 # VMA : vulkan memory manager
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
-find_package(nlohmann_json CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 target_include_directories(engine_renderer PRIVATE ${Stb_INCLUDE_DIR})
 
@@ -18,8 +17,7 @@ target_link_libraries(engine_renderer
             glm::glm
     PRIVATE GPUOpen::VulkanMemoryAllocator
             imgui::imgui
-            nlohmann_json::nlohmann_json
-            mir::assets
+            mir::serial
 )
 
 # compile volk ourself instead of linking prebuilt library

@@ -3,7 +3,7 @@
 #include "GltfImporter.h"
 #include <algorithm>
 #include <assets/AssetBlob.h>
-#include <assets/AssetFileIo.h>
+#include <core/fs/FileIO.h>
 #include <assets/AssetId.h>
 #include <assets/AssetManifest.h>
 #include <assets/ModelAsset.h>
@@ -33,6 +33,8 @@ namespace
     using Json = nlohmann::json;
     constexpr uint32_t kCacheVersion = 2;
     constexpr std::string_view kImporterFingerprint = "fastgltf-v2-stable-identity";
+    // One generation back, kept so a crashed cook can be rolled back.
+    constexpr std::string_view kPreviousManifestFileName = "manifest.previous.blob";
     struct SourceRoot
     {
         std::filesystem::path physical;
@@ -73,7 +75,7 @@ namespace
     {
         std::filesystem::create_directories(path.parent_path());
         const std::filesystem::path pending = path.string() + ".pending";
-        if (!mir::WriteFileBytes(pending, bytes))
+        if (!mir::WriteBytes(pending, bytes))
             throw std::runtime_error("cannot write " + pending.string());
 #ifdef _WIN32
         if (!MoveFileExW(pending.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
@@ -266,7 +268,7 @@ namespace
         {
             const std::string name = path.lexically_normal().generic_string();
             append(std::as_bytes(std::span(name)));
-            const auto bytes = mir::ReadFileBytes(path);
+            const auto bytes = mir::ReadBytes(path);
             if (!bytes)
                 throw std::runtime_error("missing dependency: " + path.string());
             append(*bytes);
@@ -291,7 +293,7 @@ namespace
         for (const auto &encoded : record.at("outputs"))
         {
             const Output value = OutputFromJson(encoded);
-            auto bytes = mir::ReadFileBytes(out / value.file);
+            auto bytes = mir::ReadBytes(out / value.file);
             auto blob = bytes ? mir::ParseAssetBlob(*bytes) : std::nullopt;
             if (!blob || blob->header.typeTag != value.tag || blob->header.contentVersion != value.version)
                 return false;
@@ -479,7 +481,7 @@ namespace
             !options.models.empty() || !options.changed.empty() || !options.removals.empty() || !options.moves.empty();
         std::unordered_map<uint64_t, Output> outputs;
         if (partial)
-            if (auto previous = mir::AssetManifest::LoadFile(options.out / "manifest.blob"))
+            if (auto previous = mir::AssetManifest::LoadFile(options.out / mir::kAssetManifestFileName))
                 for (const auto &entry : previous->Entries())
                     outputs.emplace(entry.id.value, Output{entry.id, entry.typeTag, entry.contentVersion,
                                                            std::string(previous->PathOf(entry))});
@@ -531,7 +533,7 @@ namespace
             const std::string file = Hex(id.value) + "-" + Hex(mir::Fnv1a64(bytes)) + ".blob";
             const auto path = options.out / file;
             bool same = false;
-            if (auto previous = mir::ReadFileBytes(path))
+            if (auto previous = mir::ReadBytes(path))
                 same = *previous == bytes;
             if (!same)
                 Publish(path, bytes);
@@ -697,7 +699,7 @@ namespace
                     if (ext == ".gltf" || ext == ".glb" || ext == ".slang" || ext == ".bnk" || ext == ".wem" ||
                         filename.ends_with(".import.json") || filename.ends_with(".pending") || filename == ".gitkeep")
                         continue;
-                    auto bytes = mir::ReadFileBytes(path);
+                    auto bytes = mir::ReadBytes(path);
                     if (!bytes)
                         throw std::runtime_error("cannot read " + path.string());
                     emit(mir::MakeAssetId(LogicalPath(root, path)),
@@ -715,16 +717,17 @@ namespace
         std::vector<mir::AssetManifestSourceEntry> entries;
         for (const auto &output : ordered)
             entries.push_back({{output.id, output.tag, output.version}, output.file});
-        const auto manifestPath = options.out / "manifest.blob";
-        if (auto bytes = mir::ReadFileBytes(manifestPath))
-            Publish(options.out / "manifest.previous.blob", *bytes);
+        const auto manifestPath = options.out / mir::kAssetManifestFileName;
+        if (auto bytes = mir::ReadBytes(manifestPath))
+            Publish(options.out / kPreviousManifestFileName, *bytes);
         Publish(manifestPath, mir::BuildAssetManifestBlob(entries));
         PublishText(options.out / "import-cache.json", cache.dump(2) + "\n");
 
-        std::unordered_set<std::string> keep{"manifest.blob", "manifest.previous.blob"};
+        std::unordered_set<std::string> keep{std::string(mir::kAssetManifestFileName),
+                                             std::string(kPreviousManifestFileName)};
         for (const auto &output : ordered)
             keep.insert(output.file);
-        if (auto previous = mir::AssetManifest::LoadFile(options.out / "manifest.previous.blob"))
+        if (auto previous = mir::AssetManifest::LoadFile(options.out / kPreviousManifestFileName))
             for (const auto &entry : previous->Entries())
                 keep.insert(std::string(previous->PathOf(entry)));
         for (const auto &entry : std::filesystem::directory_iterator(options.out))

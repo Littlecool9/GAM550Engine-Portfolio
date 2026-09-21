@@ -71,6 +71,9 @@ the pieces depend on each other.
                        core           editortheme
 ```
 
+`serial` is not shown: `renderer`, `scene`, `input` and `app` reach `core`
+through it for anything touching a JSON file.
+
 | Module | Owns | Document |
 |---|---|---|
 | `core` | ECS, logging, paths, the surface contract | [core.md](modules/core.md) |
@@ -78,6 +81,7 @@ the pieces depend on each other.
 | `renderer` | The whole Vulkan path, and render-facing components | [renderer.md](modules/renderer.md) |
 | `assets` | Cooked blobs, manifest, cache | [assets.md](modules/assets.md) |
 | `scene` | Scene save and load | [scene.md](modules/scene.md) |
+| `serial` | JSON documents on disk | [serial.md](modules/serial.md) |
 | `script` | Lua embedding and ECS bindings | [script.md](modules/script.md) |
 | `audio` | Wwise lifetime and the per-frame pump | [audio.md](modules/audio.md) |
 | `editor` | ImGui context, backends and the editor shell | [editor.md](modules/editor.md) |
@@ -136,6 +140,19 @@ header.
 
 It is theme data, applied once by `editor` at startup.
 
+**File bytes move in `core`, and JSON in `serial`.**
+
+`core/fs/FileIO.h` opens every file the engine reads or writes, and
+`std::ifstream` and `std::ofstream` appear in no other translation unit.
+
+`serial/JsonFile.h` is the only place that decides those bytes are JSON. It is
+its own module rather than part of `core` because it returns `nlohmann::json`,
+which would otherwise make that library a public dependency of the module
+everything else depends on.
+
+A module above those two decides what a document means, and names no stream
+type. The flow is in [A file](#a-file).
+
 ## Flows
 
 ### A frame
@@ -165,6 +182,92 @@ The scheduler flushes the command buffer at each phase boundary and after each
 
 `RenderSystem` holds a `VulkanRenderer&` passed to its constructor. The renderer
 is not published as a world resource, which keeps it out of reach of scripts.
+
+### A file
+
+Naming a file and moving its bytes are separate mechanisms. A path is resolved
+once at startup into a `GameProject`, and bytes always travel the same three
+layers.
+
+A game directory is named by `--game` or by `defaultGame` in `engine.json`, and
+every path is built from `ExecutableDir()`.
+
+```
+--game <dir>      engine.json "defaultGame"
+         \             /
+     NormalizeGameDir()          rejects anything outside ExecutableDir()
+             |
+     LoadGameProject()           reads game.json: assetsRoot, sceneDir, soundBanksRoot
+             |
+        GameProject
+             |
+             +-- mProjectSettingsPath --> InputMap, RenderSettings
+             +-- mSceneDir            --> SceneManifestPath(), EntityFilePath()
+             +-- mSoundBankDir        --> audio::Init, after which Wwise opens banks itself
+             +-- mAssetIdRoot         --> an id prefix, not a disk path
+```
+
+`GameProject` holds the directories while each module holds its own filenames, so
+`app` joins a root to a constant at the call site. `kSceneManifestFileName` lives
+in `scene`, `kAssetManifestFileName` in `assets`, and the three project-level
+names in `app/GameProject.h`. A module that spells another module's filename
+prevents that module from renaming its own file.
+
+A key missing from `game.json` falls back to a default in `GameProject.cpp`. The
+`assetsRoot` default is written a second time in the root CMakeLists, which reads
+the same key at configure time to decide what to cook, and the two have to agree
+or the cooker and the runtime hash ids from different trees.
+
+Cooked assets are named the other way round, by id rather than by path.
+
+```
+scene field  "meshes/cube.mesh.json"
+             |
+     mAssetIdRoot + "/" + name
+             |
+     MakeAssetId()               FNV-1a 64 of the path string
+             |
+     AssetManifest::Find(id)
+             |
+     CookedAssetsDir() / PathOf(entry)
+```
+
+A scene names an asset by a path that is never opened. The string is hashed into
+an `AssetId`, the manifest turns that id into a cooked file, and a real path
+exists only at that last step ([An asset](#an-asset)). That hash is also why
+`assetsRoot` cannot change once a build has cooked.
+
+Bytes then move through one stack, whichever lane named the file.
+
+```
+GameProject  InputMap  RenderSettings  SceneIO    SceneResolve   AssetCache   VulkanRenderer
+     |          |            |            |            |              |             |
+ ReadJsonFile / WriteJsonFile / UpdateJsonFile      ParseJson         |             |
+     |          |            |            |         (no path)        |             |
+     +----------+------------+------------+                          |             |
+                |                                                    |             |
+      ReadText / WriteTextAtomic                                 ReadBytes     ReadBytes
+                |                                                    |             |
+                +----------------------------------------------------+-------------+
+                                        |
+                             std::ifstream / std::ofstream
+```
+
+`ReadJsonFile` is `ReadText` followed by `ParseJson`, and `WriteJsonFile` is
+`dump()` followed by `WriteTextAtomic`, so the `try`/`catch` around a parse
+appears once in the engine. `AssetCache` and `ReadSpirv` skip `serial` because
+they want bytes rather than a document. `SceneResolve` holds bytes already, out
+of an `AssetBlobView`, so it calls `ParseJson` with the asset id as the context
+an error names.
+
+Writes through `serial` are atomic, because JSON on disk here is always a file a
+person can edit. `AssetCooker` writes with plain `WriteBytes`, since a tool
+regenerates its output.
+
+A missing file is quiet and a malformed one is logged, so a caller that needs
+them apart tests for the file first. `LoadGameProject` does, because a missing
+`game.json` means the directory is not a game while a malformed one means a game
+that falls back to defaults.
 
 ### An asset
 
@@ -220,12 +323,27 @@ table. See [script.md](modules/script.md).
    `VulkanRenderer` directly, so there is no headless mode, and nothing in
    `app`, `renderer` or `editor` is unit tested.
 3. No typed assets. Everything cooks as a raw passthrough blob.
-4. No descriptor sets or uniform buffers. The camera's view-projection travels as
-   a premultiplied push constant.
-5. Linux sources exist, but there is no Linux preset. macOS fails at configure.
-6. No CI. Tests are run by hand.
+4. Linux sources exist, but there is no Linux preset. macOS fails at configure.
+5. No CI. Tests are run by hand.
 
 ## Changed
+
+*2026-09-19* — **Descriptor sets and a per-frame camera UBO replaced the
+premultiplied view-projection push constant.** Was: `RenderSystem` baked
+`viewProj * world.Matrix()` into `DrawItem::model` on the CPU, so the camera
+travelled as part of the 128-byte push constant. Now: `DrawItem::model` is
+just the world transform, `RenderView` carries its own `viewProj`, and
+`VulkanRenderer` writes it into a per-frame, per-view slice of a dynamic
+uniform buffer (set 1) that the vertex shader combines with the model push
+constant. See [renderer.md](modules/renderer.md).
+
+*2026-09-18* — **File bytes moved to `core`, and JSON to `serial`.** Was:
+`assets/AssetFileIo.h` held the byte primitives, so `input` and `renderer` linked
+`mir::assets` to read a config file that is not an asset, and `app`, `scene` and
+the SPIR-V loader opened their own streams besides, each with its own
+`json::parse` try/catch and its own log wording. Now: `core/fs/FileIO.h` and
+`serial/JsonFile.h`, with the flow in [A file](#a-file) and the per-module detail
+in [core.md](modules/core.md#changed) and [serial.md](modules/serial.md).
 
 *2026-09-14* — **The runtime loads a game directory.** Was: a `HelloWorld`
 executable whose `main.cpp` hard-coded `games/HelloWorld` paths and built a demo

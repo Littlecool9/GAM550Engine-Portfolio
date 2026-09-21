@@ -5,10 +5,7 @@ target_link_libraries(engine_input
            mir::window
 )
 
-find_package(nlohmann_json CONFIG REQUIRED)
-target_link_libraries(engine_input PRIVATE nlohmann_json::nlohmann_json
-    mir::assets
-)
+target_link_libraries(engine_input PRIVATE mir::serial)
 
 target_sources(engine_input PRIVATE
     src/input/InputMap.cpp

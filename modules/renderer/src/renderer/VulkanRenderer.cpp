@@ -11,6 +11,7 @@
 #include <core/log/Log.h>
 #include <core/log/Assert.h>
 #include <core/fs/Paths.h>
+#include <core/fs/FileIO.h>
 
 #include <vk_mem_alloc.h>
 
@@ -23,10 +24,11 @@
 #include <vector>
 #include <cstring>
 #include <algorithm>
-#include <fstream>
+#include <cmath>
 #include <optional>
 #include <array>
 #include <chrono>
+#include <string_view>
 #include <format>
 
 namespace mir
@@ -59,12 +61,29 @@ namespace mir
         // vulkan pads every column to 16 anyways
         struct PushData
         {
-            glm::mat4 transform;  // 64
+            glm::mat4 model;      // 64
             glm::vec4 normalCol0; // 16
             glm::vec4 normalCol1; // 16
             glm::vec4 normalCol2; // 16
             glm::vec4 tint;       // 16
         };
+
+        // The one shader that reads set 2; see BindModelDescriptors.
+        constexpr std::string_view kModelShaderName = "model";
+
+        // set 1, binding 0. One per RenderView, sliced into the per-frame
+        // camera UBO (see mCameraAlignedSize).
+        struct CameraData
+        {
+            glm::mat4 viewProj;
+        };
+
+        VkDeviceSize AlignUp(VkDeviceSize size, VkDeviceSize alignment)
+        {
+            if (alignment == 0)
+                return size;
+            return (size + alignment - 1) & ~(alignment - 1);
+        }
         VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
             VkDebugUtilsMessageSeverityFlagBitsEXT severity,
             VkDebugUtilsMessageTypeFlagsEXT,
@@ -247,7 +266,8 @@ namespace mir
         void ImageBarrier(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspectMask,
             VkImageLayout oldLayout, VkImageLayout newLayout,
             VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess)
+            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess,
+            uint32_t levelCount = 1)
         {
             const VkImageMemoryBarrier2 barrier{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -262,7 +282,7 @@ namespace mir
                 .image = image,
                 .subresourceRange{
                     .aspectMask = aspectMask,
-                    .levelCount = 1,
+                    .levelCount = levelCount,
                     .layerCount = 1 } };
 
             const VkDependencyInfo dep{
@@ -272,31 +292,94 @@ namespace mir
 
             vkCmdPipelineBarrier2(cmd, &dep);
         }
+        // Level 0, then every smaller level if desc asks for them, packed back
+        // to back into one staging blob with a copy region each. Returns the
+        // level count. The box filter averages in linear light, so an sRGB
+        // image is decoded and re-encoded around the average; alpha is already
+        // linear and is averaged as is.
+        uint32_t BuildMipChain(const TextureDesc &desc, std::vector<std::byte> &bytes,
+            std::vector<VkBufferImageCopy> &regions)
+        {
+            const auto toLinear = [](float v)
+                { return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f); };
+            const auto toSrgb = [](float v)
+                { return v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f; };
+
+            bytes.assign(desc.pixels.begin(), desc.pixels.end());
+            std::vector<std::byte> level(desc.pixels.begin(), desc.pixels.end());
+
+            uint32_t width = desc.width;
+            uint32_t height = desc.height;
+            uint32_t mip = 0;
+            VkDeviceSize offset = 0;
+
+            for (;;)
+            {
+                regions.push_back(VkBufferImageCopy{
+                    .bufferOffset = offset,
+                    .imageSubresource{
+                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .mipLevel = mip,
+                        .baseArrayLayer = 0,
+                        .layerCount = 1 },
+                    .imageExtent{ width, height, 1 } });
+
+                if (!desc.generateMips || (width == 1 && height == 1))
+                    break;
+
+                const uint32_t nextWidth = std::max(width / 2, 1u);
+                const uint32_t nextHeight = std::max(height / 2, 1u);
+                std::vector<std::byte> next(static_cast<size_t>(nextWidth) * nextHeight * 4);
+
+                for (uint32_t y = 0; y < nextHeight; ++y)
+                    for (uint32_t x = 0; x < nextWidth; ++x)
+                        for (uint32_t c = 0; c < 4; ++c)
+                        {
+                            float sum = 0.0f;
+                            uint32_t samples = 0;
+                            for (uint32_t sy = y * height / nextHeight; sy < (y + 1) * height / nextHeight; ++sy)
+                                for (uint32_t sx = x * width / nextWidth; sx < (x + 1) * width / nextWidth; ++sx)
+                                {
+                                    const float v =
+                                        std::to_integer<uint8_t>(level[(static_cast<size_t>(sy) * width + sx) * 4 + c]) / 255.0f;
+                                    sum += (c < 3 && desc.srgb) ? toLinear(v) : v;
+                                    ++samples;
+                                }
+
+                            float v = sum / static_cast<float>(samples);
+                            if (c < 3 && desc.srgb)
+                                v = toSrgb(v);
+                            next[(static_cast<size_t>(y) * nextWidth + x) * 4 + c] =
+                                static_cast<std::byte>(std::clamp<long>(std::lround(v * 255.0f), 0, 255));
+                        }
+
+                offset = bytes.size();
+                bytes.insert(bytes.end(), next.begin(), next.end());
+                level = std::move(next);
+                width = nextWidth;
+                height = nextHeight;
+                ++mip;
+            }
+
+            return mip + 1;
+        }
         std::optional<std::vector<uint32_t>> ReadSpirv(const std::filesystem::path &path)
         {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
-            if (!file)
+            const std::optional<std::vector<std::byte>> bytes = ReadBytes(path);
+            if (!bytes)
+                // ReadBytes takes care of logging onfailure
+                return std::nullopt;
+
+            if (bytes->empty() || bytes->size() % sizeof(uint32_t) != 0)
             {
-                MIR_LOG_CRITICAL("Cannot open SPIR-V: {}", path.string());
+                MIR_LOG_CRITICAL("Bad SPIR-V size ({} bytes): {}", bytes->size(), path.string());
                 return std::nullopt;
             }
 
-            const std::streamsize byteSize = file.tellg();
-            if (byteSize <= 0 || byteSize % 4 != 0)
-            {
-                MIR_LOG_CRITICAL("Bad SPIR-V size ({} bytes): {}", byteSize, path.string());
-                return std::nullopt;
-            }
-
-            std::vector<uint32_t> words(static_cast<size_t>(byteSize) / 4);
-            file.seekg(0);
-            file.read(reinterpret_cast<char *>(words.data()), byteSize);
-
-            if (!file)
-            {
-                MIR_LOG_CRITICAL("Short read on SPIR-V: {}", path.string());
-                return std::nullopt;
-            }
+            // Copied, not reinterpreted: vkCreateShaderModule needs pCode 4-byte
+            // aligned and a vector<byte> is only aligned to 1.
+            std::vector<uint32_t> words(bytes->size() / sizeof(uint32_t));
+            std::memcpy(words.data(), bytes->data(), bytes->size());
             return words;
         }
 
@@ -361,6 +444,12 @@ namespace mir
             return false;
 
         if (!CreateFrameResources())
+            return false;
+
+        if (!CreateDefaultTextures())
+            return false;
+
+        if (!CreateCameraResources())
             return false;
 
         if (!CreatePipelineLayout())
@@ -458,8 +547,26 @@ namespace mir
 
             // before mAllocator
             DestroyMeshes();
+            // before mMaterialDescriptorPool: frees each material's set
             DestroyMaterials();
             DestroyModelResources(true);
+            DestroyTextures();
+            // before mAllocator: frees the camera UBO buffers
+            DestroyCameraResources();
+
+            DestroySamplers();
+
+            if (mMaterialDescriptorPool != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorPool(mDevice, mMaterialDescriptorPool, nullptr);
+                mMaterialDescriptorPool = VK_NULL_HANDLE;
+            }
+
+            if (mMaterialSetLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyDescriptorSetLayout(mDevice, mMaterialSetLayout, nullptr);
+                mMaterialSetLayout = VK_NULL_HANDLE;
+            }
 
             if (mPipelineLayout != VK_NULL_HANDLE)
             {
@@ -988,16 +1095,67 @@ namespace mir
 
     bool VulkanRenderer::CreatePipelineLayout()
     {
-        if (!CreateModelDescriptors()) return false;
+        // set 2 first: CreatePipelineLayout puts its layout in the pipeline.
+        if (!CreateModelDescriptors())
+            return false;
+
+        // binding 0 = base color, binding 1 = normal map. Every material
+        // uses this same layout, whether or not its shader samples them.
+        const std::array<VkDescriptorSetLayoutBinding, 2> setBindings{ {
+            { .binding = 0,
+             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             .descriptorCount = 1,
+             .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT },
+            { .binding = 1,
+             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             .descriptorCount = 1,
+             .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT } } };
+
+        const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = static_cast<uint32_t>(setBindings.size()),
+            .pBindings = setBindings.data() };
+
+        if (vkCreateDescriptorSetLayout(mDevice, &setLayoutInfo, nullptr, &mMaterialSetLayout) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("vkCreateDescriptorSetLayout failed");
+            return false;
+        }
+
+        // One set per material. A model primitive eats two (front and mirrored
+        // front face), so this is not as generous as it looks.
+        constexpr uint32_t kMaxMaterials = 1024;
+        const VkDescriptorPoolSize poolSize{
+            .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = kMaxMaterials * static_cast<uint32_t>(setBindings.size()) };
+
+        const VkDescriptorPoolCreateInfo poolInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+            .maxSets = kMaxMaterials,
+            .poolSizeCount = 1,
+            .pPoolSizes = &poolSize };
+
+        if (vkCreateDescriptorPool(mDevice, &poolInfo, nullptr, &mMaterialDescriptorPool) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("vkCreateDescriptorPool failed");
+            return false;
+        }
+
         const VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .offset = 0,
             .size = sizeof(PushData) };
 
+        // set 0 = material (textures), set 1 = per-view camera UBO,
+        // set 2 = per-draw model data.
+        const std::array<VkDescriptorSetLayout, 3> setLayouts{
+            mMaterialSetLayout, mCameraSetLayout, mModelSetLayout };
+
         const VkPipelineLayoutCreateInfo layoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 1,
-            .pSetLayouts = &mModelSetLayout,
+            .setLayoutCount = static_cast<uint32_t>(setLayouts.size()),
+            .pSetLayouts = setLayouts.data(),
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &pushConstantRange };
 
@@ -1008,6 +1166,210 @@ namespace mir
         }
 
         return true;
+    }
+
+    VkSampler VulkanRenderer::AcquireSampler(const SamplerDesc &desc)
+    {
+        // Pack the desc into a key. Every field is a small enum or a bool, so
+        // 8 bits each is plenty and the packing stays readable.
+        const uint64_t key = (static_cast<uint64_t>(desc.magFilter) << 40) |
+                             (static_cast<uint64_t>(desc.minFilter) << 32) |
+                             (static_cast<uint64_t>(desc.mipmapMode) << 24) |
+                             (static_cast<uint64_t>(desc.addressModeU) << 16) |
+                             (static_cast<uint64_t>(desc.addressModeV) << 8) |
+                             (desc.useMips ? 1ull : 0ull);
+
+        if (const auto it = mSamplers.find(key); it != mSamplers.end())
+            return it->second;
+
+        const VkSamplerCreateInfo info{
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .magFilter = desc.magFilter,
+            .minFilter = desc.minFilter,
+            .mipmapMode = desc.mipmapMode,
+            .addressModeU = desc.addressModeU,
+            .addressModeV = desc.addressModeV,
+            .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .anisotropyEnable = VK_FALSE,
+            .compareEnable = VK_FALSE,
+            .minLod = 0.0f,
+            // The image decides how many levels there really are; this only has
+            // to stop a non-mipped material from reading past level 0.
+            .maxLod = desc.useMips ? VK_LOD_CLAMP_NONE : 0.0f,
+            .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK };
+
+        VkSampler sampler = VK_NULL_HANDLE;
+        if (vkCreateSampler(mDevice, &info, nullptr, &sampler) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("vkCreateSampler failed");
+            return VK_NULL_HANDLE;
+        }
+
+        mSamplers.emplace(key, sampler);
+        return sampler;
+    }
+
+    void VulkanRenderer::DestroySamplers()
+    {
+        for (const auto &[key, sampler] : mSamplers)
+            vkDestroySampler(mDevice, sampler, nullptr);
+        mSamplers.clear();
+    }
+
+    bool VulkanRenderer::CreateDefaultTextures()
+    {
+        const std::array<std::byte, 4> white{
+            std::byte{ 255 }, std::byte{ 255 }, std::byte{ 255 }, std::byte{ 255 } };
+
+        const std::array<std::byte, 4> flatNormal{
+            std::byte{ 128 }, std::byte{ 128 }, std::byte{ 255 }, std::byte{ 255 } };
+
+        mDefaultWhiteTexture = CreateTexture(TextureDesc{
+            .width = 1, .height = 1, .pixels = white, .srgb = true });
+        mDefaultNormalTexture = CreateTexture(TextureDesc{
+            .width = 1, .height = 1, .pixels = flatNormal, .srgb = false });
+
+        if (mDefaultWhiteTexture.IsNull() || mDefaultNormalTexture.IsNull())
+        {
+            MIR_LOG_CRITICAL("CreateDefaultTextures: default texture upload failed");
+            return false;
+        }
+
+        NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mDefaultWhiteTexture.mIndex].mImage), "Default white texture");
+        NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mDefaultNormalTexture.mIndex].mImage), "Default normal texture");
+
+        return true;
+    }
+
+    bool VulkanRenderer::CreateCameraResources()
+    {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(mPhysicalDevice, &props);
+        mCameraAlignedSize = AlignUp(sizeof(CameraData), props.limits.minUniformBufferOffsetAlignment);
+
+        const VkDescriptorSetLayoutBinding binding{
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT };
+
+        const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = 1,
+            .pBindings = &binding };
+
+        if (vkCreateDescriptorSetLayout(mDevice, &setLayoutInfo, nullptr, &mCameraSetLayout) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateCameraResources: vkCreateDescriptorSetLayout failed");
+            return false;
+        }
+
+        const VkDescriptorPoolSize poolSize{
+            .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+            .descriptorCount = kFramesInFlight };
+
+        const VkDescriptorPoolCreateInfo poolInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .maxSets = kFramesInFlight,
+            .poolSizeCount = 1,
+            .pPoolSizes = &poolSize };
+
+        if (vkCreateDescriptorPool(mDevice, &poolInfo, nullptr, &mCameraDescriptorPool) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateCameraResources: vkCreateDescriptorPool failed");
+            return false;
+        }
+
+        const VkDeviceSize bufferSize = mCameraAlignedSize * kMaxViewsPerFrame;
+
+        for (uint32_t i = 0; i < kFramesInFlight; ++i)
+        {
+            VmaAllocationInfo allocInfo{};
+            if (!CreateBuffer(mAllocator, bufferSize,
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                mCameraBuffers[i], mCameraAllocations[i], &allocInfo))
+            {
+                MIR_LOG_CRITICAL("CreateCameraResources: camera buffer allocation failed for frame {}", i);
+                return false;
+            }
+            mCameraMapped[i] = static_cast<std::byte *>(allocInfo.pMappedData);
+
+            const VkDescriptorSetAllocateInfo setAllocInfo{
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                .descriptorPool = mCameraDescriptorPool,
+                .descriptorSetCount = 1,
+                .pSetLayouts = &mCameraSetLayout };
+
+            if (vkAllocateDescriptorSets(mDevice, &setAllocInfo, &mCameraDescriptorSets[i]) != VK_SUCCESS)
+            {
+                MIR_LOG_CRITICAL("CreateCameraResources: descriptor set allocation failed for frame {}", i);
+                return false;
+            }
+
+            // range = one view's slice; the dynamic offset walks between them.
+            const VkDescriptorBufferInfo bufferInfo{
+                .buffer = mCameraBuffers[i],
+                .offset = 0,
+                .range = sizeof(CameraData) };
+
+            const VkWriteDescriptorSet write{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = mCameraDescriptorSets[i],
+                .dstBinding = 0,
+                .descriptorCount = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                .pBufferInfo = &bufferInfo };
+
+            vkUpdateDescriptorSets(mDevice, 1, &write, 0, nullptr);
+
+            NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mCameraBuffers[i]),
+                std::format("Camera UBO {}", i).c_str());
+        }
+
+        return true;
+    }
+
+    void VulkanRenderer::DestroyCameraResources()
+    {
+        for (uint32_t i = 0; i < kFramesInFlight; ++i)
+        {
+            if (mCameraBuffers[i] != VK_NULL_HANDLE)
+            {
+                vmaDestroyBuffer(mAllocator, mCameraBuffers[i], mCameraAllocations[i]);
+                mCameraBuffers[i] = VK_NULL_HANDLE;
+                mCameraAllocations[i] = VK_NULL_HANDLE;
+                mCameraMapped[i] = nullptr;
+            }
+        }
+
+        // Freeing the pool frees its descriptor sets too.
+        if (mCameraDescriptorPool != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorPool(mDevice, mCameraDescriptorPool, nullptr);
+            mCameraDescriptorPool = VK_NULL_HANDLE;
+        }
+
+        if (mCameraSetLayout != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorSetLayout(mDevice, mCameraSetLayout, nullptr);
+            mCameraSetLayout = VK_NULL_HANDLE;
+        }
+    }
+
+    void VulkanRenderer::WriteCameraData(const glm::mat4 &viewProj, uint32_t viewIndex)
+    {
+        const CameraData data{ viewProj };
+        const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
+
+        std::byte *const dst = mCameraMapped[mFrameIndex] + offset;
+        std::memcpy(dst, &data, sizeof(CameraData));
+
+        // No-op if the memory type is already host-coherent; required
+        // otherwise, since nothing else guarantees this write is flushed
+        // before the render commands using it are submitted.
+        vmaFlushAllocation(mAllocator, mCameraAllocations[mFrameIndex], offset, sizeof(CameraData));
     }
 
     VkPipeline VulkanRenderer::BuildPipeline(const MaterialDesc &desc)
@@ -1050,7 +1412,11 @@ namespace mir
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             .vertexBindingDescriptionCount = 1,
             .pVertexBindingDescriptions = &vertexBinding,
-            .vertexAttributeDescriptionCount = desc.shaderName == "model" ? static_cast<uint32_t>(vertexAttributes.size()) : 3u,
+            // Only the model shader reads uv, alpha and tangent. Declaring
+            // them for the others is legal but makes the validation layer
+            // complain about attributes no shader consumes.
+            .vertexAttributeDescriptionCount =
+                desc.shaderName == kModelShaderName ? static_cast<uint32_t>(vertexAttributes.size()) : 3u,
             .pVertexAttributeDescriptions = vertexAttributes.data() };
 
         const VkPipelineInputAssemblyStateCreateInfo inputAssembly{
@@ -1081,7 +1447,7 @@ namespace mir
             .sampleShadingEnable = VK_FALSE };
 
         const VkPipelineColorBlendAttachmentState blendAttachment{
-            .blendEnable = desc.alphaMode == 2 ? VK_TRUE : VK_FALSE,
+            .blendEnable = desc.alphaMode == MaterialAlphaMode::Blend ? VK_TRUE : VK_FALSE,
             .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
             .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
             .colorBlendOp = VK_BLEND_OP_ADD,
@@ -1094,7 +1460,7 @@ namespace mir
         const VkPipelineDepthStencilStateCreateInfo depthStencil{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .depthTestEnable = VK_TRUE,
-            .depthWriteEnable = desc.alphaMode == 2 ? VK_FALSE : VK_TRUE,
+            .depthWriteEnable = desc.alphaMode == MaterialAlphaMode::Blend ? VK_FALSE : VK_TRUE,
             .depthCompareOp = VK_COMPARE_OP_LESS,
             .depthBoundsTestEnable = VK_FALSE,
             .stencilTestEnable = VK_FALSE };
@@ -1159,9 +1525,75 @@ namespace mir
         if (pipeline == VK_NULL_HANDLE)
             return kNullMaterial;
 
-        GpuMaterial material{pipeline};
-        if (!CreateMaterialSampler(material, desc)) { vkDestroyPipeline(mDevice, pipeline, nullptr); return kNullMaterial; }
-        mMaterials.push_back(material);
+        const GpuTexture *baseColor = FindTexture(desc.baseColorTexture);
+        if (baseColor == nullptr)
+            baseColor = FindTexture(mDefaultWhiteTexture);
+
+        const GpuTexture *normal = FindTexture(desc.normalTexture);
+        if (normal == nullptr)
+            normal = FindTexture(mDefaultNormalTexture);
+
+        if (baseColor == nullptr || normal == nullptr)
+        {
+            MIR_LOG_CRITICAL("CreateMaterial: default textures unavailable");
+            vkDestroyPipeline(mDevice, pipeline, nullptr);
+            return kNullMaterial;
+        }
+
+        // Shared with every other material that asked for the same state, so
+        // this is not destroyed with the material.
+        const VkSampler sampler = AcquireSampler(desc.sampler);
+        if (sampler == VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(mDevice, pipeline, nullptr);
+            return kNullMaterial;
+        }
+
+        VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+        const VkDescriptorSetAllocateInfo setAllocInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = mMaterialDescriptorPool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &mMaterialSetLayout };
+
+        if (vkAllocateDescriptorSets(mDevice, &setAllocInfo, &descriptorSet) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateMaterial: descriptor set allocation failed");
+            vkDestroyPipeline(mDevice, pipeline, nullptr);
+            return kNullMaterial;
+        }
+
+        const VkDescriptorImageInfo baseColorInfo{
+            .sampler = sampler,
+            .imageView = baseColor->mView,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+        const VkDescriptorImageInfo normalInfo{
+            .sampler = sampler,
+            .imageView = normal->mView,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+
+        const std::array<VkWriteDescriptorSet, 2> writes{ {
+            { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+             .dstSet = descriptorSet,
+             .dstBinding = 0,
+             .descriptorCount = 1,
+             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             .pImageInfo = &baseColorInfo },
+            { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+             .dstSet = descriptorSet,
+             .dstBinding = 1,
+             .descriptorCount = 1,
+             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             .pImageInfo = &normalInfo } } };
+
+        vkUpdateDescriptorSets(mDevice, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+
+        // The model shader reads these out of set 2; see BindModelDescriptors.
+        const glm::vec4 parameters{ static_cast<float>(desc.alphaMode), desc.alphaCutoff,
+            desc.cullMode == VK_CULL_MODE_NONE ? 1.0f : 0.0f, 0.0f };
+
+        mMaterials.push_back(GpuMaterial{ pipeline, descriptorSet, parameters,
+            desc.shaderName == kModelShaderName });
 
         MIR_LOG_INFO("Material created: {} (index {})", desc.shaderName, mMaterials.size() - 1);
         return MaterialHandle{ static_cast<uint32_t>(mMaterials.size() - 1), 0 };
@@ -1171,7 +1603,8 @@ namespace mir
     {
         for (GpuMaterial &material : mMaterials)
         {
-            if (material.sampler) vkDestroySampler(mDevice, material.sampler, nullptr);
+            if (material.mDescriptorSet != VK_NULL_HANDLE)
+                vkFreeDescriptorSets(mDevice, mMaterialDescriptorPool, 1, &material.mDescriptorSet);
             if (material.mPipeline != VK_NULL_HANDLE)
                 vkDestroyPipeline(mDevice, material.mPipeline, nullptr);
         }
@@ -1190,11 +1623,25 @@ namespace mir
         DestroyMeshes();
         DestroyModelResources(false);
 
+        // keep the two default textures: CreateMaterial falls back to them
+        const std::size_t keptTextures = std::min<std::size_t>(mTextures.size(), 2);
+        std::size_t releasedTextures = 0;
+        for (std::size_t i = keptTextures; i < mTextures.size(); ++i)
+        {
+            GpuTexture &texture = mTextures[i];
+            if (texture.mView != VK_NULL_HANDLE)
+                vkDestroyImageView(mDevice, texture.mView, nullptr);
+            if (texture.mImage != VK_NULL_HANDLE)
+                vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
+            ++releasedTextures;
+        }
+        mTextures.resize(keptTextures);
+
         if (mDefaultMaterial.IsNull() || mDefaultMaterial.mIndex >= mMaterials.size())
         {
             const std::size_t materialCount = mMaterials.size();
             DestroyMaterials();
-            MIR_LOG_INFO("Released {} meshes and {} materials", meshCount, materialCount);
+            MIR_LOG_INFO("Released {} meshes, {} materials and {} textures", meshCount, materialCount, releasedTextures);
             return;
         }
 
@@ -1205,7 +1652,8 @@ namespace mir
         {
             if (i == mDefaultMaterial.mIndex)
                 continue;
-            if (mMaterials[i].sampler) vkDestroySampler(mDevice, mMaterials[i].sampler, nullptr);
+            if (mMaterials[i].mDescriptorSet != VK_NULL_HANDLE)
+                vkFreeDescriptorSets(mDevice, mMaterialDescriptorPool, 1, &mMaterials[i].mDescriptorSet);
             if (mMaterials[i].mPipeline != VK_NULL_HANDLE)
                 vkDestroyPipeline(mDevice, mMaterials[i].mPipeline, nullptr);
             ++released;
@@ -1213,18 +1661,20 @@ namespace mir
 
         mMaterials.clear();
         mMaterials.push_back(defaultMaterial);
-        mDefaultMaterial = MaterialHandle{0, 0};
+        mDefaultMaterial = MaterialHandle{ 0, 0 };
 
-        MIR_LOG_INFO("Released {} meshes and {} materials", meshCount, released);
+        MIR_LOG_INFO("Released {} meshes, {} materials and {} textures", meshCount, released, releasedTextures);
     }
 
     void VulkanRenderer::ReleaseModelResources(std::span<const MeshHandle> meshes,
-                                                std::span<const MaterialHandle> materials,
-                                                std::span<const uint32_t> textures)
+        std::span<const MaterialHandle> materials,
+        std::span<const TextureHandle> textures)
     {
         if (mDevice == VK_NULL_HANDLE)
             return;
+
         vkDeviceWaitIdle(mDevice);
+
         for (const MeshHandle handle : meshes)
         {
             if (handle.IsNull() || handle.mIndex >= mMeshes.size())
@@ -1232,34 +1682,42 @@ namespace mir
             GpuMesh &mesh = mMeshes[handle.mIndex];
             if (mesh.mGeneration != handle.mGeneration)
                 continue;
-            if (mesh.mVertexBuffer)
+            if (mesh.mVertexBuffer != VK_NULL_HANDLE)
                 vmaDestroyBuffer(mAllocator, mesh.mVertexBuffer, mesh.mVertexAllocation);
-            if (mesh.mIndexBuffer)
+            if (mesh.mIndexBuffer != VK_NULL_HANDLE)
                 vmaDestroyBuffer(mAllocator, mesh.mIndexBuffer, mesh.mIndexAllocation);
             mesh = {};
+            // Bumped so a handle to the old contents stops resolving.
             mesh.mGeneration = handle.mGeneration + 1;
         }
+
         for (const MaterialHandle handle : materials)
         {
             if (handle.IsNull() || handle == mDefaultMaterial || handle.mIndex >= mMaterials.size())
                 continue;
             GpuMaterial &material = mMaterials[handle.mIndex];
-            if (material.sampler)
-                vkDestroySampler(mDevice, material.sampler, nullptr);
-            if (material.mPipeline)
+            // The sampler belongs to the renderer's cache, not to the material.
+            if (material.mDescriptorSet != VK_NULL_HANDLE)
+                vkFreeDescriptorSets(mDevice, mMaterialDescriptorPool, 1, &material.mDescriptorSet);
+            if (material.mPipeline != VK_NULL_HANDLE)
                 vkDestroyPipeline(mDevice, material.mPipeline, nullptr);
             material = {};
         }
-        for (const uint32_t index : textures)
+
+        for (const TextureHandle handle : textures)
         {
-            if (index == 0 || index >= mTextures.size())
+            // Index 0 and 1 are the defaults every material falls back to.
+            if (handle.IsNull() || handle.mIndex < 2 || handle.mIndex >= mTextures.size())
                 continue;
-            GpuTexture &texture = mTextures[index];
-            if (texture.view)
-                vkDestroyImageView(mDevice, texture.view, nullptr);
-            if (texture.image)
-                vmaDestroyImage(mAllocator, texture.image, texture.allocation);
+            GpuTexture &texture = mTextures[handle.mIndex];
+            if (texture.mGeneration != handle.mGeneration)
+                continue;
+            if (texture.mView != VK_NULL_HANDLE)
+                vkDestroyImageView(mDevice, texture.mView, nullptr);
+            if (texture.mImage != VK_NULL_HANDLE)
+                vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
             texture = {};
+            texture.mGeneration = handle.mGeneration + 1;
         }
     }
 
@@ -1298,9 +1756,6 @@ namespace mir
             return kNullMesh;
         }
 
-        // MAPPED_BIT means pMappedData is already valid - no vmaMapMemory or
-        // matching unmap. SEQUENTIAL_WRITE says these writes are forward-only,
-        // which lets VMA pick write-combined memory; never read this pointer.
         std::byte *const mapped = static_cast<std::byte *>(stagingInfo.pMappedData);
         std::memcpy(mapped, vertices.data(), vertexBytes);
         std::memcpy(mapped + vertexBytes, indices.data(), indexBytes);
@@ -1321,8 +1776,7 @@ namespace mir
         if (!buffersCreated)
         {
             MIR_LOG_CRITICAL("CreateMesh: device buffer allocation failed");
-            // The && above short-circuits, so one of the two may be null here.
-            // Both destroys are guarded, so this handles either case.
+
             if (mesh.mVertexBuffer != VK_NULL_HANDLE)
                 vmaDestroyBuffer(mAllocator, mesh.mVertexBuffer, mesh.mVertexAllocation);
             if (mesh.mIndexBuffer != VK_NULL_HANDLE)
@@ -1331,8 +1785,6 @@ namespace mir
             return kNullMesh;
         }
 
-        // Throwaway pool, not a frame pool: the frame loop resets those, and
-        // this may run before the loop has started.
         VkCommandPool uploadPool = VK_NULL_HANDLE;
         const VkCommandPoolCreateInfo poolInfo{
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -1418,6 +1870,186 @@ namespace mir
                 vmaDestroyBuffer(mAllocator, mesh.mIndexBuffer, mesh.mIndexAllocation);
         }
         mMeshes.clear();
+    }
+
+    TextureHandle VulkanRenderer::CreateTexture(const TextureDesc &desc)
+    {
+        const VkDeviceSize expectedBytes = VkDeviceSize{ desc.width } * desc.height * 4;
+        if (desc.width == 0 || desc.height == 0 || desc.pixels.size_bytes() != expectedBytes)
+        {
+            MIR_LOG_ERROR("CreateTexture: {}x{} expects {} bytes of RGBA8, got {}",
+                desc.width, desc.height, expectedBytes, desc.pixels.size_bytes());
+            return kNullTexture;
+        }
+
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(mPhysicalDevice, &properties);
+        if (desc.width > properties.limits.maxImageDimension2D ||
+            desc.height > properties.limits.maxImageDimension2D)
+        {
+            MIR_LOG_ERROR("CreateTexture: {}x{} is past this device's maxImageDimension2D of {}",
+                desc.width, desc.height, properties.limits.maxImageDimension2D);
+            return kNullTexture;
+        }
+
+        // One staging blob for every level, one copy region each.
+        std::vector<std::byte> pixels;
+        std::vector<VkBufferImageCopy> regions;
+        const uint32_t levelCount = BuildMipChain(desc, pixels, regions);
+
+        VkBuffer staging = VK_NULL_HANDLE;
+        VmaAllocation stagingAllocation = VK_NULL_HANDLE;
+        VmaAllocationInfo stagingInfo{};
+
+        if (!CreateBuffer(mAllocator, pixels.size(),
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+            VMA_ALLOCATION_CREATE_MAPPED_BIT,
+            staging, stagingAllocation, &stagingInfo))
+        {
+            MIR_LOG_CRITICAL("CreateTexture: staging buffer allocation failed");
+            return kNullTexture;
+        }
+
+        std::memcpy(stagingInfo.pMappedData, pixels.data(), pixels.size());
+
+        GpuTexture texture{};
+        texture.mLevels = levelCount;
+        texture.mGeneration = 1;
+
+        const VkFormat format = desc.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+        const VkImageCreateInfo imageInfo{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType = VK_IMAGE_TYPE_2D,
+            .format = format,
+            .extent{ desc.width, desc.height, 1 },
+            .mipLevels = levelCount,
+            .arrayLayers = 1,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .tiling = VK_IMAGE_TILING_OPTIMAL,
+            .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
+
+        const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
+
+        if (vmaCreateImage(mAllocator, &imageInfo, &allocInfo,
+            &texture.mImage, &texture.mAllocation, nullptr) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateTexture: vmaCreateImage failed");
+            vmaDestroyBuffer(mAllocator, staging, stagingAllocation);
+            return kNullTexture;
+        }
+
+        VkCommandPool uploadPool = VK_NULL_HANDLE;
+        const VkCommandPoolCreateInfo poolInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .queueFamilyIndex = mGfxQueueFamIdx };
+
+        if (vkCreateCommandPool(mDevice, &poolInfo, nullptr, &uploadPool) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateTexture: upload command pool creation failed");
+            vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
+            vmaDestroyBuffer(mAllocator, staging, stagingAllocation);
+            return kNullTexture;
+        }
+
+        VkCommandBuffer uploadCmd = VK_NULL_HANDLE;
+        const VkCommandBufferAllocateInfo cmdAllocInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = uploadPool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1 };
+        vkAllocateCommandBuffers(mDevice, &cmdAllocInfo, &uploadCmd);
+
+        const VkCommandBufferBeginInfo beginInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
+        vkBeginCommandBuffer(uploadCmd, &beginInfo);
+
+        ImageBarrier(uploadCmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, levelCount);
+
+        vkCmdCopyBufferToImage(uploadCmd, staging, texture.mImage,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            static_cast<uint32_t>(regions.size()), regions.data());
+
+        ImageBarrier(uploadCmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT, levelCount);
+
+        vkEndCommandBuffer(uploadCmd);
+
+        const VkSubmitInfo submitInfo{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &uploadCmd };
+
+        vkQueueSubmit(mGfxQueue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(mGfxQueue);
+
+        vkDestroyCommandPool(mDevice, uploadPool, nullptr);
+        vmaDestroyBuffer(mAllocator, staging, stagingAllocation);
+
+        const VkImageViewCreateInfo viewInfo{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = texture.mImage,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = format,
+            .subresourceRange{
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = levelCount,
+                .baseArrayLayer = 0,
+                .layerCount = 1 } };
+
+        if (vkCreateImageView(mDevice, &viewInfo, nullptr, &texture.mView) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateTexture: vkCreateImageView failed");
+            vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
+            return kNullTexture;
+        }
+
+        const uint32_t index = static_cast<uint32_t>(mTextures.size());
+        mTextures.push_back(texture);
+
+        NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(texture.mImage),
+            std::format("Texture {}", index).c_str());
+
+        MIR_LOG_INFO("Texture {} uploaded: {}x{}, {} level(s), {} bytes",
+            index, desc.width, desc.height, levelCount, pixels.size());
+
+        return TextureHandle{ index, texture.mGeneration };
+    }
+
+    const VulkanRenderer::GpuTexture *VulkanRenderer::FindTexture(TextureHandle handle) const
+    {
+        if (handle.IsNull() || handle.mIndex >= mTextures.size())
+            return nullptr;
+
+        const GpuTexture &texture = mTextures[handle.mIndex];
+
+        if (texture.mGeneration != handle.mGeneration)
+            return nullptr;
+
+        return &texture;
+    }
+
+    void VulkanRenderer::DestroyTextures()
+    {
+        for (GpuTexture &texture : mTextures)
+        {
+            if (texture.mView != VK_NULL_HANDLE)
+                vkDestroyImageView(mDevice, texture.mView, nullptr);
+            if (texture.mImage != VK_NULL_HANDLE)
+                vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
+        }
+        mTextures.clear();
+        mDefaultWhiteTexture = kNullTexture;
+        mDefaultNormalTexture = kNullTexture;
     }
 
     void VulkanRenderer::NameObject(VkObjectType type, uint64_t handle, const char *name)
@@ -1518,7 +2150,7 @@ namespace mir
         }
         mRenderComplete.clear();
     }
-    void VulkanRenderer::RecordView(VkCommandBuffer cmd, const RenderView &view)
+    void VulkanRenderer::RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex)
     {
         const VkRect2D requestedRect = (view.rect.extent.width > 0 && view.rect.extent.height > 0)
             ? view.rect
@@ -1541,7 +2173,13 @@ namespace mir
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &rect);
 
+        WriteCameraData(view.viewProj, viewIndex);
+        const uint32_t cameraOffset = static_cast<uint32_t>(viewIndex * mCameraAlignedSize);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
+            1, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
+
         VkPipeline boundPipeline = VK_NULL_HANDLE;
+        VkDescriptorSet boundDescriptorSet = VK_NULL_HANDLE;
 
         // no mesh/material batching yet, just draw per item
         for (const DrawItem &item : view.items)
@@ -1551,12 +2189,14 @@ namespace mir
                 continue;
 
             const GpuMaterial *material = FindMaterial(item.material);
-            if (material == nullptr)
+            // A slot emptied by ReleaseModelResources is still in range, so
+            // check the pipeline rather than the handle alone.
+            if (material == nullptr || material->mPipeline == VK_NULL_HANDLE)
                 material = FindMaterial(mDefaultMaterial);
-            if (material == nullptr)
+            if (material == nullptr || material->mPipeline == VK_NULL_HANDLE)
                 continue;
 
-            if (material->modelShader && !BindModelDescriptors(cmd, *material, item))
+            if (material->mModelShader && !BindModelDescriptors(cmd, *material, item))
                 continue;
 
             if (material->mPipeline != boundPipeline)
@@ -1565,13 +2205,20 @@ namespace mir
                 boundPipeline = material->mPipeline;
             }
 
+            if (material->mDescriptorSet != boundDescriptorSet)
+            {
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
+                    0, 1, &material->mDescriptorSet, 0, nullptr);
+                boundDescriptorSet = material->mDescriptorSet;
+            }
+
             const VkDeviceSize vertexOffset = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->mVertexBuffer, &vertexOffset);
 
             vkCmdBindIndexBuffer(cmd, mesh->mIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
             const PushData pushData{
-                .transform = item.model,
+                .model = item.model,
                 .normalCol0 = glm::vec4(item.normalMatrix[0], 0.0f),
                 .normalCol1 = glm::vec4(item.normalMatrix[1], 0.0f),
                 .normalCol2 = glm::vec4(item.normalMatrix[2], 0.0f),
@@ -1637,8 +2284,15 @@ namespace mir
             vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
         }
 
-        for (const RenderView &view : views)
-            RecordView(cmd, view);
+        if (views.size() > kMaxViewsPerFrame)
+        {
+            MIR_LOG_ERROR("RecordCommands: {} views this frame, only the first {} (kMaxViewsPerFrame) are drawn",
+                views.size(), kMaxViewsPerFrame);
+        }
+
+        const size_t viewCount = std::min<size_t>(views.size(), kMaxViewsPerFrame);
+        for (size_t i = 0; i < viewCount; ++i)
+            RecordView(cmd, views[i], static_cast<uint32_t>(i));
 
         if (mImguiDrawData != nullptr)
             ImGui_ImplVulkan_RenderDrawData(mImguiDrawData, cmd);

@@ -9,10 +9,41 @@
 #include <cstdio>
 #include <filesystem>
 #include <glm/gtc/matrix_inverse.hpp>
+#include <span>
 #include <stdexcept>
 
 namespace mir
 {
+    namespace
+    {
+        // glTF stores sampler state as raw GL enums; the renderer only speaks
+        // Vulkan, so the translation stops here.
+        SamplerDesc ToSamplerDesc(const MaterialAsset &material)
+        {
+            const auto wrap = [](uint32_t gl) {
+                return gl == 33071   ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+                       : gl == 33648 ? VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT
+                                     : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            };
+
+            SamplerDesc sampler;
+            sampler.magFilter = material.magFilter == 9728 ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+            // NEAREST, NEAREST_MIPMAP_NEAREST, NEAREST_MIPMAP_LINEAR.
+            sampler.minFilter = (material.minFilter == 9728 || material.minFilter == 9984 ||
+                                 material.minFilter == 9986)
+                                    ? VK_FILTER_NEAREST
+                                    : VK_FILTER_LINEAR;
+            // *_MIPMAP_LINEAR.
+            sampler.mipmapMode = (material.minFilter == 9986 || material.minFilter == 9987)
+                                     ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+                                     : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sampler.addressModeU = wrap(material.wrapS);
+            sampler.addressModeV = wrap(material.wrapT);
+            // Only the four *_MIPMAP_* minFilters sample past level 0.
+            sampler.useMips = material.minFilter >= 9984;
+            return sampler;
+        }
+    } // namespace
     void ModelSystem::Reset()
     {
         DiscardPreparedReload();
@@ -22,7 +53,7 @@ namespace mir
         mDeformations.clear();
     }
     ModelSystem::Loaded ModelSystem::LoadInto(AssetCache &assets, AssetId id,
-                                              std::unordered_map<uint64_t, uint32_t> &textures)
+                                              std::unordered_map<uint64_t, TextureHandle> &textures)
     {
         Loaded loaded;
         std::string error;
@@ -58,11 +89,8 @@ namespace mir
                     desc.topology = p.topology == MeshTopology::Triangles ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
                                     : p.topology == MeshTopology::Lines   ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
                                                                           : VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
-                    desc.wrapS = material.wrapS;
-                    desc.wrapT = material.wrapT;
-                    desc.minFilter = material.minFilter;
-                    desc.magFilter = material.magFilter;
-                    desc.alphaMode = uint32_t(material.alpha);
+                    desc.sampler = ToSamplerDesc(material);
+                    desc.alphaMode = static_cast<MaterialAlphaMode>(material.alpha);
                     desc.alphaCutoff = material.alphaCutoff;
                     if (!material.baseColorTexture.IsNull())
                     {
@@ -71,12 +99,17 @@ namespace mir
                         {
                             TextureAsset tex;
                             read(material.baseColorTexture, tex);
-                            auto handle = mRenderer.CreateTexture(tex.width, tex.height, tex.rgba);
-                            if (handle == UINT32_MAX)
+                            const TextureHandle handle = mRenderer.CreateTexture(
+                                TextureDesc{.width = tex.width,
+                                            .height = tex.height,
+                                            .pixels = std::as_bytes(std::span(tex.rgba)),
+                                            .srgb = true,
+                                            .generateMips = true});
+                            if (handle.IsNull())
                                 throw std::runtime_error("GPU texture upload failed");
                             textures.emplace(texId, handle);
                         }
-                        desc.texture = textures.at(texId);
+                        desc.baseColorTexture = textures.at(texId);
                     }
                     GpuPrimitive gpu;
                     gpu.mesh = mRenderer.CreateMesh(vertices, p.indices);
@@ -95,7 +128,7 @@ namespace mir
         {
             std::unordered_map<uint64_t, Loaded> failedModels;
             failedModels.emplace(id.value, std::move(loaded));
-            std::unordered_map<uint64_t, uint32_t> failedTextures;
+            std::unordered_map<uint64_t, TextureHandle> failedTextures;
             for (auto it = textures.begin(); it != textures.end();)
                 if (!existingTextures.contains(it->first))
                 {
@@ -120,11 +153,11 @@ namespace mir
     }
 
     void ModelSystem::Release(std::unordered_map<uint64_t, Loaded> &models,
-                              std::unordered_map<uint64_t, uint32_t> &textures)
+                              std::unordered_map<uint64_t, TextureHandle> &textures)
     {
         std::vector<MeshHandle> meshes;
         std::vector<MaterialHandle> materials;
-        std::vector<uint32_t> textureHandles;
+        std::vector<TextureHandle> textureHandles;
         for (const auto &[id, model] : models)
             for (const auto &[meshId, primitives] : model.meshes)
                 for (const auto &primitive : primitives)

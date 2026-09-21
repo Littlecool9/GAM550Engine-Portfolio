@@ -12,6 +12,7 @@ pkg_check_modules(LuaJIT REQUIRED IMPORTED_TARGET luajit)
 target_link_libraries(engine_script
     PUBLIC  mir::core
     PRIVATE mir::assets
+            mir::audio
             mir::input
             mir::physics
             sol2::sol2
@@ -23,6 +24,7 @@ target_sources(engine_script PRIVATE
     src/script/ScriptHost.cpp
     src/script/ScriptReloadWatcher.cpp
     src/script/ScriptSystem.cpp
+    src/script/bindings/AudioBindings.cpp
     src/script/bindings/EntityBindings.cpp
     src/script/bindings/InputBindings.cpp
     src/script/bindings/PhysicsBindings.cpp

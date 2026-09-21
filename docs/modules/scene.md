@@ -3,7 +3,7 @@
 Saves and loads a scene as data. It owns the save-file identity, `StableId`, and
 the three-pass load. It owns no runtime state and no authoring UI.
 
-`mir::scene` · depends `mir::core` (public); `nlohmann_json` (private) · API `modules/scene/include/scene/` · maintainer Sumin Park · reviewed 2026-09-12
+`mir::scene` · depends `mir::core` (public); `mir::serial` (private) · API `modules/scene/include/scene/` · maintainer Sumin Park · reviewed 2026-09-18
 
 ## Model
 
@@ -132,6 +132,23 @@ converge.
    of sweeping the whole registry per entity.
 
 ## Changed
+
+*2026-09-18* — **Scene files read and write through `mir::serial`, and a
+malformed one no longer crashes.** Was: `SaveScene` and `LoadScene` used
+`std::ofstream` and `std::ifstream` directly, and both read sites used nlohmann's
+`operator>>` with no `try`/`catch`. A hand-edited `scene.json`, or any one
+malformed entity file, threw out of `LoadScene` and reached `std::terminate`
+through `main`. Now both go through `ReadJsonFile`/`WriteJsonFile`, a bad
+manifest logs and loads an empty scene, and a bad entity file is skipped while
+its valid siblings still load.
+
+Writes are atomic per file but not across the set, which is in
+[serial.md](serial.md)'s backlog.
+
+`scene` also owns the manifest's filename now. `kSceneManifestFileName` and
+`SceneManifestPath` are exported from `SceneIO.h`, because `app` was composing
+`sceneDir / "scene.json"` itself to test whether a directory holds a scene, which
+meant this module could not move its own manifest without breaking that check.
 
 *2026-09-12* — **`PlaySnapshot` added, and the resolve-pass home question
 resolved.** Was: `SaveScene`/`LoadScene` had one caller (`App::LoadScene`), and

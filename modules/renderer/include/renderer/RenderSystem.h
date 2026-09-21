@@ -19,9 +19,9 @@
 
 #include <glm/gtc/matrix_inverse.hpp>
 
-#include <vector>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace mir
 {
@@ -110,6 +110,18 @@ namespace mir
 
             const VkExtent2D swapchainExtent = mRenderer.SwapchainExtent();
 
+            mDrawItems.clear();
+            mMeshQuery->ForEach([this](Entity, const WorldTransform &world, const MeshRenderer &renderer)
+                {
+                    const glm::mat3 normalMatrix = glm::inverseTranspose(glm::mat3(world.Matrix()));
+                    mDrawItems.push_back(DrawItem{ renderer.mesh, world.Matrix(), normalMatrix, renderer.tint, renderer.material });
+                });
+
+            // ModelSystem builds its own items (meshes that came from a model
+            // asset, with their morph/skin data attached).
+            if (const ModelDrawItems *models = context.world.TryResource<ModelDrawItems>())
+                mDrawItems.insert(mDrawItems.end(), models->items.begin(), models->items.end());
+
             mDrawItemsPerViewport.resize(mViewports.size());
             mRenderViews.clear();
 
@@ -118,8 +130,6 @@ namespace mir
             for (size_t i = 0; i < mViewports.size(); ++i)
             {
                 const Viewport &viewport = mViewports[i];
-                std::vector<DrawItem> &items = mDrawItemsPerViewport[i];
-                items.clear();
 
                 glm::mat4 cameraWorld{ 1.0f };
                 Camera camera{};
@@ -166,27 +176,28 @@ namespace mir
                 const glm::mat4 viewProj = MakeViewProjection(cameraWorld, camera.mFovYDegrees,
                     camera.mNearZ, camera.mFarZ, aspect);
 
-                mMeshQuery->ForEach([&items, &viewProj](Entity, const WorldTransform &world, const MeshRenderer &renderer)
+                // DrawItem::model is a plain world matrix, so the item list
+                // itself is viewport-independent - but the transparent sort is
+                // not, so each viewport gets its own ordered copy.
+                std::vector<DrawItem> &items = mDrawItemsPerViewport[i];
+                items = mDrawItems;
+
+                // Opaque first, then transparent back to front in this
+                // viewport's clip space: blending needs a per-camera order.
+                std::stable_sort(items.begin(), items.end(),
+                    [&viewProj](const DrawItem &a, const DrawItem &b)
                     {
-                        const glm::mat3 normalMatrix = glm::inverseTranspose(glm::mat3(world.Matrix()));
-                        items.push_back(DrawItem{ renderer.mesh, viewProj * world.Matrix(), normalMatrix, renderer.tint, renderer.material });
+                        if (a.transparent != b.transparent)
+                            return !a.transparent;
+                        if (!a.transparent)
+                            return false;
+                        const glm::vec4 pa = viewProj * a.model * glm::vec4(0, 0, 0, 1);
+                        const glm::vec4 pb = viewProj * b.model * glm::vec4(0, 0, 0, 1);
+                        return pa.z / (std::abs(pa.w) > 1e-8f ? pa.w : 1e-8f) >
+                               pb.z / (std::abs(pb.w) > 1e-8f ? pb.w : 1e-8f);
                     });
 
-                if (const auto *models = context.world.TryResource<ModelDrawItems>())
-                    for (auto item : models->items)
-                    {
-                        item.model = viewProj * item.model;
-                        items.push_back(item);
-                    }
-                std::stable_sort(items.begin(), items.end(), [](const auto &a, const auto &b)
-                {
-                    if (a.transparent != b.transparent) return !a.transparent;
-                    if (!a.transparent) return false;
-                    const auto pa = a.model * glm::vec4(0,0,0,1), pb = b.model * glm::vec4(0,0,0,1);
-                    return pa.z / (std::abs(pa.w) > 1e-8f ? pa.w : 1e-8f) >
-                           pb.z / (std::abs(pb.w) > 1e-8f ? pb.w : 1e-8f);
-                });
-                mRenderViews.push_back(RenderView{ viewport.mRect, items });
+                mRenderViews.push_back(RenderView{ viewport.mRect, items, viewProj });
             }
 
             if (warnNoCamera && !mWarnedNoCamera)
@@ -205,6 +216,8 @@ namespace mir
 
         std::vector<Viewport> mViewports;
 
+        // Built once per frame, then copied and sorted per viewport.
+        std::vector<DrawItem> mDrawItems;
         std::vector<std::vector<DrawItem>> mDrawItemsPerViewport;
         std::vector<RenderView> mRenderViews;
 

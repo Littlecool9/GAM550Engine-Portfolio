@@ -10,11 +10,9 @@
 
 #include "renderer/RenderSettings.h"
 
-#include <assets/AssetFileIo.h>
+#include <serial/JsonFile.h>
 
 #include <nlohmann/json.hpp>
-
-#include <string_view>
 
 namespace mir
 {
@@ -23,56 +21,30 @@ namespace mir
         using json = nlohmann::json;
     }
 
-    RenderSettings RenderSettings::LoadFile(const std::filesystem::path &path)
+    std::optional<RenderSettings> RenderSettings::LoadFile(const std::filesystem::path &path)
     {
+        const std::optional<json> root = ReadJsonFile(path);
+        if (!root || !root->is_object())
+            return std::nullopt;
+
         RenderSettings settings;
 
-        std::error_code existsError;
-        if (!std::filesystem::exists(path, existsError) && !existsError)
+        // find() rather than value(): value() hands back the raw node, and a
+        // "rendering" that is null or a scalar then throws type_error 306 on the
+        // next read. Absent or unusable both mean defaults.
+        const auto renderingIt = root->find("rendering");
+        if (renderingIt == root->end() || !renderingIt->is_object())
             return settings;
 
-        const std::optional<std::vector<std::byte>> bytes = ReadFileBytes(path);
-        if (!bytes)
-            return settings;
-
-        json root;
-        try
-        {
-            root = json::parse(std::string_view(reinterpret_cast<const char *>(bytes->data()), bytes->size()));
-        }
-        catch (const json::parse_error &)
-        {
-            return settings;
-        }
-
-        if (!root.is_object())
-            return settings;
-
-        const json &renderingRoot = root.value("rendering", json::object());
-        settings.rayTracing = renderingRoot.value("rayTracing", false);
+        settings.rayTracing = renderingIt->value("rayTracing", false);
         return settings;
     }
 
     bool RenderSettings::SaveFile(const std::filesystem::path &path) const
     {
-        json root = json::object();
-        if (const std::optional<std::vector<std::byte>> bytes = ReadFileBytes(path))
-        {
-            try
+        return UpdateJsonFile(path, [this](json &root)
             {
-                json existing = json::parse(std::string_view(reinterpret_cast<const char *>(bytes->data()), bytes->size()));
-                if (existing.is_object())
-                    root = std::move(existing);
-            }
-            catch (const json::parse_error &)
-            {
-            }
-        }
-
-        root["rendering"] = json{{"rayTracing", rayTracing}};
-
-        const std::string dumped = root.dump(2);
-        const std::span<const std::byte> bytesOut(reinterpret_cast<const std::byte *>(dumped.data()), dumped.size());
-        return WriteFileBytes(path, bytesOut);
+                root["rendering"] = json{ { "rayTracing", rayTracing } };
+            });
     }
 }

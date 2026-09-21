@@ -1,5 +1,4 @@
 #include "GltfImporter.h"
-#include <assets/AssetFileIo.h>
 #include <assets/ModelAsset.h>
 #include <core/log/Log.h>
 #include <fastgltf/core.hpp>

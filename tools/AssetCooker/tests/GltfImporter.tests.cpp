@@ -1,7 +1,7 @@
 #include "../GltfImporter.h"
 #include <algorithm>
 #include <animation/ModelAnimation.h>
-#include <assets/AssetFileIo.h>
+#include <core/fs/FileIO.h>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -213,13 +213,13 @@ TEST_CASE("Copied import metadata is rejected as an identity conflict", "[gltf][
     const auto out = fs::path(f.root.string() + "-identity-cooked");
     std::vector<std::string> args{"--source-dir", f.root.string(), "--id-root", "assets", "--out", out.string()};
     REQUIRE(LaunchProcess(GLTF_COOKER_EXE, args, true) == 0);
-    const auto manifestBefore = ReadFileBytes(out / "manifest.blob");
+    const auto manifestBefore = ReadBytes(out / "manifest.blob");
     REQUIRE(manifestBefore);
     fs::create_directories(f.root / "copy");
     for (const char *name : {"flag.gltf", "flag.bin", "checker.png", "flag.gltf.import.json"})
         fs::copy_file(f.root / name, f.root / "copy" / name);
     CHECK(LaunchProcess(GLTF_COOKER_EXE, args, true) != 0);
-    CHECK(ReadFileBytes(out / "manifest.blob") == manifestBefore);
+    CHECK(ReadBytes(out / "manifest.blob") == manifestBefore);
 }
 TEST_CASE("Reordering named glTF nodes preserves stable keys and animation targets", "[gltf]")
 {
@@ -302,11 +302,11 @@ TEST_CASE("Editing an external buffer changes mesh payload without changing "
     Fixture f;
     auto before = f.Import();
     std::ofstream(before.metadataPath) << before.metadata;
-    auto bytes = ReadFileBytes(f.root / "flag.bin");
+    auto bytes = ReadBytes(f.root / "flag.bin");
     REQUIRE(bytes);
     float changed = -.75f;
     std::memcpy(bytes->data(), &changed, 4);
-    REQUIRE(WriteFileBytes(f.root / "flag.bin", *bytes));
+    REQUIRE(WriteBytes(f.root / "flag.bin", *bytes));
     auto after = f.Import();
     auto ma = Find<ModelAsset>(before, kModelAssetTypeTag), mb = Find<ModelAsset>(after, kModelAssetTypeTag);
     CHECK(ma.nodes[0].mesh == mb.nodes[0].mesh);
@@ -316,7 +316,7 @@ TEST_CASE("glTF reads sparse morph data and normalized interleaved UVs", "[gltf]
 {
     Fixture f;
     auto j = f.Read();
-    auto bytes = ReadFileBytes(f.root / "flag.bin");
+    auto bytes = ReadBytes(f.root / "flag.bin");
     REQUIRE(bytes);
     auto addView = [&](std::span<const std::byte> content) {
         while (bytes->size() % 4)
@@ -346,7 +346,7 @@ TEST_CASE("glTF reads sparse morph data and normalized interleaved UVs", "[gltf]
     j["accessors"][uvIndex] = {
         {"bufferView", uvView}, {"componentType", 5123}, {"normalized", true}, {"count", 6}, {"type", "VEC2"}};
     j["buffers"][0]["byteLength"] = bytes->size();
-    REQUIRE(WriteFileBytes(f.root / "flag.bin", *bytes));
+    REQUIRE(WriteBytes(f.root / "flag.bin", *bytes));
     f.Write(j);
     auto mesh = Find<MeshAsset>(f.Import(), kMeshAssetTypeTag);
     const auto &p = mesh.primitives[0];
@@ -356,7 +356,7 @@ TEST_CASE("glTF reads sparse morph data and normalized interleaved UVs", "[gltf]
     CHECK(p.morphTargets[0].positions[5].x == Catch::Approx(.75));
     auto invalid = *bytes;
     invalid[j["bufferViews"][iv]["byteOffset"].get<size_t>()] = std::byte{9};
-    REQUIRE(WriteFileBytes(f.root / "flag.bin", invalid));
+    REQUIRE(WriteBytes(f.root / "flag.bin", invalid));
     CHECK_THROWS(f.Import());
 }
 TEST_CASE("glTF rejects accessor ranges that would read past loaded buffers", "[gltf]")
@@ -378,12 +378,12 @@ TEST_CASE("glTF flat normals preserve morph data and more than four joint influe
     const auto accessor = attributes["WEIGHTS_0"].get<size_t>();
     const auto view = j["accessors"][accessor]["bufferView"].get<size_t>();
     const auto offset = j["bufferViews"][view]["byteOffset"].get<size_t>();
-    auto bytes = ReadFileBytes(f.root / "flag.bin");
+    auto bytes = ReadBytes(f.root / "flag.bin");
     REQUIRE(bytes);
     const float weight = .25f;
     for (size_t i = 0; i < 24; ++i)
         std::memcpy(bytes->data() + offset + i * sizeof(float), &weight, sizeof(float));
-    REQUIRE(WriteFileBytes(f.root / "flag.bin", *bytes));
+    REQUIRE(WriteBytes(f.root / "flag.bin", *bytes));
     f.Write(j);
     auto mesh = Find<MeshAsset>(f.Import(), kMeshAssetTypeTag);
     const auto &p = mesh.primitives[0];
@@ -428,12 +428,12 @@ TEST_CASE("Cooker publishes atomically and retains one fallback manifest generat
     CHECK(fs::exists(out / oldPath));
     REQUIRE(LaunchProcess(GLTF_COOKER_EXE, args, true) == 0);
     CHECK_FALSE(fs::exists(out / oldPath));
-    const auto before = ReadFileBytes(out / "manifest.blob");
+    const auto before = ReadBytes(out / "manifest.blob");
     REQUIRE(before);
     j["accessors"][0]["byteOffset"] = 999999;
     f.Write(j);
     CHECK(LaunchProcess(GLTF_COOKER_EXE, args, true) != 0);
-    CHECK(ReadFileBytes(out / "manifest.blob") == before);
+    CHECK(ReadBytes(out / "manifest.blob") == before);
     // Last successful publication remains usable even after a failed import.
     AssetCache stillValid(&*updated, out);
     ModelResources loaded;

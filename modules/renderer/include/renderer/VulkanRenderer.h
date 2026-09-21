@@ -11,6 +11,7 @@
 #include <core/platform/Surface.h>
 #include <renderer/Material.h>
 #include <renderer/Mesh.h>
+#include <renderer/Texture.h>
 
 #include <volk.h>
 
@@ -18,10 +19,12 @@
 #include <glm/mat4x4.hpp>
 #include <glm/vec4.hpp>
 
+#include <cstddef>
 #include <cstdint>
-#include <span>
-#include <vector>
 #include <filesystem>
+#include <span>
+#include <unordered_map>
+#include <vector>
 
 VK_DEFINE_HANDLE(VmaAllocator)
 VK_DEFINE_HANDLE(VmaAllocation)
@@ -43,7 +46,6 @@ namespace mir
     {
         MeshHandle mesh;
 
-        // model * view projection
         glm::mat4 model{ 1.0f };
 
         // transpose(inverse(mat3(model)))
@@ -53,10 +55,18 @@ namespace mir
 
         // kNullMaterial means "use the renderer's default material".
         MaterialHandle material;
+
+        // Morph/skin data for a model draw, read through set 2; empty for
+        // everything else. Slot 2 is reserved for the material parameters the
+        // renderer writes in - see BindModelDescriptors.
         std::span<const glm::vec4> deformation;
+
+        // Drawn after the opaque items, back to front. RenderSystem sorts.
         bool transparent = false;
     };
 
+    // Draw items produced outside the MeshRenderer query (by ModelSystem),
+    // picked up by RenderSystem as a World resource.
     struct ModelDrawItems { std::vector<DrawItem> items; };
 
     // One camera's worth of draw items, clipped to a screen-space rect
@@ -64,6 +74,7 @@ namespace mir
     {
         VkRect2D rect{};
         std::span<const DrawItem> items;
+        glm::mat4 viewProj{ 1.0f };
     };
 
     class VulkanRenderer
@@ -77,24 +88,21 @@ namespace mir
 
         // abstraction from imgui
         void SetImGuiDrawData(ImDrawData *drawData) { mImguiDrawData = drawData; }
-        MeshHandle CreateMesh(std::span<const Vertex> vertices,
-            std::span<const uint32_t> indices);
+        MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
 
-// Handle of a pipeline
-// kNullMaterial means default material
+        TextureHandle CreateTexture(const TextureDesc &desc);
+
         MaterialHandle CreateMaterial(const MaterialDesc &desc);
-        uint32_t CreateTexture(uint32_t width, uint32_t height, std::span<const uint8_t> rgba);
+
         void CaptureNextFrame(const std::filesystem::path &path) { mCapturePath = path; }
 
-        // Destroys all meshes and materials but the default material. Old handles
-        // are invalid and their indices get reused: call only after a scene unload.
         void ReleaseSceneResources();
 
         // Releases a selected model generation after a replacement has been
         // prepared. Handles not present in these spans remain valid.
         void ReleaseModelResources(std::span<const MeshHandle> meshes,
                                    std::span<const MaterialHandle> materials,
-                                   std::span<const uint32_t> textures);
+                                   std::span<const TextureHandle> textures);
 
         VkExtent2D SwapchainExtent() const { return mSwapchainExtent; }
 
@@ -107,6 +115,7 @@ namespace mir
     private:
         struct GpuMesh;
         struct GpuMaterial;
+        struct GpuTexture;
 
         bool CreateVulkanInstance(const RendererDesc &desc);
         bool CreateDebugMessenger();
@@ -124,8 +133,15 @@ namespace mir
         bool CreateRenderCompleteSemaphores();
         void DestroyRenderCompleteSemaphores();
         bool CreatePipelineLayout();
+        // One VkSampler per distinct SamplerDesc, shared by every material that
+        // asks for it; VK_NULL_HANDLE on failure.
+        VkSampler AcquireSampler(const SamplerDesc &desc);
+        void DestroySamplers();
+        bool CreateDefaultTextures();
+        bool CreateCameraResources();
+        void DestroyCameraResources();
+        // set 2: the per-draw storage buffer a model material reads.
         bool CreateModelDescriptors();
-        bool CreateMaterialSampler(GpuMaterial &material, const MaterialDesc &desc);
         bool BindModelDescriptors(VkCommandBuffer cmd, const GpuMaterial &material, const DrawItem &item);
         void ResetModelFrame(uint32_t frame);
         void DestroyModelResources(bool shutdown);
@@ -135,12 +151,17 @@ namespace mir
         VkPipeline BuildPipeline(const MaterialDesc &desc);
         void DestroyMeshes();
         void DestroyMaterials();
+        void DestroyTextures();
         const GpuMesh *FindMesh(MeshHandle handle) const;
         const GpuMaterial *FindMaterial(MaterialHandle handle) const;
+        const GpuTexture *FindTexture(TextureHandle handle) const;
         void NameObject(VkObjectType type, uint64_t handle, const char *name);
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
-        // Draws one view's items, clipped to its rect
-        void RecordView(VkCommandBuffer cmd, const RenderView &view);
+        // Draws one view's items, clipped to its rect. viewIndex selects this
+        // view's slot in the current frame's camera UBO.
+        void RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex);
+        // Writes view's viewProj into this frame's camera UBO at viewIndex.
+        void WriteCameraData(const glm::mat4 &viewProj, uint32_t viewIndex);
 
     private:
         constexpr static uint32_t VulkanVersion{ VK_API_VERSION_1_4 };
@@ -191,6 +212,41 @@ namespace mir
         // = DrawItem + Vertex format
         VkPipelineLayout mPipelineLayout = VK_NULL_HANDLE;
 
+        // set 0: binding 0 = base color, binding 1 = normal map.
+        VkDescriptorSetLayout mMaterialSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool mMaterialDescriptorPool = VK_NULL_HANDLE;
+
+        // Samplers, keyed by a packed SamplerDesc. The renderer owns them all;
+        // a GpuMaterial only borrows one.
+        std::unordered_map<uint64_t, VkSampler> mSamplers;
+
+        // set 1: binding 0 = per-view viewProj, as a dynamic uniform buffer.
+        constexpr static uint32_t kMaxViewsPerFrame = 16;
+
+        VkDescriptorSetLayout mCameraSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool mCameraDescriptorPool = VK_NULL_HANDLE;
+        VkDescriptorSet mCameraDescriptorSets[kFramesInFlight]{};
+
+        VkBuffer mCameraBuffers[kFramesInFlight]{};
+        VmaAllocation mCameraAllocations[kFramesInFlight]{};
+        // Persistently mapped; one kMaxViewsPerFrame-slice buffer per frame.
+        std::byte *mCameraMapped[kFramesInFlight]{};
+        // sizeof(CameraData) rounded up to minUniformBufferOffsetAlignment.
+        VkDeviceSize mCameraAlignedSize = 0;
+
+        // set 2: binding 0 = one model draw's deformation + material data,
+        // allocated per draw out of the frame's pool, which is reset each frame.
+        VkDescriptorSetLayout mModelSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool mModelPools[kFramesInFlight]{};
+
+        struct ModelFrameBuffer { VkBuffer buffer; VmaAllocation allocation; };
+        std::vector<ModelFrameBuffer> mModelBuffers[kFramesInFlight];
+
+        std::filesystem::path mCapturePath;
+        VkBuffer mCaptureBuffer = VK_NULL_HANDLE;
+        VmaAllocation mCaptureAllocation = VK_NULL_HANDLE;
+        bool mCanCapture = false;
+
         // One buffer pair per mesh
         struct GpuMesh
         {
@@ -204,30 +260,34 @@ namespace mir
 
         std::vector<GpuMesh> mMeshes;
 
-        // One pipeline per material.
         struct GpuMaterial
         {
             VkPipeline mPipeline = VK_NULL_HANDLE;
-            VkSampler sampler = VK_NULL_HANDLE;
-            uint32_t texture = 0;
-            glm::vec4 parameters{};
-            bool modelShader = false;
+            VkDescriptorSet mDescriptorSet = VK_NULL_HANDLE;
+            // alphaMode, alphaCutoff, doubleSided, unused. Handed to the model
+            // shader through set 2, since the push constant range is full.
+            glm::vec4 mParameters{};
+            bool mModelShader = false;
         };
-
-        struct GpuTexture { VkImage image = VK_NULL_HANDLE; VmaAllocation allocation = VK_NULL_HANDLE; VkImageView view = VK_NULL_HANDLE; uint32_t levels = 1; };
-        struct ModelFrameBuffer { VkBuffer buffer; VmaAllocation allocation; };
-        std::vector<GpuTexture> mTextures;
-        VkDescriptorSetLayout mModelSetLayout = VK_NULL_HANDLE;
-        VkDescriptorPool mModelPools[kFramesInFlight]{};
-        std::vector<ModelFrameBuffer> mModelBuffers[kFramesInFlight];
-        std::filesystem::path mCapturePath;
-        VkBuffer mCaptureBuffer = VK_NULL_HANDLE;
-        VmaAllocation mCaptureAllocation = VK_NULL_HANDLE;
-        bool mCanCapture = false;
 
         std::vector<GpuMaterial> mMaterials;
 
         MaterialHandle mDefaultMaterial;
+
+        // One image per texture.
+        struct GpuTexture
+        {
+            VkImage mImage = VK_NULL_HANDLE;
+            VmaAllocation mAllocation = VK_NULL_HANDLE;
+            VkImageView mView = VK_NULL_HANDLE;
+            uint32_t mLevels = 1;
+            uint32_t mGeneration = 0; //< 0 = slot never filled
+        };
+
+        std::vector<GpuTexture> mTextures;
+
+        TextureHandle mDefaultWhiteTexture;
+        TextureHandle mDefaultNormalTexture;
 
         uint32_t mFrameIndex = 0;
         bool mNeedRecreate = false;
