@@ -86,6 +86,8 @@ void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera
 | `RenderView` | `renderer/VulkanRenderer.h` | `{rect, items, viewProj, cameraPos}` — one camera's `DrawItem`s, clipped to a screen rect; `cameraPos` only the sky pass reads |
 | `Viewport`, `ViewportId` | `renderer/RenderSystem.h` | `RenderSystem`'s per-viewport state: rect plus a World `Entity`, an external camera, or neither (fallback) |
 | `MeshRenderer`, `Camera` | `renderer/components/` | Handles, and `fovY`/`near`/`far`, declared here rather than in `core` |
+| `MeshBounds` | `renderer/components/MeshBounds.h` | `{mLocalMin, mLocalMax}`, a mesh's own local-space AABB; attached by `ResolveSceneMeshes` (see [app.md](app.md)), read by the editor's viewport click-picking (see [editor.md](editor.md)) — not used for rendering at all |
+| `Ray`, `MakeCameraRay`, `RayIntersectsAABB` | `renderer/CameraMath.h` | World-space camera ray from a click, and a ray/AABB slab test — the same file `MakeViewProjection` lives in, so both stay in the same Vulkan-convention math |
 | `RenderSystem` | `renderer/RenderSystem.h` | The ECS-to-renderer bridge, `SystemPhase::Render` |
 | `Shapes.h` | `renderer/Shapes.h` | `MakeCube()` and friends — plain vectors, no Vulkan |
 | `RenderSettings` | `renderer/RenderSettings.h` | Project Settings' `"rendering"` section (`rayTracing: bool` so far); `LoadFile`/`SaveFile`, a World resource loaded in `App::Initialize` |
@@ -268,6 +270,22 @@ No tests. Everything here needs a device, and the module is verified by running.
    black rather than lit by anything but `SetAmbientColor`.
 
 ## Changed
+
+*2026-09-21* — **`CameraMath.h` gained a camera-ray builder and a ray/AABB
+test, and meshes gained a `MeshBounds` component.** Was: the file only
+built `viewProj`; there was no unprojection/ray helper anywhere, and no
+bounding-box concept at all. Now: `MakeCameraRay(cameraWorld, viewProj,
+ndc)` unprojects a screen click into a world-space `Ray` (same technique as
+`sky.slang`'s CPU-side counterpart), and `RayIntersectsAABB` is a standard
+slab test. `MeshBounds` (`renderer/components/MeshBounds.h`) is a mesh's
+local-space min/max, attached by `SceneResolve.cpp`'s `ResolveSceneMeshes`
+(app module) right where a fresh mesh's CPU vertex data is briefly
+available before `CreateMesh` uploads and discards it - the only place in
+the engine CPU-side positions still exist even momentarily. None of this
+is renderer/draw-path code; it exists so the editor can ray-pick objects in
+the viewport (see [editor.md](editor.md)) without the editor needing to
+know `VulkanRenderer` exists at all, or the renderer needing to retain
+mesh geometry permanently just to support picking.
 
 *2026-09-21* — **The default material is a flat grey, non-metallic
 Blinn-Phong shader, `assets/shaders/default.slang`.** Was:

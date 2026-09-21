@@ -10,12 +10,18 @@
 
 #include <editor/Editor.h>
 
+#include <core/ecs/Query.h>
 #include <core/ecs/TransformHierarchy.h>
+#include <core/ecs/World.h>
 #include <core/ecs/components/Transform.h>
+#include <core/ecs/components/WorldTransform.h>
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
 #include <editor/Selection.h>
 #include <editortheme/EditorTheme.h>
+#include <renderer/CameraMath.h>
+#include <renderer/components/MeshBounds.h>
+#include <renderer/components/MeshRenderer.h>
 
 #include <IconsFontAwesome6.h>
 #include <imgui.h>
@@ -28,6 +34,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace mir
@@ -308,7 +315,7 @@ namespace mir
             return;
 
         const Selection *selection = world.TryResource<Selection>();
-        const Entity entity = selection != nullptr ? selection->mSelected : kNullEntity;
+        const Entity entity = selection != nullptr ? selection->Primary() : kNullEntity;
         if (entity.IsNull() || !world.IsAlive(entity))
             return;
 
@@ -374,6 +381,69 @@ namespace mir
             transform->SetRotation(rotation);
             transform->SetScale(scale);
         }
+    }
+
+    void Editor::UpdateViewportPicking(const EngineModeState &mode, World &world)
+    {
+        const bool down = mWindow->RawInput().IsDown(MouseButton::Left);
+        const bool justPressed = down && !mMouseWasDown;
+        mMouseWasDown = down;
+
+        if (mode.mMode != EngineMode::Edit)
+            return;
+
+        if (mSceneViewportRect.extent.width == 0 || mSceneViewportRect.extent.height == 0)
+            return;
+
+        if (WantsCaptureMouse())
+            return;
+
+        if (ImGuizmo::IsOver() || ImGuizmo::IsUsing())
+            return;
+
+        if (!justPressed)
+            return;
+
+        const RawInputSnapshot &input = mWindow->RawInput();
+        const float px = static_cast<float>(input.mouseX) - static_cast<float>(mSceneViewportRect.offset.x);
+        const float py = static_cast<float>(input.mouseY) - static_cast<float>(mSceneViewportRect.offset.y);
+        const float width = static_cast<float>(mSceneViewportRect.extent.width);
+        const float height = static_cast<float>(mSceneViewportRect.extent.height);
+        if (px < 0.0f || py < 0.0f || px >= width || py >= height)
+            return;
+
+        const glm::vec2 ndc{ (px / width) * 2.0f - 1.0f, (py / height) * 2.0f - 1.0f };
+        const glm::mat4 viewProj = MakeViewProjection(mCamera.Matrix(), mCamera.mLens.mFovYDegrees,
+            mCamera.mLens.mNearZ, mCamera.mLens.mFarZ, width / height);
+        const Ray ray = MakeCameraRay(mCamera.Matrix(), viewProj, ndc);
+
+        Entity hitEntity = kNullEntity;
+        float hitDistance = std::numeric_limits<float>::max();
+
+        world.GetOrCreateQuery<const WorldTransform, const MeshRenderer, const MeshBounds>().ForEach(
+            [&](Entity entity, const WorldTransform &transform, const MeshRenderer &, const MeshBounds &bounds)
+            {
+                const glm::mat4 worldMatrix = transform.Matrix();
+                const glm::mat4 invWorld = glm::inverse(worldMatrix);
+                const glm::vec3 localOrigin = glm::vec3(invWorld * glm::vec4(ray.origin, 1.0f));
+                const glm::vec3 localDir = glm::vec3(invWorld * glm::vec4(ray.direction, 0.0f));
+
+                const std::optional<float> t =
+                    RayIntersectsAABB(Ray{ localOrigin, localDir }, bounds.mLocalMin, bounds.mLocalMax);
+                if (!t)
+                    return;
+
+                const glm::vec3 localHit = localOrigin + localDir * (*t);
+                const glm::vec3 worldHit = glm::vec3(worldMatrix * glm::vec4(localHit, 1.0f));
+                const float distance = glm::length(worldHit - ray.origin);
+                if (distance < hitDistance)
+                {
+                    hitDistance = distance;
+                    hitEntity = entity;
+                }
+            });
+
+        ApplyClick(world.Resource<Selection>(), hitEntity, ImGui::GetIO().KeyCtrl);
     }
 
     void Editor::DrawNewProjectModal(EditorActions &actions, std::span<const ProjectMenuEntry> projects)
@@ -480,6 +550,7 @@ namespace mir
                             static_cast<uint32_t>(std::max(centralNode->Size.y, 0.0f)) } };
             }
 
+            UpdateViewportPicking(mode, world);
             DrawViewportGizmo(mode, world);
 
             if (ImGui::BeginMainMenuBar())

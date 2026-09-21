@@ -15,6 +15,7 @@
 #include <imgui.h>
 
 #include <span>
+#include <vector>
 
 namespace mir
 {
@@ -29,7 +30,7 @@ namespace mir
                 ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick | ImGuiTreeNodeFlags_SpanAvailWidth;
             if (children.empty())
                 flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-            if (entity == selection.mSelected)
+            if (selection.Contains(entity))
                 flags |= ImGuiTreeNodeFlags_Selected;
 
             // unique across index/generation reuse, distinct from the label text
@@ -37,7 +38,7 @@ namespace mir
             const bool open = ImGui::TreeNodeEx(id, flags, "Entity %u", entity.mIndex);
 
             if (ImGui::IsItemClicked())
-                selection.mSelected = entity;
+                ApplyClick(selection, entity, ImGui::GetIO().KeyCtrl);
 
             if (!children.empty() && open)
             {
@@ -51,8 +52,7 @@ namespace mir
     void HierarchyPanel::Draw(World &world)
     {
         Selection &selection = world.Resource<Selection>();
-        if (!selection.mSelected.IsNull() && !world.IsAlive(selection.mSelected))
-            selection.mSelected = kNullEntity;
+        std::erase_if(selection.mSelected, [&](Entity e) { return !world.IsAlive(e); });
 
         const HierarchyIndex *index = world.TryResource<HierarchyIndex>();
 
