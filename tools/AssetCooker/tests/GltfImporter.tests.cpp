@@ -1,4 +1,5 @@
 #include "../GltfImporter.h"
+#include <algorithm>
 #include <animation/ModelAnimation.h>
 #include <assets/AssetFileIo.h>
 #include <catch2/catch_approx.hpp>
@@ -34,10 +35,7 @@ namespace
             in >> j;
             return j;
         }
-        void Write(const Json &j)
-        {
-            std::ofstream(root / "flag.gltf") << j.dump(2);
-        }
+        void Write(const Json &j) { std::ofstream(root / "flag.gltf") << j.dump(2); }
         cook::GltfImport Import(const char *file = "flag.gltf")
         {
             return cook::ImportGltf(root / file, std::string("assets/") + file, {root});
@@ -98,6 +96,131 @@ TEST_CASE("glTF and GLB cook geometry texture skeleton and morph animation", "[g
         CHECK(deformed[5].position.z == Catch::Approx(.3));
     }
 }
+
+TEST_CASE("glTF sidecar migration keeps model identity and records moved path "
+          "aliases",
+          "[gltf][identity]")
+{
+    Fixture f;
+    auto before = cook::ImportGltf(f.root / "flag.gltf", "assets/models/flag/flag.gltf", {f.root});
+    std::ofstream(before.metadataPath) << before.metadata;
+    auto moved = cook::ImportGltf(f.root / "flag.gltf", "assets/models/renamed/flag.gltf", {f.root});
+    CHECK(moved.modelId == before.modelId);
+    CHECK(moved.identityPath == "assets/models/flag/flag.gltf");
+    CHECK(std::find(moved.aliases.begin(), moved.aliases.end(), "assets/models/flag/flag.gltf") != moved.aliases.end());
+    CHECK(std::find(moved.aliases.begin(), moved.aliases.end(), "assets/models/renamed/flag.gltf") !=
+          moved.aliases.end());
+    const Json metadata = Json::parse(moved.metadata);
+    CHECK(metadata.at("version") == 2);
+}
+
+TEST_CASE("Cooker incremental batches preserve unrelated entries and repair "
+          "missing blobs",
+          "[gltf][cooker][incremental]")
+{
+    Fixture f;
+    const auto out = fs::path(f.root.string() + "-incremental-cooked");
+    const auto result = out / "result.json";
+    std::vector<std::string> full{"--source-dir", f.root.string(), "--id-root", "assets",
+                                  "--out",        out.string(),    "--result",  result.string()};
+    REQUIRE(LaunchProcess(GLTF_COOKER_EXE, full, true) == 0);
+    auto manifest = AssetManifest::LoadFile(out / "manifest.blob");
+    REQUIRE(manifest);
+    const auto originalCount = manifest->Count();
+    const auto *model = manifest->Find(MakeAssetId("assets/flag.gltf"));
+    REQUIRE(model);
+    const auto modelBlob = out / manifest->PathOf(*model);
+
+    std::vector<std::string> partial{"--source-dir", f.root.string(), "--id-root",        "assets",   "--out",
+                                     out.string(),   "--model",       "assets/flag.gltf", "--result", result.string()};
+    REQUIRE(LaunchProcess(GLTF_COOKER_EXE, partial, true) == 0);
+    CHECK(Json::parse(std::ifstream(result)).at("status") == "unchanged");
+    REQUIRE(AssetManifest::LoadFile(out / "manifest.blob")->Count() == originalCount);
+
+    fs::remove(modelBlob);
+    REQUIRE(LaunchProcess(GLTF_COOKER_EXE, partial, true) == 0);
+    CHECK(Json::parse(std::ifstream(result)).at("status") == "succeeded");
+    CHECK(fs::exists(modelBlob));
+    CHECK(AssetManifest::LoadFile(out / "manifest.blob")->Count() == originalCount);
+}
+
+TEST_CASE("External import copies only the glTF entry and referenced package "
+          "dependencies",
+          "[gltf][cooker][import]")
+{
+    Fixture package;
+    const auto project = fs::path(package.root.string() + "-project");
+    const auto out = fs::path(package.root.string() + "-import-cooked");
+    fs::create_directories(project);
+    std::vector<std::string> args{
+        "--source-dir",   project.string(),      "--id-root",     "games/Test/assets",
+        "--out",          out.string(),          "--import",      (package.root / "flag.gltf").string(),
+        "--package-root", package.root.string(), "--destination", "models/flag"};
+    REQUIRE(LaunchProcess(GLTF_COOKER_EXE, args, true) == 0);
+    CHECK(fs::exists(project / "models/flag/flag.gltf"));
+    CHECK(fs::exists(project / "models/flag/flag.bin"));
+    CHECK(fs::exists(project / "models/flag/checker.png"));
+    CHECK_FALSE(fs::exists(project / "models/flag/flag.glb"));
+    const auto manifest = AssetManifest::LoadFile(out / "manifest.blob");
+    REQUIRE(manifest);
+    CHECK(manifest->Find(MakeAssetId("games/Test/assets/models/flag/flag.gltf")) != nullptr);
+}
+
+TEST_CASE("Cooker move keeps stable identity and relocates private dependencies", "[gltf][cooker][move]")
+{
+    Fixture f;
+    const auto out = fs::path(f.root.string() + "-move-cooked");
+    std::vector<std::string> full{"--source-dir", f.root.string(), "--id-root", "assets", "--out", out.string()};
+    REQUIRE(LaunchProcess(GLTF_COOKER_EXE, full, true) == 0);
+    const auto oldId = MakeAssetId("assets/flag.gltf");
+    std::vector<std::string> move = full;
+    move.insert(move.end(), {"--move-model", "assets/flag.gltf", "--move-to", "models/Flag"});
+    REQUIRE(LaunchProcess(GLTF_COOKER_EXE, move, true) == 0);
+    CHECK_FALSE(fs::exists(f.root / "flag.gltf"));
+    CHECK(fs::exists(f.root / "models/Flag/flag.gltf"));
+    CHECK(fs::exists(f.root / "models/Flag/flag.bin"));
+    CHECK(fs::exists(f.root / "models/Flag/checker.png"));
+    const auto manifest = AssetManifest::LoadFile(out / "manifest.blob");
+    REQUIRE(manifest);
+    CHECK(manifest->Find(oldId) != nullptr);
+    CHECK(manifest->Find(MakeAssetId("assets/models/Flag/flag.gltf")) != nullptr);
+}
+
+TEST_CASE("Explicit removal drops a missing model while preserving the rest of "
+          "the manifest",
+          "[gltf][cooker][remove]")
+{
+    Fixture f;
+    const auto out = fs::path(f.root.string() + "-remove-cooked");
+    std::vector<std::string> full{"--source-dir", f.root.string(), "--id-root", "assets", "--out", out.string()};
+    REQUIRE(LaunchProcess(GLTF_COOKER_EXE, full, true) == 0);
+    const auto before = AssetManifest::LoadFile(out / "manifest.blob");
+    REQUIRE(before);
+    fs::remove(f.root / "flag.glb");
+    fs::remove(f.root / "flag.glb.import.json");
+    std::vector<std::string> remove = full;
+    remove.insert(remove.end(), {"--remove-model", "assets/flag.glb"});
+    REQUIRE(LaunchProcess(GLTF_COOKER_EXE, remove, true) == 0);
+    const auto after = AssetManifest::LoadFile(out / "manifest.blob");
+    REQUIRE(after);
+    CHECK(after->Find(MakeAssetId("assets/flag.glb")) == nullptr);
+    CHECK(after->Find(MakeAssetId("assets/flag.gltf")) != nullptr);
+    CHECK(after->Count() < before->Count());
+}
+TEST_CASE("Copied import metadata is rejected as an identity conflict", "[gltf][cooker][identity]")
+{
+    Fixture f;
+    const auto out = fs::path(f.root.string() + "-identity-cooked");
+    std::vector<std::string> args{"--source-dir", f.root.string(), "--id-root", "assets", "--out", out.string()};
+    REQUIRE(LaunchProcess(GLTF_COOKER_EXE, args, true) == 0);
+    const auto manifestBefore = ReadFileBytes(out / "manifest.blob");
+    REQUIRE(manifestBefore);
+    fs::create_directories(f.root / "copy");
+    for (const char *name : {"flag.gltf", "flag.bin", "checker.png", "flag.gltf.import.json"})
+        fs::copy_file(f.root / name, f.root / "copy" / name);
+    CHECK(LaunchProcess(GLTF_COOKER_EXE, args, true) != 0);
+    CHECK(ReadFileBytes(out / "manifest.blob") == manifestBefore);
+}
 TEST_CASE("Reordering named glTF nodes preserves stable keys and animation targets", "[gltf]")
 {
     Fixture f;
@@ -131,7 +254,9 @@ TEST_CASE("Reordering named glTF nodes preserves stable keys and animation targe
     CHECK(Find<AnimationClipAsset>(before, kAnimationAssetTypeTag).tracks[0].target ==
           Find<AnimationClipAsset>(after, kAnimationAssetTypeTag).tracks[0].target);
 }
-TEST_CASE("glTF import rejects missing dependencies and unsupported required extensions", "[gltf]")
+TEST_CASE("glTF import rejects missing dependencies and unsupported required "
+          "extensions",
+          "[gltf]")
 {
     Fixture f;
     auto j = f.Read();
@@ -170,7 +295,9 @@ TEST_CASE("glTF strips fans lines points and nonindexed geometry are normalized"
             CHECK(q.indices == std::vector<uint32_t>{0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 0});
     }
 }
-TEST_CASE("Editing an external buffer changes mesh payload without changing mesh identity", "[gltf]")
+TEST_CASE("Editing an external buffer changes mesh payload without changing "
+          "mesh identity",
+          "[gltf]")
 {
     Fixture f;
     auto before = f.Import();
@@ -274,7 +401,7 @@ TEST_CASE("glTF flat normals preserve morph data and more than four joint influe
     CHECK(p.morphTargets[0].positions.back().x == Catch::Approx(.5));
     CHECK(p.morphTargets[0].positions.back().z == Catch::Approx(.3));
 }
-TEST_CASE("Cooker publishes typed manifest atomically and prunes deleted animation blobs", "[gltf][cooker]")
+TEST_CASE("Cooker publishes atomically and retains one fallback manifest generation", "[gltf][cooker]")
 {
     Fixture f;
     const auto out = fs::path(f.root.string() + "-cooked");
@@ -296,6 +423,10 @@ TEST_CASE("Cooker publishes typed manifest atomically and prunes deleted animati
     auto updated = AssetManifest::LoadFile(out / "manifest.blob");
     REQUIRE(updated);
     CHECK(updated->Find(oldClip) == nullptr);
+    // The running editor may still reference the immediately previous
+    // generation until it accepts the replacement.
+    CHECK(fs::exists(out / oldPath));
+    REQUIRE(LaunchProcess(GLTF_COOKER_EXE, args, true) == 0);
     CHECK_FALSE(fs::exists(out / oldPath));
     const auto before = ReadFileBytes(out / "manifest.blob");
     REQUIRE(before);

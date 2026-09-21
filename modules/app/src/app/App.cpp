@@ -9,8 +9,8 @@
 
 #include <app/App.h>
 
-#include "SceneResolve.h"
 #include "ModelSystem.h"
+#include "SceneResolve.h"
 #include <animation/ModelPlayer.h>
 #include <audio/AudioSystem.h>
 #include <core/EngineVersion.h>
@@ -34,6 +34,7 @@
 #include <script/ScriptSystem.h>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <filesystem>
 #include <system_error>
@@ -41,10 +42,7 @@
 
 namespace mir
 {
-    App::~App()
-    {
-        Shutdown();
-    }
+    App::~App() { Shutdown(); }
 
     bool App::Initialize(const AppDesc &desc)
     {
@@ -52,17 +50,18 @@ namespace mir
         mProject = desc.mProject;
         mProjectToOpen.reset();
         mSwitchHookFired = false;
-        mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
-  
+        mFixedTimestep = FixedTimestep{.mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps};
+        mAssetImport.Initialize(mProject);
+
         audio::Init(mProject.mSoundBankDir);
 
         EnsureDpiAware();
 
-        if (!mSplash.Show({ .mEngineName = desc.mAppName,
+        if (!mSplash.Show({.mEngineName = desc.mAppName,
                            .mVersion = kEngineVersion,
                            .mCopyright = kEngineCopyright,
                            .mStatus = "Creating window...",
-                           .mProgress = 0.0f }))
+                           .mProgress = 0.0f}))
         {
             MIR_LOG_WARN("Splash screen failed to show, continuing without it");
         }
@@ -83,9 +82,8 @@ namespace mir
         }
 
         mSplash.SetProgress("Initializing renderer...", 0.2f);
-        if (!mRenderer.Initialize({ .window = mWindow.get(),
-                                   .appName = desc.mAppName,
-                                   .enableValidation = desc.mEnableValidation }))
+        if (!mRenderer.Initialize(
+                {.window = mWindow.get(), .appName = desc.mAppName, .enableValidation = desc.mEnableValidation}))
         {
             MIR_LOG_ERROR("Renderer initialization failed");
             mWindow.reset();
@@ -118,7 +116,7 @@ namespace mir
         mWorld.EmplaceResource<ModelMorphOverrides>();
 
         // defers structural change
-        mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
+        mWorld.EmplaceResource<FrameCommands>(FrameCommands{&mCommands});
 
         mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mProject.mProjectSettingsPath));
         mWorld.EmplaceResource<RenderSettings>(RenderSettings::LoadFile(mProject.mProjectSettingsPath));
@@ -138,7 +136,8 @@ namespace mir
 
         // should be before any other system in PostUpdate
         mScheduler.AddSystem<TransformPropagateSystem>(SystemPhase::PostUpdate);
-        mModelSystem = &mScheduler.AddSystem<ModelSystem>(SystemPhase::PostUpdate, mRenderer, Assets(), mProject.mAssetIdRoot);
+        mModelSystem =
+            &mScheduler.AddSystem<ModelSystem>(SystemPhase::PostUpdate, mRenderer, Assets(), mProject.mAssetIdRoot);
 
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
@@ -270,9 +269,12 @@ namespace mir
         UnloadScene(mWorld, mScene);
 
         // no scene entity holds a mesh or material handle now
-        if (mModelSystem) mModelSystem->Reset();
-        if (auto *draws = mWorld.TryResource<ModelDrawItems>()) draws->items.clear();
-        if (auto *overrides = mWorld.TryResource<ModelMorphOverrides>()) overrides->instances.clear();
+        if (mModelSystem)
+            mModelSystem->Reset();
+        if (auto *draws = mWorld.TryResource<ModelDrawItems>())
+            draws->items.clear();
+        if (auto *overrides = mWorld.TryResource<ModelMorphOverrides>())
+            overrides->instances.clear();
         mRenderer.ReleaseSceneResources();
     }
 
@@ -304,7 +306,8 @@ namespace mir
             return &*mAssetCache;
 
         if (mAssetLoadFailed)
-            return nullptr; // already tried and logged; do not re-stat the disk every call
+            return nullptr; // already tried and logged; do not re-stat the disk every
+                            // call
 
         const std::filesystem::path manifestPath = CookedAssetsDir() / "manifest.blob";
         mAssetManifest = AssetManifest::LoadFile(manifestPath);
@@ -321,10 +324,7 @@ namespace mir
         return &*mAssetCache;
     }
 
-    SystemContext App::MakeContext(float dt)
-    {
-        return SystemContext{ mWorld, mCommands, dt, mElapsed, mFrame };
-    }
+    SystemContext App::MakeContext(float dt) { return SystemContext{mWorld, mCommands, dt, mElapsed, mFrame}; }
 
     void App::Run()
     {
@@ -343,10 +343,13 @@ namespace mir
             mWindow->PollEvents();
 
             const auto now = std::chrono::steady_clock::now();
-            const float dt = std::min(std::chrono::duration<float>(now - previous).count(),
-                mDesc.mMaxDeltaSeconds);
+            const float dt = std::min(std::chrono::duration<float>(now - previous).count(), mDesc.mMaxDeltaSeconds);
             previous = now;
             mElapsed += dt;
+
+            mAssetImport.Update(IsEditing(mWorld));
+            if (mAssetImport.PendingApply() && IsEditing(mWorld))
+                ApplyImportedAssets();
 
             mEditor.BeginFrame();
 
@@ -354,7 +357,7 @@ namespace mir
             {
                 const EditorActions actions = mEditor.DrawLayout(
                     mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<RenderSettings>(),
-                    mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir, mWorld);
+                    mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir, mWorld, mAssetImport.View());
 
                 switch (actions.mScene)
                 {
@@ -379,6 +382,33 @@ namespace mir
                 case SceneMenuAction::None:
                     break;
                 }
+
+                bool assetActionAccepted = true;
+                if (actions.mAssetImport.mKind == AssetImportActionKind::Remove)
+                {
+                    AssetId target = MakeAssetId(actions.mAssetImport.mModelPath);
+                    for (const auto &model : mAssetImport.View().mModels)
+                        if (model.mPath == actions.mAssetImport.mModelPath && model.mAssetId != 0)
+                            target = AssetId{model.mAssetId};
+                    mWorld.GetOrCreateQuery<const ModelPlayer>().ForEach([&](Entity, const ModelPlayer &player) {
+                        AssetId referenced{};
+                        if (player.modelAsset[0] != '\0')
+                        {
+                            const std::string_view encoded(player.modelAsset);
+                            std::from_chars(encoded.data(), encoded.data() + encoded.size(), referenced.value, 16);
+                        }
+                        if (referenced.IsNull() && player.modelName[0] != '\0')
+                            referenced = MakeAssetId((std::filesystem::path(mProject.mAssetIdRoot) / player.modelName)
+                                                         .lexically_normal()
+                                                         .generic_string());
+                        assetActionAccepted &= referenced != target;
+                    });
+                    if (!assetActionAccepted)
+                        mAssetImport.Reject(actions.mAssetImport.mModelPath,
+                                            "cannot remove this asset while a scene entity references it");
+                }
+                if (assetActionAccepted)
+                    mAssetImport.Handle(actions.mAssetImport);
 
                 if (!actions.mOpenProject.empty())
                     RequestOpenProject(actions.mOpenProject);
@@ -409,7 +439,8 @@ namespace mir
 
             mScriptReloadWatcher.Poll(Assets(), dt);
 
-            // advances in every mode; FixedUpdate systems check IsSimulating themselves, as ScriptSystem does
+            // advances in every mode; FixedUpdate systems check IsSimulating
+            // themselves, as ScriptSystem does
             const uint32_t fixedSteps = mFixedTimestep.Advance(dt);
 
             SystemContext context = MakeContext(dt);
@@ -417,9 +448,8 @@ namespace mir
                 mRenderer.CaptureNextFrame(mDesc.mCapturePath);
             mScheduler.Update(context, fixedSteps, mFixedTimestep.mStep);
 
-
             audio::Update();
-            
+
             ++mFrame;
 
             RunSwitchHook();
@@ -428,6 +458,32 @@ namespace mir
             if (mDesc.mMaxFrames != 0 && mFrame >= mDesc.mMaxFrames)
                 mWindow->RequestClose();
         }
+    }
+
+    void App::ApplyImportedAssets()
+    {
+        auto candidateManifest = AssetManifest::LoadFile(CookedAssetsDir() / "manifest.blob");
+        if (!candidateManifest)
+        {
+            mAssetImport.MarkApplyFailed("the new asset manifest could not be loaded");
+            return;
+        }
+        AssetCache candidate(&*candidateManifest, CookedAssetsDir());
+        std::string error;
+        if (mModelSystem && !mModelSystem->PrepareReload(candidate, error))
+        {
+            mAssetImport.MarkApplyFailed("new model resources were rejected: " + error);
+            return;
+        }
+
+        mAssetCache.reset();
+        mAssetManifest = std::move(candidateManifest);
+        mAssetCache.emplace(&*mAssetManifest, CookedAssetsDir());
+        if (mModelSystem)
+            mModelSystem->CommitReload(&*mAssetCache);
+        mAssetLoadFailed = false;
+        mAssetImport.MarkApplied();
+        MIR_LOG_INFO("Applied imported assets at an Edit frame boundary");
     }
 
     void App::Shutdown()
@@ -441,9 +497,10 @@ namespace mir
         SystemContext stopContext = MakeContext(0.0f);
         mScheduler.Stop(stopContext);
 
+        mAssetImport.Shutdown();
 
         audio::Terminate();
-        
+
         mScheduler.Reset();
 
         // Cache before manifest
@@ -458,4 +515,4 @@ namespace mir
         mInitialized = false;
         MIR_LOG_INFO("App shut down");
     }
-}
+} // namespace mir

@@ -8,13 +8,14 @@
  */
 #pragma once
 
+#include <app/AssetImportManager.h>
 #include <app/GameProject.h>
+#include <assets/AssetCache.h>
+#include <assets/AssetManifest.h>
 #include <core/ecs/CommandBuffer.h>
 #include <core/ecs/FixedTimestep.h>
 #include <core/ecs/SystemScheduler.h>
 #include <core/ecs/World.h>
-#include <assets/AssetCache.h>
-#include <assets/AssetManifest.h>
 #include <editor/Editor.h>
 #include <renderer/VulkanRenderer.h>
 #include <scene/PlaySnapshot.h>
@@ -61,7 +62,8 @@ namespace mir
         // the game Initialize opens
         GameProject mProject;
 
-        // test hook: RequestOpenProject this halfway through mMaxFrames; empty for none
+        // test hook: RequestOpenProject this halfway through mMaxFrames; empty for
+        // none
         std::string mSwitchProjectTo;
     };
 
@@ -116,7 +118,8 @@ namespace mir
         // Writes Scene() to the game's scene directory. False on I/O failure
         bool SaveScene();
 
-        // Replaces Scene() with the game's saved scene and resolves it. False without a scene.json
+        // Replaces Scene() with the game's saved scene and resolves it. False without
+        // a scene.json
         bool LoadScene();
 
         // Edit -> Play
@@ -140,11 +143,13 @@ namespace mir
 
         // the mSwitchProjectTo test hook
         void RunSwitchHook();
+        void ApplyImportedAssets();
 
         SplashScreen mSplash;
         std::unique_ptr<Window> mWindow;
         VulkanRenderer mRenderer;
         Editor mEditor;
+        AssetImportManager mAssetImport;
 
         // Before mWorld, so it is destroyed after it
         CommandBuffer mCommands;
@@ -156,7 +161,7 @@ namespace mir
         ModelSystem *mModelSystem = nullptr;
         PlaySnapshot mPlaySnapshot;
         ScriptHost mScriptHost;
-        ScriptReloadWatcher mScriptReloadWatcher{ mScriptHost };
+        ScriptReloadWatcher mScriptReloadWatcher{mScriptHost};
         LoadedScene mScene;
 
         AppDesc mDesc;
@@ -175,4 +180,4 @@ namespace mir
         bool mAssetLoadFailed = false;
         bool mInitialized = false;
     };
-}
+} // namespace mir

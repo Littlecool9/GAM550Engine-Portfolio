@@ -54,6 +54,13 @@ add_subdirectory(tools/AssetCooker)
 add_executable(MjolnirEngine WIN32)
 target_sources(MjolnirEngine PRIVATE main.cpp)
 
+# Local development binding used by the editor's one-shot import workflow.
+# It is generated into the build tree and never written into game data.
+file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}" asset_workspace_source_root)
+file(GENERATE
+    OUTPUT "$<TARGET_FILE_DIR:MjolnirEngine>/asset_workspace.json"
+    CONTENT "{\n  \"version\": 1,\n  \"sourceRoot\": \"${asset_workspace_source_root}\",\n  \"assetCooker\": \"$<TARGET_FILE:AssetCooker>\"\n}\n")
+
 if(MSVC)
     set_target_properties(MjolnirEngine PROPERTIES LINK_FLAGS "/ENTRY:mainCRTStartup")
 endif()

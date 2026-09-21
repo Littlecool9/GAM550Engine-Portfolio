@@ -1,4 +1,8 @@
 {
+  "aliases": [
+    "games/GltfShowcase/assets/models/flag.gltf"
+  ],
+  "identityPath": "games/GltfShowcase/assets/models/flag.gltf",
   "next": 10,
   "objects": {
     "animation:name/StepTranslate": "9",
@@ -11,5 +15,5 @@
     "node:name/Tip": "6",
     "skeleton:name/FlagRig": "7"
   },
-  "version": 1
+  "version": 2
 }

@@ -1,4 +1,8 @@
 {
+  "aliases": [
+    "games/GltfShowcase/assets/models/Duck.glb"
+  ],
+  "identityPath": "games/GltfShowcase/assets/models/Duck.glb",
   "next": 7,
   "objects": {
     "image:hash/10150623493202187125": "1",
@@ -8,5 +12,5 @@
     "node:hash/11852724107597246557": "4",
     "node:hash/7247795064536981599": "5"
   },
-  "version": 1
+  "version": 2
 }

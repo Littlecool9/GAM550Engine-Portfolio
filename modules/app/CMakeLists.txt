@@ -19,6 +19,7 @@ target_link_libraries(engine_app
 
 target_sources(engine_app PRIVATE
     src/app/App.cpp
+    src/app/AssetImportManager.cpp
     src/app/GameProject.cpp
     src/app/SceneResolve.cpp
     src/app/ModelSystem.cpp

@@ -22,6 +22,29 @@
 
 namespace mir
 {
+    namespace
+    {
+        std::filesystem::path ProjectRoot()
+        {
+            std::ifstream input(ExecutableDir() / "asset_workspace.json");
+            if (input)
+            {
+                try
+                {
+                    nlohmann::json binding;
+                    input >> binding;
+                    const std::filesystem::path source = binding.value("sourceRoot", "");
+                    if (binding.value("version", 0) == 1 && std::filesystem::is_directory(source / "games"))
+                        return source;
+                }
+                catch (const nlohmann::json::exception &)
+                {
+                }
+            }
+            return ExecutableDir();
+        }
+    } // namespace
+
     std::optional<std::string> ReadDefaultGame()
     {
         const std::filesystem::path path = ExecutableDir() / "engine.json";
@@ -56,11 +79,11 @@ namespace mir
 
     std::optional<std::filesystem::path> NormalizeGameDir(const std::string &requested)
     {
-        const std::filesystem::path &exeDir = ExecutableDir();
+        const std::filesystem::path rootDir = ProjectRoot();
 
         std::filesystem::path dir = std::filesystem::path(requested).lexically_normal();
         if (dir.is_absolute())
-            dir = dir.lexically_relative(exeDir.lexically_normal());
+            dir = dir.lexically_relative(rootDir.lexically_normal());
 
         // lexically_normal keeps a trailing separator as an empty filename
         if (!dir.empty() && dir.filename().empty())
@@ -68,14 +91,14 @@ namespace mir
 
         if (dir.empty() || dir == "." || dir.has_root_path() || *dir.begin() == "..")
         {
-            MIR_LOG_ERROR("game directory '{}' is not inside '{}'", requested, exeDir.string());
+            MIR_LOG_ERROR("game directory '{}' is not inside '{}'", requested, rootDir.string());
             return std::nullopt;
         }
 
         std::error_code ec;
-        if (!std::filesystem::is_directory(exeDir / dir, ec))
+        if (!std::filesystem::is_directory(rootDir / dir, ec))
         {
-            MIR_LOG_ERROR("game directory '{}' does not exist", (exeDir / dir).string());
+            MIR_LOG_ERROR("game directory '{}' does not exist", (rootDir / dir).string());
             return std::nullopt;
         }
 
@@ -84,7 +107,7 @@ namespace mir
 
     std::optional<GameProject> LoadGameProject(const std::filesystem::path &gameDir)
     {
-        const std::filesystem::path root = ExecutableDir() / gameDir;
+        const std::filesystem::path root = ProjectRoot() / gameDir;
         const std::filesystem::path manifestPath = root / "game.json";
 
         std::ifstream in(manifestPath);
@@ -110,7 +133,8 @@ namespace mir
         }
         catch (const nlohmann::json::parse_error &e)
         {
-            MIR_LOG_ERROR("LoadGameProject: '{}' is not valid JSON ({}), using defaults", manifestPath.string(), e.what());
+            MIR_LOG_ERROR("LoadGameProject: '{}' is not valid JSON ({}), using defaults", manifestPath.string(),
+                          e.what());
         }
 
         if (json.is_object())
@@ -152,17 +176,17 @@ namespace mir
     {
         std::vector<GameProject> projects;
 
-        const std::filesystem::path gamesDir = ExecutableDir() / "games";
+        const std::filesystem::path gamesDir = ProjectRoot() / "games";
 
         std::error_code ec;
         for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(gamesDir, ec))
         {
             std::error_code entryEc;
-            if (!entry.is_directory(entryEc) ||
-                !std::filesystem::is_regular_file(entry.path() / "game.json", entryEc))
+            if (!entry.is_directory(entryEc) || !std::filesystem::is_regular_file(entry.path() / "game.json", entryEc))
                 continue;
 
-            if (std::optional<GameProject> project = LoadGameProject(std::filesystem::path("games") / entry.path().filename()))
+            if (std::optional<GameProject> project =
+                    LoadGameProject(std::filesystem::path("games") / entry.path().filename()))
                 projects.push_back(std::move(*project));
         }
 
@@ -170,8 +194,7 @@ namespace mir
             MIR_LOG_WARN("DiscoverGameProjects: could not list '{}': {}", gamesDir.string(), ec.message());
 
         std::sort(projects.begin(), projects.end(),
-                  [](const GameProject &a, const GameProject &b)
-                  { return a.mDir < b.mDir; });
+                  [](const GameProject &a, const GameProject &b) { return a.mDir < b.mDir; });
         return projects;
     }
 
@@ -184,7 +207,7 @@ namespace mir
             return false;
         }
 
-        const std::filesystem::path root = ExecutableDir() / "games" / name;
+        const std::filesystem::path root = ProjectRoot() / "games" / name;
 
         std::error_code ec;
         if (std::filesystem::exists(root, ec))
@@ -203,14 +226,14 @@ namespace mir
 
         const nlohmann::json manifest{{"name", name}, {"title", "MjolnirEngine - " + name}};
         const std::string manifestDump = manifest.dump(2);
-        const std::span<const std::byte> manifestBytes(
-            reinterpret_cast<const std::byte *>(manifestDump.data()), manifestDump.size());
+        const std::span<const std::byte> manifestBytes(reinterpret_cast<const std::byte *>(manifestDump.data()),
+                                                       manifestDump.size());
 
         // same shape as games/EmptyScene/scenes/default/scene.json
         const nlohmann::json scene{{"entities", nlohmann::json::array()}, {"name", "default"}, {"nextId", 1}};
         const std::string sceneDump = scene.dump(2);
-        const std::span<const std::byte> sceneBytes(
-            reinterpret_cast<const std::byte *>(sceneDump.data()), sceneDump.size());
+        const std::span<const std::byte> sceneBytes(reinterpret_cast<const std::byte *>(sceneDump.data()),
+                                                    sceneDump.size());
 
         if (!WriteFileBytes(root / "game.json", manifestBytes) || !WriteFileBytes(sceneDir / "scene.json", sceneBytes))
         {
@@ -218,6 +241,6 @@ namespace mir
             return false;
         }
 
-        return RenderSettings{ .rayTracing = useRayTracing }.SaveFile(root / "project_settings.json");
+        return RenderSettings{.rayTracing = useRayTracing}.SaveFile(root / "project_settings.json");
     }
-}
+} // namespace mir

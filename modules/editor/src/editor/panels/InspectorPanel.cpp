@@ -21,6 +21,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 
 namespace mir
 {
@@ -48,37 +49,34 @@ namespace mir
                 return ImGui::DragFloat3(label, glm::value_ptr(*static_cast<glm::vec3 *>(bytes)), 0.1f);
             case FieldKind::Vec4:
                 return ImGui::DragFloat4(label, glm::value_ptr(*static_cast<glm::vec4 *>(bytes)), 0.1f);
-            case FieldKind::Quat:
+            case FieldKind::Quat: {
+                // Editing quaternion components directly can denormalize them
+                glm::quat &quat = *static_cast<glm::quat *>(bytes);
+                glm::vec3 euler = glm::degrees(glm::eulerAngles(quat));
+                if (ImGui::DragFloat3(label, glm::value_ptr(euler), 0.5f))
                 {
-                    // Editing quaternion components directly can denormalize them
-                    glm::quat &quat = *static_cast<glm::quat *>(bytes);
-                    glm::vec3 euler = glm::degrees(glm::eulerAngles(quat));
-                    if (ImGui::DragFloat3(label, glm::value_ptr(euler), 0.5f))
-                    {
-                        quat = glm::quat(glm::radians(euler));
-                        return true;
-                    }
-                    return false;
+                    quat = glm::quat(glm::radians(euler));
+                    return true;
                 }
-            case FieldKind::Mat4:
+                return false;
+            }
+            case FieldKind::Mat4: {
+                ImGui::TextUnformatted(label);
+                bool changed = false;
+                float *m = glm::value_ptr(*static_cast<glm::mat4 *>(bytes));
+                for (int row = 0; row < 4; ++row)
                 {
-                    ImGui::TextUnformatted(label);
-                    bool changed = false;
-                    float *m = glm::value_ptr(*static_cast<glm::mat4 *>(bytes));
-                    for (int row = 0; row < 4; ++row)
-                    {
-                        ImGui::PushID(row);
-                        changed |= ImGui::DragFloat4("##row", m + row * 4, 0.1f);
-                        ImGui::PopID();
-                    }
-                    return changed;
+                    ImGui::PushID(row);
+                    changed |= ImGui::DragFloat4("##row", m + row * 4, 0.1f);
+                    ImGui::PopID();
                 }
-            case FieldKind::EntityRef:
-                {
-                    const Entity *ref = static_cast<const Entity *>(bytes);
-                    ImGui::Text("%s: Entity %u", label, ref->mIndex);
-                    return false;
-                }
+                return changed;
+            }
+            case FieldKind::EntityRef: {
+                const Entity *ref = static_cast<const Entity *>(bytes);
+                ImGui::Text("%s: Entity %u", label, ref->mIndex);
+                return false;
+            }
             case FieldKind::Handle:
                 return ImGui::DragScalarN(label, ImGuiDataType_U32, bytes, 2);
             case FieldKind::String:
@@ -87,7 +85,7 @@ namespace mir
             return false;
         }
 
-        void DrawComponent(World &world, const ComponentOps &ops, Entity entity)
+        void DrawComponent(World &world, const ComponentOps &ops, Entity entity, const AssetImportView &assets)
         {
             ImGui::PushID(static_cast<int>(ops.mType.seq));
 
@@ -101,6 +99,40 @@ namespace mir
                 else
                 {
                     ImGui::Indent();
+                    if (ops.mType.name == "ModelPlayer")
+                    {
+                        const FieldDesc *modelAsset = nullptr;
+                        for (const FieldDesc &field : ops.mFields)
+                            if (field.mName == "modelAsset")
+                                modelAsset = &field;
+                        if (modelAsset)
+                        {
+                            FieldBuffer current{};
+                            modelAsset->Read(component, current.mBytes);
+                            const char *currentId = reinterpret_cast<const char *>(current.mBytes);
+                            const char *preview = "Choose model...";
+                            for (const auto &model : assets.mModels)
+                            {
+                                char id[17]{};
+                                std::snprintf(id, sizeof(id), "%016llx",
+                                              static_cast<unsigned long long>(model.mAssetId));
+                                if (std::string_view(id) == currentId)
+                                    preview = model.mPath.c_str();
+                            }
+                            if (ImGui::BeginCombo("Model", preview))
+                            {
+                                for (const auto &model : assets.mModels)
+                                    if (model.mAssetId != 0 && ImGui::Selectable(model.mPath.c_str()))
+                                    {
+                                        FieldBuffer value{};
+                                        std::snprintf(reinterpret_cast<char *>(value.mBytes), kFieldStringCapacity,
+                                                      "%016llx", static_cast<unsigned long long>(model.mAssetId));
+                                        modelAsset->Write(component, value.mBytes);
+                                    }
+                                ImGui::EndCombo();
+                            }
+                        }
+                    }
                     for (const FieldDesc &field : ops.mFields)
                     {
                         FieldBuffer buffer{};
@@ -120,9 +152,9 @@ namespace mir
 
             ImGui::PopID();
         }
-    }
+    } // namespace
 
-    void InspectorPanel::Draw(World &world)
+    void InspectorPanel::Draw(World &world, const AssetImportView &assets)
     {
         const Selection *selection = world.TryResource<Selection>();
         const Entity entity = selection != nullptr ? selection->mSelected : kNullEntity;
@@ -141,7 +173,7 @@ namespace mir
             if (!ops->Has(world, entity))
                 continue;
 
-            DrawComponent(world, *ops, entity);
+            DrawComponent(world, *ops, entity, assets);
         }
     }
-}
+} // namespace mir

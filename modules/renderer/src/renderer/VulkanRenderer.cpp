@@ -1218,6 +1218,51 @@ namespace mir
         MIR_LOG_INFO("Released {} meshes and {} materials", meshCount, released);
     }
 
+    void VulkanRenderer::ReleaseModelResources(std::span<const MeshHandle> meshes,
+                                                std::span<const MaterialHandle> materials,
+                                                std::span<const uint32_t> textures)
+    {
+        if (mDevice == VK_NULL_HANDLE)
+            return;
+        vkDeviceWaitIdle(mDevice);
+        for (const MeshHandle handle : meshes)
+        {
+            if (handle.IsNull() || handle.mIndex >= mMeshes.size())
+                continue;
+            GpuMesh &mesh = mMeshes[handle.mIndex];
+            if (mesh.mGeneration != handle.mGeneration)
+                continue;
+            if (mesh.mVertexBuffer)
+                vmaDestroyBuffer(mAllocator, mesh.mVertexBuffer, mesh.mVertexAllocation);
+            if (mesh.mIndexBuffer)
+                vmaDestroyBuffer(mAllocator, mesh.mIndexBuffer, mesh.mIndexAllocation);
+            mesh = {};
+            mesh.mGeneration = handle.mGeneration + 1;
+        }
+        for (const MaterialHandle handle : materials)
+        {
+            if (handle.IsNull() || handle == mDefaultMaterial || handle.mIndex >= mMaterials.size())
+                continue;
+            GpuMaterial &material = mMaterials[handle.mIndex];
+            if (material.sampler)
+                vkDestroySampler(mDevice, material.sampler, nullptr);
+            if (material.mPipeline)
+                vkDestroyPipeline(mDevice, material.mPipeline, nullptr);
+            material = {};
+        }
+        for (const uint32_t index : textures)
+        {
+            if (index == 0 || index >= mTextures.size())
+                continue;
+            GpuTexture &texture = mTextures[index];
+            if (texture.view)
+                vkDestroyImageView(mDevice, texture.view, nullptr);
+            if (texture.image)
+                vmaDestroyImage(mAllocator, texture.image, texture.allocation);
+            texture = {};
+        }
+    }
+
     const VulkanRenderer::GpuMaterial *VulkanRenderer::FindMaterial(MaterialHandle handle) const
     {
         if (handle.IsNull() || handle.mIndex >= mMaterials.size())

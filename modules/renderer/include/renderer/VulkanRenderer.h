@@ -90,6 +90,12 @@ namespace mir
         // are invalid and their indices get reused: call only after a scene unload.
         void ReleaseSceneResources();
 
+        // Releases a selected model generation after a replacement has been
+        // prepared. Handles not present in these spans remain valid.
+        void ReleaseModelResources(std::span<const MeshHandle> meshes,
+                                   std::span<const MaterialHandle> materials,
+                                   std::span<const uint32_t> textures);
+
         VkExtent2D SwapchainExtent() const { return mSwapchainExtent; }
 
         void DrawFrame(std::span<const RenderView> views);
