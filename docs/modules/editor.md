@@ -107,7 +107,8 @@ viewport (`Editor::UpdateViewportPicking`, a ray/AABB test against every
 (`editor/Selection.h`), a `World` resource `HierarchyPanel` installs on
 first draw if nothing already has. Both call the same
 `ApplyClick(Selection&, Entity, bool additive)`: a plain click replaces the
-whole selection, `additive` (ctrl-click) toggles the clicked entity's
+whole selection, `additive` (ctrl- or shift-click, `io.KeyCtrl ||
+io.KeyShift` - either works, same effect) toggles the clicked entity's
 membership instead, and a null `Entity` (clicked empty space) clears the
 selection unless `additive`. `HierarchyPanel` prunes any no-longer-alive
 entities out of `mSelected` every frame, so a stale handle never lingers
@@ -120,6 +121,11 @@ shows a plain "N objects selected" instead of drawing components. The
 transform gizmo (`DrawViewportGizmo`) only ever manipulates
 `Selection::Primary()` (the most recently selected entity) - there is no
 multi-object gizmo, so the others stay selected but untouched by it.
+`DrawSelectionHighlights` draws a wireframe box (from each entity's
+`MeshBounds`, projected with the same `viewProj` `UpdateViewportPicking`
+builds) over every selected entity, not just the primary - brighter/opaque
+for the primary, dimmer for the rest - since the gizmo alone gives no
+viewport-visible sign that a non-primary entity is still selected.
 
 `InspectorPanel` walks every `seq` up to `kMaxComponentTypes`, asking
 `ComponentRegistry::FindBySeq` for each one and skipping those the selection
@@ -232,6 +238,20 @@ Open Project asks for, but not the menu or the dialog themselves.
    CPU-side mesh geometry after upload.
 
 ## Changed
+
+*2026-09-21* — **Shift-click is now equivalent to ctrl-click, and every
+selected entity gets a viewport outline, not just the primary.** Was:
+`additive` was `io.KeyCtrl` alone, so shift-click silently behaved like a
+plain replacing click; the only viewport-visible sign of selection was the
+gizmo on `Selection::Primary()`, so ctrl-clicking a second entity looked
+indistinguishable from replacing the selection unless you were watching the
+Hierarchy panel. Now: `additive` is `io.KeyCtrl || io.KeyShift` in both
+`Editor::UpdateViewportPicking` and `HierarchyPanel`, and a new
+`Editor::DrawSelectionHighlights` draws a wireframe `MeshBounds` box over
+every entity in `Selection::mSelected` each frame (before
+`DrawViewportGizmo`, same `viewProj` `UpdateViewportPicking` builds, via
+`ImGui::GetForegroundDrawList` the same way the gizmo already draws over
+the scene).
 
 *2026-09-21* — **Clicking an object in the scene viewport selects it, and
 `Selection` supports more than one entity.** Was: the only way to select

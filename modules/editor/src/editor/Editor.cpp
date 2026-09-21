@@ -443,7 +443,72 @@ namespace mir
                 }
             });
 
-        ApplyClick(world.Resource<Selection>(), hitEntity, ImGui::GetIO().KeyCtrl);
+        ApplyClick(world.Resource<Selection>(), hitEntity, ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift);
+    }
+
+    void Editor::DrawSelectionHighlights(const EngineModeState &mode, World &world)
+    {
+        if (mode.mMode != EngineMode::Edit)
+            return;
+
+        if (mSceneViewportRect.extent.width == 0 || mSceneViewportRect.extent.height == 0)
+            return;
+
+        const Selection *selection = world.TryResource<Selection>();
+        if (selection == nullptr || selection->mSelected.empty())
+            return;
+
+        const float x0 = static_cast<float>(mSceneViewportRect.offset.x);
+        const float y0 = static_cast<float>(mSceneViewportRect.offset.y);
+        const float width = static_cast<float>(mSceneViewportRect.extent.width);
+        const float height = static_cast<float>(mSceneViewportRect.extent.height);
+
+        const glm::mat4 viewProj = MakeViewProjection(mCamera.Matrix(), mCamera.mLens.mFovYDegrees,
+            mCamera.mLens.mNearZ, mCamera.mLens.mFarZ, width / height);
+
+        ImDrawList *drawList = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+        const Entity primary = selection->Primary();
+
+        for (const Entity entity : selection->mSelected)
+        {
+            if (!world.IsAlive(entity))
+                continue;
+
+            const MeshBounds *bounds = world.GetComponent<MeshBounds>(entity);
+            if (bounds == nullptr)
+                continue;
+
+            const glm::mat4 worldMatrix = ResolveWorld(world, entity);
+            const glm::vec3 mn = bounds->mLocalMin;
+            const glm::vec3 mx = bounds->mLocalMax;
+            const glm::vec3 corners[8] = {
+                { mn.x, mn.y, mn.z }, { mx.x, mn.y, mn.z }, { mx.x, mx.y, mn.z }, { mn.x, mx.y, mn.z },
+                { mn.x, mn.y, mx.z }, { mx.x, mn.y, mx.z }, { mx.x, mx.y, mx.z }, { mn.x, mx.y, mx.z } };
+
+            ImVec2 screen[8];
+            bool behindCamera = false;
+            for (int i = 0; i < 8; ++i)
+            {
+                const glm::vec4 clip = viewProj * worldMatrix * glm::vec4(corners[i], 1.0f);
+                if (clip.w <= 0.0f)
+                {
+                    behindCamera = true;
+                    break;
+                }
+                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                screen[i] = ImVec2(x0 + (ndc.x * 0.5f + 0.5f) * width, y0 + (ndc.y * 0.5f + 0.5f) * height);
+            }
+            if (behindCamera)
+                continue;
+
+            const ImU32 color = (entity == primary) ? IM_COL32(255, 170, 0, 255) : IM_COL32(255, 220, 130, 190);
+
+            static constexpr int kEdges[12][2] = {
+                { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 }, { 4, 5 }, { 5, 6 },
+                { 6, 7 }, { 7, 4 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
+            for (const auto &edge : kEdges)
+                drawList->AddLine(screen[edge[0]], screen[edge[1]], color, 2.0f);
+        }
     }
 
     void Editor::DrawNewProjectModal(EditorActions &actions, std::span<const ProjectMenuEntry> projects)
@@ -551,6 +616,7 @@ namespace mir
             }
 
             UpdateViewportPicking(mode, world);
+            DrawSelectionHighlights(mode, world);
             DrawViewportGizmo(mode, world);
 
             if (ImGui::BeginMainMenuBar())

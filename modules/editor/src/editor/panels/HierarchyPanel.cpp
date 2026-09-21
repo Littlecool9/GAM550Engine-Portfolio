@@ -38,7 +38,7 @@ namespace mir
             const bool open = ImGui::TreeNodeEx(id, flags, "Entity %u", entity.mIndex);
 
             if (ImGui::IsItemClicked())
-                ApplyClick(selection, entity, ImGui::GetIO().KeyCtrl);
+                ApplyClick(selection, entity, ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift);
 
             if (!children.empty() && open)
             {

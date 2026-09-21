@@ -105,6 +105,7 @@ namespace mir
         void DrawOpenProjectConfirm(EditorActions &actions);
         void DrawViewportGizmo(const EngineModeState &mode, World &world);
         void UpdateViewportPicking(const EngineModeState &mode, World &world);
+        void DrawSelectionHighlights(const EngineModeState &mode, World &world);
         void DrawNewProjectModal(EditorActions &actions, std::span<const ProjectMenuEntry> projects);
 
         SceneMenuAction DrawPlayControls(const EngineModeState &mode);
