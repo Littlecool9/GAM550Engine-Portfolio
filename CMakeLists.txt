@@ -59,11 +59,15 @@ if(MSVC)
 endif()
 
 engine_add_shaders(MjolnirEngine
-    SOURCE assets/shaders/triangle.slang
+    SOURCE assets/shaders/default.slang
     ENTRIES vertexMain:vertex fragmentMain:fragment)
 
 engine_add_shaders(MjolnirEngine
     SOURCE assets/shaders/unlit.slang
+    ENTRIES vertexMain:vertex fragmentMain:fragment)
+
+engine_add_shaders(MjolnirEngine
+    SOURCE assets/shaders/sky.slang
     ENTRIES vertexMain:vertex fragmentMain:fragment)
 
 # Every games/*/ with a game.json is a game; its assetsRoot gets cooked

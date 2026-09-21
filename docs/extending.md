@@ -224,7 +224,7 @@ Write a `.slang` file under `assets/shaders/`, then declare it:
 
 ```cmake
 engine_add_shaders(MjolnirEngine
-    SOURCE assets/shaders/triangle.slang
+    SOURCE assets/shaders/default.slang
     ENTRIES vertexMain:vertex fragmentMain:fragment)
 ```
 

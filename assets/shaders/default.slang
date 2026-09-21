@@ -1,0 +1,76 @@
+// Default material shader: a flat grey, non-metallic Blinn-Phong material
+
+struct VSInput
+{
+    float3 pos    : POSITION;
+    float3 color  : COLOR;
+    float3 normal : NORMAL;
+};
+
+struct VSOutput
+{
+    float4 position : SV_Position;
+    float3 worldPos : TEXCOORD0;
+    float3 normal   : NORMAL;
+    float3 tint     : COLOR;
+};
+
+struct PushData
+{
+    float4x4 model;
+    float4 normalCol0;
+    float4 normalCol1;
+    float4 normalCol2;
+    float4 tint;
+}
+
+[[vk::push_constant]]
+PushData pushData;
+
+[[vk::binding(0, 1)]]
+cbuffer CameraData
+{
+    float4x4 viewProj;
+    float4 lightDirWS;
+    float4 lightColor;
+    float4 ambientColor;
+    float4x4 invViewProj;
+    float4 cameraPosWS;
+};
+
+[shader("vertex")]
+VSOutput vertexMain(VSInput input)
+{
+    VSOutput output;
+    float4 worldPos = mul(pushData.model, float4(input.pos, 1.0));
+    output.position = mul(viewProj, worldPos);
+    output.worldPos = worldPos.xyz;
+    output.normal = pushData.normalCol0.xyz * input.normal.x +
+                     pushData.normalCol1.xyz * input.normal.y +
+                     pushData.normalCol2.xyz * input.normal.z;
+
+    output.tint = pushData.tint.rgb;
+    return output;
+}
+
+static const float3 kAlbedo = float3(0.5, 0.5, 0.5);
+static const float kSpecularStrength = 0.04;
+static const float kShininess = 32.0;
+
+[shader("fragment")]
+float4 fragmentMain(VSOutput input) : SV_Target
+{
+    float3 N = normalize(input.normal);
+    float3 L = normalize(lightDirWS.xyz);
+    float3 V = normalize(cameraPosWS.xyz - input.worldPos);
+    float3 H = normalize(L + V);
+
+    float diffuse = max(dot(N, L), 0.0);
+    float specular = (diffuse > 0.0) ? pow(max(dot(N, H), 0.0), kShininess) : 0.0;
+
+    float3 albedo = kAlbedo * input.tint;
+    float3 color = albedo * (ambientColor.rgb + lightColor.rgb * diffuse) +
+                   lightColor.rgb * kSpecularStrength * specular;
+
+    return float4(color, 1.0);
+}

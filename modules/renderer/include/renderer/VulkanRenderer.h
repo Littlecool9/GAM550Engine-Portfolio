@@ -63,6 +63,7 @@ namespace mir
         VkRect2D rect{};
         std::span<const DrawItem> items;
         glm::mat4 viewProj{ 1.0f };
+        glm::vec3 cameraPos{ 0.0f };
     };
 
     class VulkanRenderer
@@ -125,8 +126,8 @@ namespace mir
         bool CreateDefaultTextures();
         bool CreateCameraResources();
         void DestroyCameraResources();
-        // Builds one VkPipeline from a desc.
         VkPipeline BuildPipeline(const MaterialDesc &desc);
+        bool CreateSkyPipeline();
         void DestroyMeshes();
         void DestroyMaterials();
         void DestroyTextures();
@@ -135,11 +136,8 @@ namespace mir
         const GpuTexture *FindTexture(TextureHandle handle) const;
         void NameObject(VkObjectType type, uint64_t handle, const char *name);
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
-        // Draws one view's items, clipped to its rect. viewIndex selects this
-        // view's slot in the current frame's camera UBO.
         void RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex);
-        // Writes view's viewProj into this frame's camera UBO at viewIndex.
-        void WriteCameraData(const glm::mat4 &viewProj, uint32_t viewIndex);
+        void WriteCameraData(const glm::mat4 &viewProj, const glm::vec3 &cameraPosWS, uint32_t viewIndex);
 
     private:
         constexpr static uint32_t VulkanVersion{ VK_API_VERSION_1_4 };
@@ -208,6 +206,9 @@ namespace mir
         VmaAllocation mCameraAllocations[kFramesInFlight]{};
         std::byte *mCameraMapped[kFramesInFlight]{};
         VkDeviceSize mCameraAlignedSize = 0;
+
+        VkPipelineLayout mSkyPipelineLayout = VK_NULL_HANDLE;
+        VkPipeline mSkyPipeline = VK_NULL_HANDLE;
 
         // One buffer pair per mesh
         struct GpuMesh
