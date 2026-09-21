@@ -31,7 +31,7 @@
 namespace
 {
     using Json = nlohmann::json;
-    constexpr uint32_t kCacheVersion = 2;
+    constexpr uint32_t kCacheVersion = 3;
     constexpr std::string_view kImporterFingerprint = "fastgltf-v2-stable-identity";
     // One generation back, kept so a crashed cook can be rolled back.
     constexpr std::string_view kPreviousManifestFileName = "manifest.previous.blob";
@@ -653,11 +653,20 @@ namespace
             Json dependencyNames = Json::array();
             for (const auto &dependency : imported.dependencies)
                 dependencyNames.push_back(dependency.generic_string());
+            // What the package contains, so the editor can list sub-assets
+            // and their ids without loading any cooked blob.
+            Json contents = Json::array();
+            for (const auto &entry : imported.contents)
+                contents.push_back({{"kind", entry.kind},
+                                    {"name", entry.name},
+                                    {"id", entry.id.value},
+                                    {"index", entry.index}});
             record = {{"identityPath", imported.identityPath},
                       {"aliases", imported.aliases},
                       {"modelId", imported.modelId.value},
                       {"fingerprint", fingerprint},
                       {"dependencies", dependencyNames},
+                      {"contents", contents},
                       {"outputs", cachedOutputs},
                       {"missing", false},
                       {"lastSuccess", std::chrono::duration_cast<std::chrono::seconds>(

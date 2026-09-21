@@ -537,10 +537,23 @@ namespace mir
                 mProjectSettingsPanel.CancelListening();
             }
 
+            const std::span<const std::string> dropped =
+                mWindow != nullptr ? mWindow->DroppedFiles() : std::span<const std::string>{};
+            if (!dropped.empty())
+            {
+                // A drop is a one-frame event, so the panel has to be open,
+                // uncollapsed and drawn this frame or the files are lost.
+                mShowAssetImport = true;
+                ImGui::SetNextWindowCollapsed(false);
+                // SetNextWindowFocus also selects the tab when the panel is
+                // docked behind another one.
+                ImGui::SetNextWindowFocus();
+            }
+
             if (mShowAssetImport)
             {
                 if (ImGui::Begin("Asset Import", &mShowAssetImport))
-                    actions.mAssetImport = mAssetImportPanel.Draw(assetImport);
+                    actions.mAssetImport = mAssetImportPanel.Draw(assetImport, dropped);
                 ImGui::End();
             }
         }

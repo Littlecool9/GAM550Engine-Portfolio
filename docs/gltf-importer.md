@@ -29,9 +29,46 @@ Every cooker invocation reimports glTF and reads its dependencies. CMake tracks 
 
 Blobs use asset ID plus content hash in their filenames. The cooker writes blobs to temporary files and atomically replaces the manifest only after all imports succeed. A failed import leaves the previous manifest and its blobs usable. Unreferenced blobs are pruned after successful publication. Metadata is append-only and may advance if publication itself fails; that does not invalidate the old manifest. Concurrent cooker processes targeting the same output directory are unsupported. The output directory must be outside source roots.
 
+## Importing from the editor
+
+Open `Project ▸ Asset Import`. Dropping a `.gltf`/`.glb`, or the folder that holds one, anywhere on the panel stages it: the package root defaults to the folder the entry sits in, or to the dropped folder itself, and an empty target becomes `models/<name>`, suffixed `-2`, `-3` on collision. Confirming copies the entry together with only the dependencies it actually references, then cooks it. A file that already lives under the game's asset root is reimported in place instead of being copied a second time. `Advanced: import by path` keeps the older typed-path form.
+
+Each managed model expands into what its package holds, that is model, scenes, animations, materials, textures, meshes and skeletons, with each sub-asset's name and asset id and a button that copies that id, or a scene's index. Those are the values `modelAsset`, `animationAsset` and `scene` take below. The inventory is recorded at import time in `import-cache.json`, so a model cooked by an older cooker lists nothing until it is reimported.
+
+`Watch source assets and re-import on change` polls the source project's asset directory, not the copy beside the executable, and reimports a package half a second after it stops changing. With it off, changes are still tracked but nothing is cooked until Reimport. Cooked results are applied in Edit mode only, so a batch that finishes during Play sits at `Waiting for Stop`.
+
 ## Using a model
 
-Add a `ModelPlayer` component to an entity with a Transform. `modelName` is relative to the game's asset root, for example `models/flag.glb`. `clip` selects a clip (`-1` means rest pose); `scene = -1` selects the default scene. `time`, `speed`, `playing`, `loop` and `preview` control each instance. Set `playing = false` and `time` for a fixed pose. In Edit mode playback advances only when `preview` is true; Play pause freezes the clock. Model nodes remain an internal hierarchy beneath the entity, rather than separate ECS entities.
+A model reaches the screen through a `ModelPlayer` component on an entity that also carries `Transform` **and** `WorldTransform`. Scene loading builds exactly the components the JSON lists and adds nothing: `TransformPropagateSystem` matches `<Transform, WorldTransform>` and `ModelSystem` matches `<ModelPlayer, const WorldTransform>`, so an entity missing `WorldTransform` renders nothing and logs nothing.
+
+The editor cannot create an entity or add a component yet, so a scene entity is authored by hand. Under `games/<game>/scenes/<scene>/`, write `entities/<id>.json`:
+
+```json
+{
+  "id": 5,
+  "parent": 0,
+  "components": [
+    { "type": "Transform",
+      "fields": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] } },
+    { "type": "WorldTransform",
+      "fields": { "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] } },
+    { "type": "ModelPlayer",
+      "fields": { "modelName": "models/flag.glb", "clip": 0, "preview": true, "speed": 1 } }
+  ]
+}
+```
+
+then add that id to the `entities` array in `scene.json`, move `nextId` past it, and reload with `File ▸ Load Scene`. A development build reads and writes the source `games/` tree rather than the copy beside the executable, because `asset_workspace.json` points back at it (`ProjectRoot` in `app/GameProject.cpp`), so edit the files in the repository.
+
+### Which model, which clip
+
+`ModelPlayer` carries two layers of reference. `modelName`, relative to the game's asset root, for example `models/flag.glb`, and `clip` are what a human writes. `modelAsset` and `animationAsset` hold 16-digit hex asset ids and take priority whenever they are set; paste them from the import panel's contents tree. The engine writes the id back after the first successful load, so a hand-written entity upgrades itself the next time the scene is saved.
+
+An id survives its package being moved or renamed, because the cooker keeps the identity in `<source>.import.json` and republishes the old path as an alias, which a `modelName` does not. When `animationAsset` names a clip that a reimport removed, playback stops with a warning instead of quietly running a different one, which is what a shifted `clip` index would do.
+
+`clip` selects a clip (`-1` means rest pose); `scene = -1` selects the default scene. `time`, `speed`, `playing`, `loop` and `preview` control each instance. Set `playing = false` and `time` for a fixed pose. In Edit mode playback advances only when `preview` is true; Play pause freezes the clock. Model nodes remain an internal hierarchy beneath the entity, rather than separate ECS entities.
+
+An entity that already has a `ModelPlayer` can be repointed from the Inspector's Model dropdown, which writes `modelAsset`. A script can spawn one at runtime with `world:spawn` and `world:add`, but Stop restores the snapshot taken at Play, so runtime entities are not a way to author a scene.
 
 `ModelMorphOverrides::instances[PackEntity(entity)][nodeKey]` optionally replaces sampled weights for that instance. It is transient and cleared on scene unload/Play restore. Shared asset and GPU mesh data are immutable; time, pose and weights belong to the instance. Stop restores serialized playback state and rebuilds scene GPU resources.
 

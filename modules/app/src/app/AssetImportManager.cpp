@@ -74,6 +74,7 @@ namespace mir
             if (!std::filesystem::is_regular_file(mCooker))
                 throw std::runtime_error("AssetCooker executable does not exist: " + mCooker.string());
             mView.mAvailable = true;
+            mView.mWatchedRoot = mSourceAssetRoot.generic_string();
             const Json settings = ReadJson(mSourceSettingsPath);
             mView.mAutoImport = settings.value("assets", Json::object()).value("autoImport", false);
             RefreshView();
@@ -128,14 +129,13 @@ namespace mir
         }
         if (!mView.mAvailable || action.mKind == AssetImportActionKind::None)
             return;
+        mView.mLastError.clear();
         switch (action.mKind)
         {
         case AssetImportActionKind::BindWorkspace:
             break;
         case AssetImportActionKind::Import:
-            mQueued.importSource = action.mExternalSource;
-            mQueued.packageRoot = action.mPackageRoot;
-            mQueued.targetDirectory = action.mTargetDirectory;
+            QueueExternalImport(action);
             break;
         case AssetImportActionKind::Reimport:
         case AssetImportActionKind::Retry:
@@ -180,6 +180,66 @@ namespace mir
             break;
         }
         RefreshView();
+    }
+
+    std::filesystem::path AssetImportManager::UniqueImportTarget(const std::filesystem::path &source) const
+    {
+        const std::string stem = source.stem().string();
+        std::filesystem::path target = std::filesystem::path("models") / stem;
+        for (int suffix = 2; std::filesystem::exists(mSourceAssetRoot / target); ++suffix)
+            target = std::filesystem::path("models") / (stem + "-" + std::to_string(suffix));
+        return target;
+    }
+
+    void AssetImportManager::QueueExternalImport(const AssetImportAction &action)
+    {
+        try
+        {
+            auto source = std::filesystem::weakly_canonical(action.mExternalSource);
+            std::filesystem::path package;
+            if (!action.mPackageRoot.empty())
+                package = std::filesystem::weakly_canonical(action.mPackageRoot);
+            if (std::filesystem::is_directory(source))
+            {
+                // A dropped folder is the package root
+                std::vector<std::filesystem::path> entries;
+                for (const auto &entry : std::filesystem::recursive_directory_iterator(source))
+                    if (entry.is_regular_file() && IsModel(entry.path()))
+                        entries.push_back(entry.path());
+                if (entries.empty())
+                    throw std::runtime_error("no .gltf or .glb file in " + source.string());
+                if (entries.size() > 1)
+                    throw std::runtime_error(source.string() + " holds " + std::to_string(entries.size()) +
+                                             " glTF files; drop the one you want instead of the folder");
+                package = source;
+                source = entries.front();
+            }
+            if (!std::filesystem::is_regular_file(source))
+                throw std::runtime_error("no such file: " + source.string());
+            if (!IsModel(source))
+                throw std::runtime_error("not a .gltf or .glb file: " + source.string());
+
+            // Already inside the project: re-import it in place rather than
+            // copying a second instance of the same package.
+            const auto relative = source.lexically_relative(std::filesystem::weakly_canonical(mSourceAssetRoot));
+            if (!relative.empty() && !relative.is_absolute() && *relative.begin() != "..")
+            {
+                const std::string logical = (std::filesystem::path(mProject.mAssetIdRoot) / relative).generic_string();
+                mQueued.models.insert(logical);
+                SetStatus(logical, AssetImportStatus::Queued);
+                return;
+            }
+            mQueued.importSource = source;
+            mQueued.packageRoot = package.empty() ? source.parent_path() : package;
+            mQueued.targetDirectory = action.mTargetDirectory.empty()
+                                          ? UniqueImportTarget(source)
+                                          : std::filesystem::path(action.mTargetDirectory);
+        }
+        catch (const std::exception &error)
+        {
+            mView.mLastError = error.what();
+            MIR_LOG_ERROR("Asset import rejected: {}", error.what());
+        }
     }
 
     void AssetImportManager::StartBatch()
@@ -256,6 +316,7 @@ namespace mir
                         result.value("diagnostic", Json::object()).value("message", "AssetCooker failed");
                     for (const auto &model : mRunning.models)
                         SetStatus(model, AssetImportStatus::Failed, message);
+                    mView.mLastError = message;
                     MIR_LOG_ERROR("Asset import failed: {}", message);
                 }
                 else
@@ -268,6 +329,8 @@ namespace mir
                         const std::string status = model.value("status", "");
                         if (status == "cooked" || status == "removed")
                             cooked = true;
+                        if (status == "cooked" && !mRunningStale)
+                            mView.mLastImported = path;
                         SetStatus(path, mRunningStale           ? AssetImportStatus::Queued
                                         : status == "missing"   ? AssetImportStatus::Missing
                                         : status == "unchanged" ? AssetImportStatus::UpToDate
@@ -400,6 +463,9 @@ namespace mir
                     record.value("missing", false) ? AssetImportStatus::Missing : AssetImportStatus::UpToDate;
                 for (const auto &dependency : record.value("dependencies", Json::array()))
                     model.mDependencies.push_back(dependency.get<std::string>());
+                for (const auto &entry : record.value("contents", Json::array()))
+                    model.mContents.push_back({entry.value("kind", std::string{}), entry.value("name", std::string{}),
+                                               entry.value("id", 0ull), entry.value("index", 0u)});
                 model.mDiagnostic = record.value("lastError", "");
             }
         }

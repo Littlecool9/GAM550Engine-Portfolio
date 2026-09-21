@@ -53,6 +53,8 @@ namespace mir
 
         void StartBatch();
         void FinishBatch(int exitCode, bool editing);
+        void QueueExternalImport(const AssetImportAction &action);
+        std::filesystem::path UniqueImportTarget(const std::filesystem::path &source) const;
         void RefreshView();
         void PollWatcher();
         void SetStatus(const std::string &model, AssetImportStatus status, std::string diagnostic = {});

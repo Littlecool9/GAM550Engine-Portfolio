@@ -316,6 +316,8 @@ namespace mir::cook
         auto file = fastgltf::GltfDataBuffer::FromPath(path);
         Require(file.error() == fastgltf::Error::None, "cannot read glTF");
         fastgltf::Parser parser;
+        // Two phase parsing to avoid Model read external files
+
         // First parse inspects dependencies before allowing any external I/O.
         auto inspected = parser.loadGltf(file.get(), path.parent_path());
         Require(inspected.error() == fastgltf::Error::None,
@@ -327,6 +329,8 @@ namespace mir::cook
         result.dependencies.erase(std::unique(result.dependencies.begin(), result.dependencies.end()),
                                   result.dependencies.end());
         file.get().reset();
+
+        // Second parse starts LoadExternalBuffers/Images
         auto loaded = parser.loadGltf(file.get(), path.parent_path(),
                                       fastgltf::Options::LoadExternalBuffers | fastgltf::Options::LoadExternalImages);
         Require(loaded.error() == fastgltf::Error::None,
@@ -334,7 +338,15 @@ namespace mir::cook
         const auto &a = loaded.get();
         Require(fastgltf::validate(a) == fastgltf::Error::None, "glTF validation failed");
         CheckAccessors(a);
-        auto emit = [&](AssetId id, const auto &data) { result.blobs.push_back({id, BuildTypedAsset(data)}); };
+        auto emit = [&](AssetId id, const auto &data, std::string kind = {}, std::string name = {},
+                        uint32_t index = 0) {
+            result.blobs.push_back({id, BuildTypedAsset(data)});
+            if (kind.empty())
+                return;
+            if (name.empty())
+                name = kind + " " + std::to_string(index);
+            result.contents.push_back({id, std::move(kind), std::move(name), index});
+        };
         auto keys = [&](const auto &objects, const std::string &kind, auto fingerprint) {
             std::map<std::string, size_t> counts;
             for (const auto &o : objects)
@@ -388,7 +400,7 @@ namespace mir::cook
                 static_cast<uint32_t>(w), static_cast<uint32_t>(h), {pixels.get(), pixels.get() + size_t(w) * h * 4}};
             auto id = ids.Id(imageKeys[i]);
             images.push_back(id);
-            emit(id, tex);
+            emit(id, tex, "texture", std::string(a.images[i].name), uint32_t(i));
         }
 
         std::vector<MaterialAsset> materials;
@@ -422,7 +434,7 @@ namespace mir::cook
         auto materialKeys = keys(a.materials, "material",
                                  [&](size_t i) { return std::to_string(Fnv1a64(BuildTypedAsset(materials[i]))); });
         for (size_t i = 0; i < materials.size(); ++i)
-            emit(ids.Id(materialKeys[i]), materials[i]);
+            emit(ids.Id(materialKeys[i]), materials[i], "material", std::string(a.materials[i].name), uint32_t(i));
 
         std::vector<MeshAsset> meshes;
         for (const auto &mesh : a.meshes)
@@ -534,7 +546,7 @@ namespace mir::cook
         auto meshKeys =
             keys(a.meshes, "mesh", [&](size_t i) { return std::to_string(Fnv1a64(BuildTypedAsset(meshes[i]))); });
         for (size_t i = 0; i < meshes.size(); ++i)
-            emit(ids.Id(meshKeys[i]), meshes[i]);
+            emit(ids.Id(meshKeys[i]), meshes[i], "mesh", meshes[i].name, uint32_t(i));
 
         ModelAsset model;
         model.nodes.resize(a.nodes.size());
@@ -646,7 +658,7 @@ namespace mir::cook
             }
             binding.inverseBindMatrices = s.inverseBindMatrices ? Read<glm::mat4>(a, *s.inverseBindMatrices)
                                                                 : std::vector<glm::mat4>(s.joints.size(), glm::mat4(1));
-            emit(binding.skeleton, skeleton);
+            emit(binding.skeleton, skeleton, "skeleton", skeleton.name, uint32_t(i));
             model.skins.push_back(std::move(binding));
         }
         for (size_t i = 0; i < a.nodes.size(); ++i)
@@ -729,11 +741,16 @@ namespace mir::cook
         for (size_t i = 0; i < clips.size(); ++i)
         {
             auto id = ids.Id(animationKeys[i]);
-            emit(id, clips[i]);
+            emit(id, clips[i], "animation", clips[i].name, uint32_t(i));
             model.animations.push_back(id);
         }
 
-        emit(result.modelId, model);
+        emit(result.modelId, model, "model", std::filesystem::path(result.identityPath).filename().string());
+        for (size_t i = 0; i < model.scenes.size(); ++i)
+            result.contents.push_back({kNullAssetId, "scene",
+                                       model.scenes[i].name.empty() ? "scene " + std::to_string(i)
+                                                                    : model.scenes[i].name,
+                                       uint32_t(i)});
         result.metadata = ids.data.dump(2) + "\n";
         return result;
     }

@@ -439,3 +439,55 @@ TEST_CASE("Cooker publishes atomically and retains one fallback manifest generat
     ModelResources loaded;
     CHECK(LoadModelResources(stillValid, MakeAssetId((f.root / "flag.gltf").generic_string()), loaded, error));
 }
+
+TEST_CASE("Import lists what the package holds, with the model's own animation ids", "[gltf][contents]")
+{
+    Fixture f;
+    const auto out = f.Import();
+    auto of = [&](const char *kind) {
+        std::vector<cook::ImportedAsset> entries;
+        for (const auto &entry : out.contents)
+            if (entry.kind == kind)
+                entries.push_back(entry);
+        return entries;
+    };
+    REQUIRE(of("model").size() == 1);
+    CHECK(of("model").front().id == out.modelId);
+    CHECK_FALSE(of("mesh").empty());
+    CHECK_FALSE(of("material").empty());
+    CHECK_FALSE(of("texture").empty());
+    CHECK_FALSE(of("skeleton").empty());
+    // A scene is an index into the model, not a blob of its own.
+    REQUIRE_FALSE(of("scene").empty());
+    CHECK(of("scene").front().id.IsNull());
+
+    const auto animations = of("animation");
+    const auto model = Find<ModelAsset>(out, kModelAssetTypeTag);
+    REQUIRE(animations.size() == model.animations.size());
+    for (size_t i = 0; i < animations.size(); ++i)
+    {
+        CHECK(animations[i].id == model.animations[i]);
+        CHECK_FALSE(animations[i].name.empty());
+    }
+}
+
+TEST_CASE("Cooked package contents reach the import cache", "[gltf][cooker][contents]")
+{
+    Fixture f;
+    const auto out = fs::path(f.root.string() + "-contents-cooked");
+    std::vector<std::string> full{"--source-dir", f.root.string(), "--id-root", "assets", "--out", out.string()};
+    REQUIRE(LaunchProcess(GLTF_COOKER_EXE, full, true) == 0);
+    const Json cache = Json::parse(std::ifstream(out / "import-cache.json"));
+    const Json contents = cache.at("models").at("assets/flag.gltf").at("contents");
+    REQUIRE(contents.is_array());
+    REQUIRE_FALSE(contents.empty());
+    bool animation = false;
+    for (const auto &entry : contents)
+        if (entry.at("kind") == "animation")
+        {
+            animation = true;
+            CHECK(entry.at("id").get<uint64_t>() != 0);
+            CHECK_FALSE(entry.at("name").get<std::string>().empty());
+        }
+    CHECK(animation);
+}
