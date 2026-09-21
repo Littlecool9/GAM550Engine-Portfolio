@@ -15,8 +15,10 @@
 
 #include <volk.h>
 
+#include <glm/geometric.hpp>
 #include <glm/mat3x3.hpp>
 #include <glm/mat4x4.hpp>
+#include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
 #include <cstddef>
@@ -88,6 +90,14 @@ namespace mir
 
         void SetClearColor(const glm::vec4 &color) { mClearColor = color; }
 
+        void SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color)
+        {
+            mLightDirection = glm::normalize(direction);
+            mLightColor = color;
+        }
+
+        void SetAmbientColor(const glm::vec3 &color) { mAmbientColor = color; }
+
         void Shutdown();
 
     private:
@@ -135,11 +145,13 @@ namespace mir
         constexpr static uint32_t VulkanVersion{ VK_API_VERSION_1_4 };
         constexpr static uint32_t kFramesInFlight = 2;
 
-        // 32-bit float depth, no stencil.
         constexpr static VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
-        // Default: dark gray. Overridden via SetClearColor.
         glm::vec4 mClearColor{ 0.02f, 0.02f, 0.02f, 1.0f };
+
+        glm::vec3 mLightDirection{ glm::normalize(glm::vec3(0.4f, 0.7f, 0.5f)) };
+        glm::vec3 mLightColor{ 0.85f, 0.85f, 0.85f };
+        glm::vec3 mAmbientColor{ 0.25f, 0.25f, 0.25f };
 
         const ISurfaceProvider *mWindow;
         VkInstance mVulkanInstance = VK_NULL_HANDLE;
@@ -176,8 +188,6 @@ namespace mir
         // dont start at 0 or 1 or else underflows
         uint64_t mNextSignalValue = kFramesInFlight + 1;
 
-        // Shared among materials as all inputs are shaped the same
-        // = DrawItem + Vertex format
         VkPipelineLayout mPipelineLayout = VK_NULL_HANDLE;
 
         // set 0: binding 0 = base color, binding 1 = normal map.
@@ -196,9 +206,7 @@ namespace mir
 
         VkBuffer mCameraBuffers[kFramesInFlight]{};
         VmaAllocation mCameraAllocations[kFramesInFlight]{};
-        // Persistently mapped; one kMaxViewsPerFrame-slice buffer per frame.
         std::byte *mCameraMapped[kFramesInFlight]{};
-        // sizeof(CameraData) rounded up to minUniformBufferOffsetAlignment.
         VkDeviceSize mCameraAlignedSize = 0;
 
         // One buffer pair per mesh

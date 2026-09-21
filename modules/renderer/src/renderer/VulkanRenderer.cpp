@@ -67,10 +67,17 @@ namespace mir
         };
 
         // set 1, binding 0. One per RenderView, sliced into the per-frame
-        // camera UBO (see mCameraAlignedSize).
+        // camera UBO (see mCameraAlignedSize). Also carries the scene's one
+        // directional light and flat ambient term: there is no separate
+        // light buffer, so this rides along in the same per-view slice and
+        // is duplicated across views. See triangle.slang for the matching
+        // cbuffer.
         struct CameraData
         {
             glm::mat4 viewProj;
+            glm::vec4 lightDirWS;   // xyz = normalized direction *toward* the light
+            glm::vec4 lightColor;   // rgb = light color/intensity
+            glm::vec4 ambientColor; // rgb = flat ambient term
         };
 
         VkDeviceSize AlignUp(VkDeviceSize size, VkDeviceSize alignment)
@@ -1150,7 +1157,9 @@ namespace mir
             .binding = 0,
             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
             .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT };
+            // Fragment stage added alongside vertex: lit shaders read the
+            // light fields per-pixel now (see triangle.slang).
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT };
 
         const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
@@ -1259,7 +1268,11 @@ namespace mir
 
     void VulkanRenderer::WriteCameraData(const glm::mat4 &viewProj, uint32_t viewIndex)
     {
-        const CameraData data{ viewProj };
+        const CameraData data{
+            .viewProj = viewProj,
+            .lightDirWS = glm::vec4(mLightDirection, 0.0f),
+            .lightColor = glm::vec4(mLightColor, 0.0f),
+            .ambientColor = glm::vec4(mAmbientColor, 0.0f) };
         const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
 
         std::byte *const dst = mCameraMapped[mFrameIndex] + offset;

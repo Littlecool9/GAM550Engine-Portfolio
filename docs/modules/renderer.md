@@ -51,6 +51,8 @@ void ReleaseSceneResources();                // every mesh, material and texture
 
 void DrawFrame(std::span<const RenderView> views);
 void SetClearColor(const glm::vec4 &color);
+void SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color); // direction points *toward* the light
+void SetAmbientColor(const glm::vec3 &color);
 void SetImGuiDrawData(ImDrawData *drawData);
 VkExtent2D SwapchainExtent() const; 
 
@@ -134,6 +136,13 @@ can share one command buffer without colliding. Only `DrawItem::model` (the
 world transform) and the normal matrix still travel per-item, in the push
 constant.
 
+**The same set-1 buffer also carries the scene's one directional light and
+flat ambient term**, read in both the vertex and fragment stages now
+(`VkDescriptorSetLayoutBinding::stageFlags` covers both). There is no
+separate light buffer or per-light entity yet, so `SetDirectionalLight`/
+`SetAmbientColor` set renderer-wide state that `WriteCameraData` copies into
+every view's slice, duplicated across views like the rest of that struct.
+
 **An invalid material falls back to the default** rather than failing the
 draw, so one bad handle does not blank the frame. The same rule applies one
 level down: `CreateMaterial` resolves `MaterialDesc::baseColorTexture` and
@@ -207,7 +216,10 @@ No tests. Everything here needs a device, and the module is verified by running.
 2. **Draw-item sorting and batching.** There is one pipeline bind per item today,
    so a frame scales with the number of distinct materials rather than with draw
    count.
-3. **Lighting** beyond what the `unlit` and `triangle` shaders hardcode.
+3. **Lighting beyond one hardcoded directional light + flat ambient.** No
+   point/spot lights, no shadows, no per-entity `Light` component yet — the
+   direction/color/ambient are renderer-wide state set via
+   `SetDirectionalLight`/`SetAmbientColor`, not scene data.
 4. **Per-config shader output paths.** Release currently ships unoptimised
    shaders, and the debug flags cannot become conditional while both
    configurations write to a path that carries no configuration component.
@@ -219,6 +231,21 @@ No tests. Everything here needs a device, and the module is verified by running.
    Play session.
 
 ## Changed
+
+*2026-09-21* — **`triangle.slang` shades per-pixel from a UBO light instead of
+hardcoding a Gouraud-shaded directional light.** Was: `kLightDir`, `kAmbient`
+and `kDiffuse` were `static const` in the shader, and shading was computed
+once per vertex and baked into `VSOutput::color`. Now: the set-1 camera UBO
+(`CameraData`, both C++ and shader-side) gained `lightDirWS`/`lightColor`/
+`ambientColor` fields after `viewProj`, its descriptor binding's
+`stageFlags` gained `VK_SHADER_STAGE_FRAGMENT_BIT`, the vertex shader passes
+an unnormalized world-space normal through `VSOutput` instead of a shaded
+color, and the fragment shader normalizes it and computes
+`ambientColor + lightColor * max(dot(N, L), 0)` per pixel.
+`VulkanRenderer::SetDirectionalLight`/`SetAmbientColor` set the values
+(defaults match the old constants); `WriteCameraData` copies them into every
+view's slice alongside `viewProj`. `unlit.slang` is unchanged — it never
+reads past `viewProj` in the same buffer.
 
 *2026-09-19* — **Descriptor sets and a per-frame camera UBO replaced the
 premultiplied view-projection push constant.** Was: `RenderSystem` baked
