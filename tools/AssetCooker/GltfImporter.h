@@ -11,6 +11,14 @@ namespace mir::cook
         AssetId id;
         std::vector<std::byte> bytes;
     };
+    // One entry per addressable thing inside the package, for the editor's
+    // import panel. A scene is not its own blob, so its id stays null.
+    struct ImportedAsset
+    {
+        AssetId id;
+        std::string kind, name;
+        uint32_t index = 0;
+    };
     struct GltfImport
     {
         AssetId modelId{};
@@ -18,6 +26,7 @@ namespace mir::cook
         std::vector<std::string> aliases;
         std::vector<std::filesystem::path> dependencies;
         std::vector<ImportedBlob> blobs;
+        std::vector<ImportedAsset> contents;
         std::filesystem::path metadataPath;
         std::string metadata;
     };
