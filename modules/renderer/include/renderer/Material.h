@@ -33,7 +33,7 @@ namespace mir
 
     struct MaterialDesc
     {
-        std::string shaderName = "triangle";
+        std::string shaderName = "default";
 
         VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
         VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL;

@@ -104,6 +104,8 @@ namespace mir
         void DrawOpenProjectMenu(std::span<const ProjectMenuEntry> projects, std::string_view currentProject);
         void DrawOpenProjectConfirm(EditorActions &actions);
         void DrawViewportGizmo(const EngineModeState &mode, World &world);
+        void UpdateViewportPicking(const EngineModeState &mode, World &world);
+        void DrawSelectionHighlights(const EngineModeState &mode, World &world);
         void DrawNewProjectModal(EditorActions &actions, std::span<const ProjectMenuEntry> projects);
 
         SceneMenuAction DrawPlayControls(const EngineModeState &mode);
@@ -127,6 +129,8 @@ namespace mir
         bool mOpenConfirmRequested = false;
 
         GizmoOperation mGizmoOperation = GizmoOperation::Translate;
+
+        bool mMouseWasDown = false;
 
         // New Project modal
         bool mNewProjectRequested = false;

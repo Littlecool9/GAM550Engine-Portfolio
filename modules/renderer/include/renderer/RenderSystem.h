@@ -168,7 +168,7 @@ namespace mir
                 const glm::mat4 viewProj = MakeViewProjection(cameraWorld, camera.mFovYDegrees,
                     camera.mNearZ, camera.mFarZ, aspect);
 
-                mRenderViews.push_back(RenderView{ viewport.mRect, mDrawItems, viewProj });
+                mRenderViews.push_back(RenderView{ viewport.mRect, mDrawItems, viewProj, glm::vec3(cameraWorld[3]) });
             }
 
             if (warnNoCamera && !mWarnedNoCamera)

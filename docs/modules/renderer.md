@@ -29,6 +29,12 @@ together.
 `VulkanRenderer` draws every `RenderView` inside one render pass, swapping only the viewport/scissor rect between them (`RecordView`). This is split-screen-style clipping
 within the one swapchain image, not separate offscreen render targets.
 
+Each view's opaque items are followed by one fullscreen-triangle sky draw,
+depth-tested (not written) against the far clear value so it only shows
+through the background. It's a Nishita-style ray-marched atmosphere reading
+the same sun as scene lighting — see the set-1 UBO rule below and
+`sky.slang`.
+
 Game code never calls Vulkan. It calls `CreateMesh` and `CreateMaterial` once at
 scene-build time, stores the returned handles on a `MeshRenderer` component, and
 `RenderSystem` takes over from there every frame after. When `App` unloads that
@@ -51,6 +57,8 @@ void ReleaseSceneResources();                // every mesh, material and texture
 
 void DrawFrame(std::span<const RenderView> views);
 void SetClearColor(const glm::vec4 &color);
+void SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color); // direction points *toward* the light
+void SetAmbientColor(const glm::vec3 &color);
 void SetImGuiDrawData(ImDrawData *drawData);
 VkExtent2D SwapchainExtent() const; 
 
@@ -75,9 +83,11 @@ void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera
 | `TextureDesc`, `TextureHandle` | `renderer/Texture.h` | `{width, height, pixels, srgb}`, tightly-packed RGBA8; `kNullTexture` falls back to a default in `CreateMaterial` |
 | `MaterialDesc`, `MaterialHandle` | `renderer/Material.h` | `{shaderName, cullMode, polygonMode, baseColorTexture, normalTexture}`; `kNullMaterial` means the default |
 | `DrawItem` | `renderer/Renderer.h` | `{mesh, model, normalMatrix, tint, material}` — `model` is the world transform, not premultiplied by any camera |
-| `RenderView` | `renderer/VulkanRenderer.h` | `{rect, items, viewProj}` — one camera's `DrawItem`s, clipped to a screen rect |
+| `RenderView` | `renderer/VulkanRenderer.h` | `{rect, items, viewProj, cameraPos}` — one camera's `DrawItem`s, clipped to a screen rect; `cameraPos` only the sky pass reads |
 | `Viewport`, `ViewportId` | `renderer/RenderSystem.h` | `RenderSystem`'s per-viewport state: rect plus a World `Entity`, an external camera, or neither (fallback) |
 | `MeshRenderer`, `Camera` | `renderer/components/` | Handles, and `fovY`/`near`/`far`, declared here rather than in `core` |
+| `MeshBounds` | `renderer/components/MeshBounds.h` | `{mLocalMin, mLocalMax}`, a mesh's own local-space AABB; attached by `ResolveSceneMeshes` (see [app.md](app.md)), read by the editor's viewport click-picking (see [editor.md](editor.md)) — not used for rendering at all |
+| `Ray`, `MakeCameraRay`, `RayIntersectsAABB` | `renderer/CameraMath.h` | World-space camera ray from a click, and a ray/AABB slab test — the same file `MakeViewProjection` lives in, so both stay in the same Vulkan-convention math |
 | `RenderSystem` | `renderer/RenderSystem.h` | The ECS-to-renderer bridge, `SystemPhase::Render` |
 | `Shapes.h` | `renderer/Shapes.h` | `MakeCube()` and friends — plain vectors, no Vulkan |
 | `RenderSettings` | `renderer/RenderSettings.h` | Project Settings' `"rendering"` section (`rayTracing: bool` so far); `LoadFile`/`SaveFile`, a World resource loaded in `App::Initialize` |
@@ -133,6 +143,35 @@ with a dynamic offset before its per-item loop, so several viewports/cameras
 can share one command buffer without colliding. Only `DrawItem::model` (the
 world transform) and the normal matrix still travel per-item, in the push
 constant.
+
+**The same set-1 buffer also carries the scene's one directional light and
+flat ambient term**, read in both the vertex and fragment stages now
+(`VkDescriptorSetLayoutBinding::stageFlags` covers both). There is no
+separate light buffer or per-light entity yet, so `SetDirectionalLight`/
+`SetAmbientColor` set renderer-wide state that `WriteCameraData` copies into
+every view's slice, duplicated across views like the rest of that struct.
+
+**`CameraData`'s field order is append-only.** `viewProj`/`lightDirWS`/
+`lightColor`/`ambientColor` must stay first, in that order — `unlit.slang`
+declares only that leading prefix in its own `cbuffer` (it needs nothing
+past `viewProj`, but the other fields still have to come before whatever it
+doesn't declare), and inserting a field before that prefix silently
+corrupts what it *does* read (this broke lit shading once, while adding the
+sky pass — see Changed). `default.slang` and `sky.slang` both declare the
+full struct - `default.slang` for `cameraPosWS` (its specular view vector),
+`sky.slang` for both `invViewProj` and `cameraPosWS` (reconstructing a
+world-space ray per pixel) - so anything new still goes after
+`cameraPosWS`, never in the middle.
+
+**The sky is its own pipeline with its own (smaller) layout** — set 0 is
+`mCameraSetLayout` and nothing else, no material set, no push constants —
+built by `CreateSkyPipeline` alongside `CreatePipelineLayout` rather than
+going through `CreateMaterial`/`MaterialDesc`, since it isn't a per-mesh
+material and needs no vertex buffer (its vertex shader synthesizes a
+fullscreen triangle from `SV_VertexID`). Its depth-stencil state is
+`LESS_OR_EQUAL`/no-write against the same depth image opaque items wrote, so
+early-z skips the fragment shader — a ~128-tap ray march — everywhere
+opaque geometry already covered.
 
 **An invalid material falls back to the default** rather than failing the
 draw, so one bad handle does not blank the frame. The same rule applies one
@@ -207,7 +246,10 @@ No tests. Everything here needs a device, and the module is verified by running.
 2. **Draw-item sorting and batching.** There is one pipeline bind per item today,
    so a frame scales with the number of distinct materials rather than with draw
    count.
-3. **Lighting** beyond what the `unlit` and `triangle` shaders hardcode.
+3. **Lighting beyond one hardcoded directional light + flat ambient.** No
+   point/spot lights, no shadows, no per-entity `Light` component yet — the
+   direction/color/ambient are renderer-wide state set via
+   `SetDirectionalLight`/`SetAmbientColor`, not scene data.
 4. **Per-config shader output paths.** Release currently ships unoptimised
    shaders, and the debug flags cannot become conditional while both
    configurations write to a path that carries no configuration component.
@@ -217,8 +259,100 @@ No tests. Everything here needs a device, and the module is verified by running.
    exists and is tested by `App` using only viewport 0; nothing yet adds a second
    one for, say, an editor-camera view alongside the game view during a paused
    Play session.
+7. **No cubemap/gradient sky option, and no time-of-day driver.** The sky is
+   Nishita-only — there's no `MaterialDesc`-style switch to a static cubemap
+   asset or a cheap two-color gradient for scenes that don't want the
+   ray-march cost. Sun elevation is whatever direction `SetDirectionalLight`
+   is holding; nothing animates it over time yet (a script/system driving
+   `SetDirectionalLight` on a timer would get a day/night cycle for free,
+   since sky and lit shading already read the same UBO fields — see the
+   set-1 rules above). There's also no moon/stars, so full night is flat
+   black rather than lit by anything but `SetAmbientColor`.
 
 ## Changed
+
+*2026-09-21* — **`CameraMath.h` gained a camera-ray builder and a ray/AABB
+test, and meshes gained a `MeshBounds` component.** Was: the file only
+built `viewProj`; there was no unprojection/ray helper anywhere, and no
+bounding-box concept at all. Now: `MakeCameraRay(cameraWorld, viewProj,
+ndc)` unprojects a screen click into a world-space `Ray` (same technique as
+`sky.slang`'s CPU-side counterpart), and `RayIntersectsAABB` is a standard
+slab test. `MeshBounds` (`renderer/components/MeshBounds.h`) is a mesh's
+local-space min/max, attached by `SceneResolve.cpp`'s `ResolveSceneMeshes`
+(app module) right where a fresh mesh's CPU vertex data is briefly
+available before `CreateMesh` uploads and discards it - the only place in
+the engine CPU-side positions still exist even momentarily. None of this
+is renderer/draw-path code; it exists so the editor can ray-pick objects in
+the viewport (see [editor.md](editor.md)) without the editor needing to
+know `VulkanRenderer` exists at all, or the renderer needing to retain
+mesh geometry permanently just to support picking.
+
+*2026-09-21* — **The default material is a flat grey, non-metallic
+Blinn-Phong shader, `assets/shaders/default.slang`.** Was:
+`triangle.slang`, `MaterialDesc::shaderName`'s default, tinted each mesh's
+own baked vertex colors by the scene light — the multi-coloured cube in the
+HelloWorld sample was this material picking up its mesh's per-vertex
+colours. Now: `default.slang` (the renamed, rewritten file) ignores
+`input.color` entirely and shades a fixed mid-grey albedo (tinted by
+`pushData.tint`, same as before) with Lambertian diffuse + ambient plus a
+fixed-intensity Blinn-Phong specular highlight, deliberately similar to
+Unity's default Standard/Lit material ball. `MaterialDesc::shaderName`'s
+default changed from `"triangle"` to `"default"` to match. Needs
+`cameraPosWS` for the specular view vector, so it's the second shader (after
+`sky.slang`) that declares `CameraData`'s full field list rather than just
+the leading prefix — see the append-only rule above. `unlit.slang` is
+unchanged and is now the only shader that still reads vertex colour.
+
+*2026-09-21* — **The sky covers the full sphere around the camera, not just
+the upper hemisphere.** Was: `Atmosphere` in `sky.slang` clamped the primary
+ray to a `kPlanetRadius` ground intersection and broke out of the secondary
+(sun) ray march the moment a sample dipped underground, so any view ray
+with a meaningful downward component-common from an elevated/angled
+camera-collapsed to near-zero step size or an outright occluded sun and
+rendered flat black, like a hard-edged hemisphere rather than a skybox. Now:
+there is no ground/planet occlusion at all; `AtmosphereHeight` clamps
+sample height to `max(length(pos) - kPlanetRadius, 0.0)` instead, so
+"underground" samples just read as sea-level density. The primary ray
+integrates all the way to the outer atmosphere-sphere exit (`hit.y`,
+unclamped), and the attenuation term's own exponential falloff keeps the
+result bounded (dominated by the first step or two for steep-down rays)
+without needing an explicit cutoff. Closer to how Unity's procedural
+skybox covers a full sphere than to a physically-grounded planet renderer.
+
+*2026-09-21* — **A Nishita-style procedural sky renders behind opaque
+geometry.** Was: the background was whatever `SetClearColor` cleared to,
+nothing else. Now: `CreateSkyPipeline` builds a dedicated fullscreen-triangle
+pipeline (own layout: set 0 = `mCameraSetLayout` only) drawn once per view
+after its opaque items (`RecordView`), depth-tested `LESS_OR_EQUAL`/no-write
+against the far clear value so early-z limits its ray-marched fragment
+shader (`sky.slang`, Rayleigh+Mie single scattering, ported from the
+public-domain wwwtyro/glsl-atmosphere reference) to actual background
+pixels. `CameraData` (set 1, binding 0) gained `invViewProj` and
+`cameraPosWS`, appended after the existing light fields rather than
+inserted before them, so `triangle.slang`/`unlit.slang`'s shorter cbuffer
+declarations keep reading the right bytes (see the append-only rule above —
+getting this wrong the first time round briefly corrupted lit shading,
+caught by re-running the app and comparing against the previous screenshot).
+The sky's sun is the scene's existing directional light — no separate sun
+state — so `SetDirectionalLight`'s direction drives both at once; sweeping
+it over time is what gets a day/night cycle, verified by rebuilding with a
+few different elevations (noon, sunset, sun below horizon) and confirming
+the sky and the lit cube both responded.
+
+*2026-09-21* — **`triangle.slang` shades per-pixel from a UBO light instead of
+hardcoding a Gouraud-shaded directional light.** Was: `kLightDir`, `kAmbient`
+and `kDiffuse` were `static const` in the shader, and shading was computed
+once per vertex and baked into `VSOutput::color`. Now: the set-1 camera UBO
+(`CameraData`, both C++ and shader-side) gained `lightDirWS`/`lightColor`/
+`ambientColor` fields after `viewProj`, its descriptor binding's
+`stageFlags` gained `VK_SHADER_STAGE_FRAGMENT_BIT`, the vertex shader passes
+an unnormalized world-space normal through `VSOutput` instead of a shaded
+color, and the fragment shader normalizes it and computes
+`ambientColor + lightColor * max(dot(N, L), 0)` per pixel.
+`VulkanRenderer::SetDirectionalLight`/`SetAmbientColor` set the values
+(defaults match the old constants); `WriteCameraData` copies them into every
+view's slice alongside `viewProj`. `unlit.slang` is unchanged — it never
+reads past `viewProj` in the same buffer.
 
 *2026-09-19* — **Descriptor sets and a per-frame camera UBO replaced the
 premultiplied view-projection push constant.** Was: `RenderSystem` baked

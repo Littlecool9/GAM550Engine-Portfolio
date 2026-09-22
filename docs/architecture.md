@@ -301,6 +301,17 @@ Components round-trip generically, through the `FieldDesc` tables registered in
 serialization cost of that component, and it works the same way for a
 script-declared component as for a C++ one.
 
+Scenes are not a cooked asset - `SceneIO` reads/writes them directly under
+`games/<name>/scenes/<sceneName>/`, next to the executable (`GameProject`
+resolves every path there against `ExecutableDir()`, not the repo), because
+`SaveScene` has to write them back at runtime. The root CMakeLists seeds
+that directory (and `project_settings.json`) from the repo's checked-in
+copy once, at first configure, and never touches it again: unlike
+`assets/`/`game.json`, which have no runtime writer and safely re-mirror
+from source on every build, doing that to `scenes/` would silently discard
+whatever the running editor last saved the moment the project is next
+rebuilt.
+
 The three load passes are in [scene.md](modules/scene.md).
 
 ### A script

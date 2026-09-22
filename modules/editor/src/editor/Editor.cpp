@@ -10,12 +10,18 @@
 
 #include <editor/Editor.h>
 
+#include <core/ecs/Query.h>
 #include <core/ecs/TransformHierarchy.h>
+#include <core/ecs/World.h>
 #include <core/ecs/components/Transform.h>
+#include <core/ecs/components/WorldTransform.h>
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
 #include <editor/Selection.h>
 #include <editortheme/EditorTheme.h>
+#include <renderer/CameraMath.h>
+#include <renderer/components/MeshBounds.h>
+#include <renderer/components/MeshRenderer.h>
 
 #include <IconsFontAwesome6.h>
 #include <imgui.h>
@@ -28,6 +34,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace mir
@@ -308,7 +315,7 @@ namespace mir
             return;
 
         const Selection *selection = world.TryResource<Selection>();
-        const Entity entity = selection != nullptr ? selection->mSelected : kNullEntity;
+        const Entity entity = selection != nullptr ? selection->Primary() : kNullEntity;
         if (entity.IsNull() || !world.IsAlive(entity))
             return;
 
@@ -373,6 +380,134 @@ namespace mir
             transform->SetPosition(position);
             transform->SetRotation(rotation);
             transform->SetScale(scale);
+        }
+    }
+
+    void Editor::UpdateViewportPicking(const EngineModeState &mode, World &world)
+    {
+        const bool down = mWindow->RawInput().IsDown(MouseButton::Left);
+        const bool justPressed = down && !mMouseWasDown;
+        mMouseWasDown = down;
+
+        if (mode.mMode != EngineMode::Edit)
+            return;
+
+        if (mSceneViewportRect.extent.width == 0 || mSceneViewportRect.extent.height == 0)
+            return;
+
+        if (WantsCaptureMouse())
+            return;
+
+        if (ImGuizmo::IsOver() || ImGuizmo::IsUsing())
+            return;
+
+        if (!justPressed)
+            return;
+
+        const RawInputSnapshot &input = mWindow->RawInput();
+        const float px = static_cast<float>(input.mouseX) - static_cast<float>(mSceneViewportRect.offset.x);
+        const float py = static_cast<float>(input.mouseY) - static_cast<float>(mSceneViewportRect.offset.y);
+        const float width = static_cast<float>(mSceneViewportRect.extent.width);
+        const float height = static_cast<float>(mSceneViewportRect.extent.height);
+        if (px < 0.0f || py < 0.0f || px >= width || py >= height)
+            return;
+
+        const glm::vec2 ndc{ (px / width) * 2.0f - 1.0f, (py / height) * 2.0f - 1.0f };
+        const glm::mat4 viewProj = MakeViewProjection(mCamera.Matrix(), mCamera.mLens.mFovYDegrees,
+            mCamera.mLens.mNearZ, mCamera.mLens.mFarZ, width / height);
+        const Ray ray = MakeCameraRay(mCamera.Matrix(), viewProj, ndc);
+
+        Entity hitEntity = kNullEntity;
+        float hitDistance = std::numeric_limits<float>::max();
+
+        world.GetOrCreateQuery<const WorldTransform, const MeshRenderer, const MeshBounds>().ForEach(
+            [&](Entity entity, const WorldTransform &transform, const MeshRenderer &, const MeshBounds &bounds)
+            {
+                const glm::mat4 worldMatrix = transform.Matrix();
+                const glm::mat4 invWorld = glm::inverse(worldMatrix);
+                const glm::vec3 localOrigin = glm::vec3(invWorld * glm::vec4(ray.origin, 1.0f));
+                const glm::vec3 localDir = glm::vec3(invWorld * glm::vec4(ray.direction, 0.0f));
+
+                const std::optional<float> t =
+                    RayIntersectsAABB(Ray{ localOrigin, localDir }, bounds.mLocalMin, bounds.mLocalMax);
+                if (!t)
+                    return;
+
+                const glm::vec3 localHit = localOrigin + localDir * (*t);
+                const glm::vec3 worldHit = glm::vec3(worldMatrix * glm::vec4(localHit, 1.0f));
+                const float distance = glm::length(worldHit - ray.origin);
+                if (distance < hitDistance)
+                {
+                    hitDistance = distance;
+                    hitEntity = entity;
+                }
+            });
+
+        ApplyClick(world.Resource<Selection>(), hitEntity, ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift);
+    }
+
+    void Editor::DrawSelectionHighlights(const EngineModeState &mode, World &world)
+    {
+        if (mode.mMode != EngineMode::Edit)
+            return;
+
+        if (mSceneViewportRect.extent.width == 0 || mSceneViewportRect.extent.height == 0)
+            return;
+
+        const Selection *selection = world.TryResource<Selection>();
+        if (selection == nullptr || selection->mSelected.empty())
+            return;
+
+        const float x0 = static_cast<float>(mSceneViewportRect.offset.x);
+        const float y0 = static_cast<float>(mSceneViewportRect.offset.y);
+        const float width = static_cast<float>(mSceneViewportRect.extent.width);
+        const float height = static_cast<float>(mSceneViewportRect.extent.height);
+
+        const glm::mat4 viewProj = MakeViewProjection(mCamera.Matrix(), mCamera.mLens.mFovYDegrees,
+            mCamera.mLens.mNearZ, mCamera.mLens.mFarZ, width / height);
+
+        ImDrawList *drawList = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+        const Entity primary = selection->Primary();
+
+        for (const Entity entity : selection->mSelected)
+        {
+            if (!world.IsAlive(entity))
+                continue;
+
+            const MeshBounds *bounds = world.GetComponent<MeshBounds>(entity);
+            if (bounds == nullptr)
+                continue;
+
+            const glm::mat4 worldMatrix = ResolveWorld(world, entity);
+            const glm::vec3 mn = bounds->mLocalMin;
+            const glm::vec3 mx = bounds->mLocalMax;
+            const glm::vec3 corners[8] = {
+                { mn.x, mn.y, mn.z }, { mx.x, mn.y, mn.z }, { mx.x, mx.y, mn.z }, { mn.x, mx.y, mn.z },
+                { mn.x, mn.y, mx.z }, { mx.x, mn.y, mx.z }, { mx.x, mx.y, mx.z }, { mn.x, mx.y, mx.z } };
+
+            ImVec2 screen[8];
+            bool behindCamera = false;
+            for (int i = 0; i < 8; ++i)
+            {
+                const glm::vec4 clip = viewProj * worldMatrix * glm::vec4(corners[i], 1.0f);
+                if (clip.w <= 0.0f)
+                {
+                    behindCamera = true;
+                    break;
+                }
+                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                screen[i] = ImVec2(x0 + (ndc.x * 0.5f + 0.5f) * width, y0 + (ndc.y * 0.5f + 0.5f) * height);
+            }
+            if (behindCamera)
+                continue;
+
+            const ImU32 color = (entity == primary) ? IM_COL32(255, 170, 0, 255) : IM_COL32(255, 220, 130, 190);
+
+            static constexpr int kEdges[12][2] = {
+                { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 }, { 4, 5 }, { 5, 6 },
+                { 6, 7 }, { 7, 4 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
+            for (const auto &edge : kEdges)
+                drawList->AddLine(screen[edge[0]], screen[edge[1]], color, 2.0f);
         }
     }
 
@@ -480,6 +615,8 @@ namespace mir
                             static_cast<uint32_t>(std::max(centralNode->Size.y, 0.0f)) } };
             }
 
+            UpdateViewportPicking(mode, world);
+            DrawSelectionHighlights(mode, world);
             DrawViewportGizmo(mode, world);
 
             if (ImGui::BeginMainMenuBar())

@@ -16,6 +16,7 @@
 #include <core/log/Log.h>
 #include <renderer/Shapes.h>
 #include <renderer/VulkanRenderer.h>
+#include <renderer/components/MeshBounds.h>
 #include <renderer/components/MeshRenderer.h>
 #include <script/IScriptHost.h>
 #include <script/ScriptReloadWatcher.h>
@@ -23,9 +24,14 @@
 
 #include <serial/JsonFile.h>
 
+#include <glm/common.hpp>
+
 #include <cstdint>
+#include <limits>
 #include <optional>
+#include <span>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -74,6 +80,23 @@ namespace mir
             mesh.indices = json->value("indices", std::vector<uint32_t>{});
             return mesh;
         }
+
+        MeshBounds ComputeMeshBounds(std::span<const Vertex> vertices)
+        {
+            glm::vec3 min(std::numeric_limits<float>::max());
+            glm::vec3 max(std::numeric_limits<float>::lowest());
+
+            for (const Vertex &vertex : vertices)
+            {
+                min = glm::min(min, vertex.pos);
+                max = glm::max(max, vertex.pos);
+            }
+
+            if (vertices.empty())
+                min = max = glm::vec3(0.0f);
+
+            return MeshBounds{ min, max };
+        }
     }
 
     void ResolveSceneScripts(World &world, IScriptHost &scripts, ScriptReloadWatcher &reload,
@@ -102,10 +125,12 @@ namespace mir
         std::string_view assetIdRoot)
     {
         std::unordered_map<uint64_t, MeshHandle> meshCache;
+        std::unordered_map<uint64_t, MeshBounds> meshBoundsCache;
         std::unordered_map<std::string, MaterialHandle> materialCache;
+        std::vector<std::pair<Entity, MeshBounds>> pendingBounds;
 
         world.GetOrCreateQuery<MeshRenderer>().ForEach(
-            [&](Entity, MeshRenderer &meshRenderer)
+            [&](Entity entity, MeshRenderer &meshRenderer)
             {
                 if (meshRenderer.mesh.IsNull() && meshRenderer.meshName[0] != '\0')
                 {
@@ -124,6 +149,7 @@ namespace mir
                             {
                                 meshRenderer.mesh = renderer.CreateMesh(mesh->vertices, mesh->indices);
                                 meshCache.emplace(id.value, meshRenderer.mesh);
+                                meshBoundsCache.emplace(id.value, ComputeMeshBounds(mesh->vertices));
                             }
                         }
                         else
@@ -131,6 +157,9 @@ namespace mir
                             MIR_LOG_ERROR("ResolveSceneMeshes: could not load '{}'", assetPath);
                         }
                     }
+
+                    if (auto it = meshBoundsCache.find(id.value); it != meshBoundsCache.end())
+                        pendingBounds.emplace_back(entity, it->second);
                 }
 
                 if (meshRenderer.material.IsNull() && meshRenderer.materialShader[0] != '\0')
@@ -145,5 +174,8 @@ namespace mir
                         .first->second;
                 }
             });
+
+        for (const auto &[entity, bounds] : pendingBounds)
+            world.AddComponent<MeshBounds>(entity, bounds);
     }
 }
