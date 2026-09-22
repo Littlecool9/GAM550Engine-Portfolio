@@ -467,6 +467,7 @@ namespace mir
             mCamera.mLens.mNearZ, mCamera.mLens.mFarZ, width / height);
 
         ImDrawList *drawList = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+        drawList->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
         const Entity primary = selection->Primary();
 
         for (const Entity entity : selection->mSelected)
@@ -509,6 +510,8 @@ namespace mir
             for (const auto &edge : kEdges)
                 drawList->AddLine(screen[edge[0]], screen[edge[1]], color, 2.0f);
         }
+
+        drawList->PopClipRect();
     }
 
     void Editor::DrawNewProjectModal(EditorActions &actions, std::span<const ProjectMenuEntry> projects)
