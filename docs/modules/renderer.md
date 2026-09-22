@@ -59,6 +59,7 @@ void DrawFrame(std::span<const RenderView> views);
 void SetClearColor(const glm::vec4 &color);
 void SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color); // direction points *toward* the light
 void SetAmbientColor(const glm::vec3 &color);
+void SetFog(const glm::vec3 &color, float density);          // density <= 0 disables fog
 void SetImGuiDrawData(ImDrawData *drawData);
 VkExtent2D SwapchainExtent() const; 
 
@@ -90,7 +91,7 @@ void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera
 | `Ray`, `MakeCameraRay`, `RayIntersectsAABB` | `renderer/CameraMath.h` | World-space camera ray from a click, and a ray/AABB slab test — the same file `MakeViewProjection` lives in, so both stay in the same Vulkan-convention math |
 | `RenderSystem` | `renderer/RenderSystem.h` | The ECS-to-renderer bridge, `SystemPhase::Render` |
 | `Shapes.h` | `renderer/Shapes.h` | `MakeCube()` and friends — plain vectors, no Vulkan |
-| `RenderSettings` | `renderer/RenderSettings.h` | Project Settings' `"rendering"` section (`rayTracing: bool` so far); `LoadFile`/`SaveFile`, a World resource loaded in `App::Initialize` |
+| `RenderSettings` | `renderer/RenderSettings.h` | Project Settings' `"rendering"` section (`rayTracing: bool`, `fog: bool`); `LoadFile`/`SaveFile`, a World resource loaded in `App::Initialize` |
 
 ## Rules
 
@@ -152,16 +153,17 @@ separate light buffer or per-light entity yet, so `SetDirectionalLight`/
 every view's slice, duplicated across views like the rest of that struct.
 
 **`CameraData`'s field order is append-only.** `viewProj`/`lightDirWS`/
-`lightColor`/`ambientColor` must stay first, in that order — `unlit.slang`
-declares only that leading prefix in its own `cbuffer` (it needs nothing
-past `viewProj`, but the other fields still have to come before whatever it
-doesn't declare), and inserting a field before that prefix silently
-corrupts what it *does* read (this broke lit shading once, while adding the
-sky pass — see Changed). `default.slang` and `sky.slang` both declare the
-full struct - `default.slang` for `cameraPosWS` (its specular view vector),
-`sky.slang` for both `invViewProj` and `cameraPosWS` (reconstructing a
-world-space ray per pixel) - so anything new still goes after
-`cameraPosWS`, never in the middle.
+`lightColor`/`ambientColor` must stay first, in that order — inserting a
+field before that prefix silently corrupts what it *does* read (this broke
+lit shading once, while adding the sky pass — see Changed). `default.slang`
+and `sky.slang` both declare the full struct - `default.slang` for
+`cameraPosWS` (its specular view vector), `sky.slang` for both
+`invViewProj` and `cameraPosWS` (reconstructing a world-space ray per
+pixel) - so anything new still goes after `cameraPosWS`, never in the
+middle. `unlit.slang` also now declares the full struct (it needs
+`cameraPosWS` for fog distance and `fogColor` itself), so every current
+material shader reads the complete layout; a future shader that truly
+needs nothing past `viewProj` can still declare only that leading prefix.
 
 **The sky is its own pipeline with its own (smaller) layout** — set 0 is
 `mCameraSetLayout` and nothing else, no material set, no push constants —
@@ -270,6 +272,36 @@ No tests. Everything here needs a device, and the module is verified by running.
    black rather than lit by anything but `SetAmbientColor`.
 
 ## Changed
+
+*2026-09-22* — **Distance fog gained a Project Settings toggle.** Was:
+`SetFog` had no caller, so fog never showed regardless of build. Now:
+`RenderSettings` gained `fog: bool` (own `"rendering"` key, same
+load/save/round-trip rules as `rayTracing`), `ProjectSettingsPanel::DrawRendering`
+exposes it as a "Distance Fog" checkbox next to "Ray Tracing", and
+`RenderSystem::OnUpdate` reads `RenderSettings::fog` off the World each
+frame and calls `mRenderer.SetFog(...)`, a fixed hazy-blue color at a fixed
+density when on, density 0 when off. No color/density UI yet - those still
+only exist for callers to set directly through `VulkanRenderer::SetFog`;
+this toggle just picks between "off" and one fixed on-state.
+
+*2026-09-22* — **Distance fog.** Was: geometry rendered at full color all the
+way to the far plane, then vanished the instant it crossed it - a hard clip
+rather than a fade. Now: `CameraData` gained `fogColor` (rgb = color, a =
+density), appended after `cameraPosWS` per the append-only rule; `VulkanRenderer::SetFog(color, density)`
+is renderer-wide state `WriteCameraData` copies in, same pattern as
+`SetDirectionalLight`/`SetAmbientColor`, and defaults to density 0. Both
+`default.slang` and `unlit.slang` blend their shaded color toward
+`fogColor.rgb` by `1 - exp(-density * distance)` (distance = camera to
+world-space fragment), so surfaces fade into whatever color the fog is set
+to - typically the sky/horizon color - instead of disappearing at the far
+plane. `unlit.slang` needed two additions to do this: a `worldPos` varying
+(it previously only carried vertex color) and the full `CameraData` struct
+declared in place of just `viewProj`, since reading `fogColor` means every
+field ahead of it in the buffer must be declared too. Density 0 makes the
+blend factor exactly 0 for every fragment, so this is a no-op against
+pre-fog rendering - nothing calls `SetFog` yet, matching `SetDirectionalLight`/
+`SetAmbientColor`, which also have no caller outside their own default
+member values (see the lighting backlog item).
 
 *2026-09-21* — **`CameraMath.h` gained a camera-ray builder and a ray/AABB
 test, and meshes gained a `MeshBounds` component.** Was: the file only

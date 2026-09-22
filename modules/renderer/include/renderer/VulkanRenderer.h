@@ -99,6 +99,12 @@ namespace mir
 
         void SetAmbientColor(const glm::vec3 &color) { mAmbientColor = color; }
 
+        void SetFog(const glm::vec3 &color, float density)
+        {
+            mFogColor = color;
+            mFogDensity = density;
+        }
+
         void Shutdown();
 
     private:
@@ -150,6 +156,9 @@ namespace mir
         glm::vec3 mLightDirection{ glm::normalize(glm::vec3(0.4f, 0.7f, 0.5f)) };
         glm::vec3 mLightColor{ 0.85f, 0.85f, 0.85f };
         glm::vec3 mAmbientColor{ 0.25f, 0.25f, 0.25f };
+
+        glm::vec3 mFogColor{ 0.02f, 0.02f, 0.02f };
+        float mFogDensity = 0.0f;
 
         const ISurfaceProvider *mWindow;
         VkInstance mVulkanInstance = VK_NULL_HANDLE;

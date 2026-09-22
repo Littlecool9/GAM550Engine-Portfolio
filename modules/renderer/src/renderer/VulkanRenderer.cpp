@@ -74,6 +74,7 @@ namespace mir
             glm::vec4 ambientColor; // rgb = flat ambient term
             glm::mat4 invViewProj;
             glm::vec4 cameraPosWS;  // xyz = camera world position
+            glm::vec4 fogColor;     // rgb = fog color, a = density (0 = disabled)
         };
 
         VkDeviceSize AlignUp(VkDeviceSize size, VkDeviceSize alignment)
@@ -1421,7 +1422,8 @@ namespace mir
             .lightColor = glm::vec4(mLightColor, 0.0f),
             .ambientColor = glm::vec4(mAmbientColor, 0.0f),
             .invViewProj = glm::inverse(viewProj),
-            .cameraPosWS = glm::vec4(cameraPosWS, 1.0f) };
+            .cameraPosWS = glm::vec4(cameraPosWS, 1.0f),
+            .fogColor = glm::vec4(mFogColor, mFogDensity) };
         const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
 
         std::byte *const dst = mCameraMapped[mFrameIndex] + offset;
