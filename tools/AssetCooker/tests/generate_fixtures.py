@@ -1,4 +1,4 @@
-"""Generate original, deterministic glTF fixtures; no third-party model license needed."""
+"""Generate deterministic glTF fixtures for importer tests."""
 import base64
 import copy
 import json
@@ -7,9 +7,7 @@ from pathlib import Path
 import struct
 import zlib
 
-ROOT = Path(__file__).resolve().parents[3]
-GAME = ROOT / "games/GltfShowcase"
-OUT = GAME / "assets/models"
+OUT = Path(__file__).resolve().parent / 'fixtures'
 OUT.mkdir(parents=True, exist_ok=True)
 
 def chunk(tag, data):
@@ -81,16 +79,4 @@ binary.extend(b'\0' * ((-len(binary)) % 4))
 glb = struct.pack('<III', 0x46546C67, 2, 12 + 8 + len(text) + 8 + len(binary)) + struct.pack('<II', len(text), 0x4E4F534A) + text + struct.pack('<II', len(binary), 0x004E4942) + binary
 (OUT / 'flag.glb').write_bytes(glb)
 
-def write_json(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
-
-write_json(GAME / 'game.json', dict(name='GltfShowcase', title='Mjolnir - glTF animation and morph', assetsRoot='assets', sceneDir='scenes/default'))
-write_json(GAME / 'project_settings.json', dict(actions=[], rendering=dict(rayTracing=False)))
-write_json(GAME / 'scenes/default/scene.json', dict(name='glTF showcase', entities=[1, 2, 3], nextId=4))
-def entity(i, position, extra):
-    write_json(GAME / f'scenes/default/entities/{i}.json', dict(id=i, parent=0, components=[dict(type='Transform', fields=dict(position=position, rotation=[0, 0, 0, 1], scale=[1, 1, 1])), dict(type='WorldTransform', fields=dict(matrix=identity)), extra]))
-entity(1, [-1, 0, 0], dict(type='ModelPlayer', fields=dict(modelName='models/flag.glb', clip=0, preview=True, speed=1)))
-entity(2, [1, 0, 0], dict(type='ModelPlayer', fields=dict(modelName='models/flag.gltf', clip=0, preview=True, time=1, speed=.6)))
-entity(3, [0, 1, 6], dict(type='Camera', fields=dict(fovYDegrees=45, nearZ=.1, farZ=100)))
-print('Generated glTF/GLB fixtures and GltfShowcase game.')
+print('Generated glTF/GLB importer fixtures.')

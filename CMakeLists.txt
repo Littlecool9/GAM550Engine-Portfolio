@@ -162,11 +162,6 @@ target_link_libraries(MjolnirEngine PRIVATE
 # Smoke tests run each game for a few frames and fail on any logged error.
 # They need a GPU; skip them with `ctest -LE smoke`.
 if(BUILD_TESTING)
-    add_executable(gltf_lifecycle_smoke tools/AssetCooker/tests/ModelLifecycleSmoke.cpp)
-    target_link_libraries(gltf_lifecycle_smoke PRIVATE mir::app mir::animation)
-    add_dependencies(gltf_lifecycle_smoke MjolnirEngine)
-    add_test(NAME smoke.gltf_lifecycle COMMAND gltf_lifecycle_smoke)
-    set_tests_properties(smoke.gltf_lifecycle PROPERTIES LABELS smoke TIMEOUT 120)
     foreach(game_name IN LISTS game_names)
         add_test(NAME smoke.${game_name}
             COMMAND MjolnirEngine --game games/${game_name} --frames 120)

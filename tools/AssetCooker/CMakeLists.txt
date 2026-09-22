@@ -10,7 +10,7 @@ target_link_libraries(AssetCooker PRIVATE gltf_importer mir::assets mir::core nl
 if(BUILD_TESTING)
     add_executable(gltf_importer_tests tests/GltfImporter.tests.cpp)
     target_link_libraries(gltf_importer_tests PRIVATE gltf_importer mir::animation nlohmann_json::nlohmann_json Catch2::Catch2WithMain)
-    target_compile_definitions(gltf_importer_tests PRIVATE GLTF_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/games/GltfShowcase/assets/models")
+    target_compile_definitions(gltf_importer_tests PRIVATE GLTF_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     target_compile_definitions(gltf_importer_tests PRIVATE GLTF_COOKER_EXE="$<TARGET_FILE:AssetCooker>")
     add_dependencies(gltf_importer_tests AssetCooker)
     catch_discover_tests(gltf_importer_tests)

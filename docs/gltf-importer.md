@@ -53,7 +53,7 @@ The editor cannot create an entity or add a component yet, so a scene entity is 
     { "type": "WorldTransform",
       "fields": { "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1] } },
     { "type": "ModelPlayer",
-      "fields": { "modelName": "models/flag.glb", "clip": 0, "preview": true, "speed": 1 } }
+      "fields": { "modelName": "models/example.glb", "clip": 0, "preview": true, "speed": 1 } }
   ]
 }
 ```
@@ -62,7 +62,7 @@ then add that id to the `entities` array in `scene.json`, move `nextId` past it,
 
 ### Which model, which clip
 
-`ModelPlayer` carries two layers of reference. `modelName`, relative to the game's asset root, for example `models/flag.glb`, and `clip` are what a human writes. `modelAsset` and `animationAsset` hold 16-digit hex asset ids and take priority whenever they are set; paste them from the import panel's contents tree. The engine writes the id back after the first successful load, so a hand-written entity upgrades itself the next time the scene is saved.
+`ModelPlayer` carries two layers of reference. `modelName`, relative to the game's asset root, for example `models/example.glb`, and `clip` are what a human writes. `modelAsset` and `animationAsset` hold 16-digit hex asset ids and take priority whenever they are set; paste them from the import panel's contents tree. The engine writes the id back after the first successful load, so a hand-written entity upgrades itself the next time the scene is saved.
 
 An id survives its package being moved or renamed, because the cooker keeps the identity in `<source>.import.json` and republishes the old path as an alias, which a `modelName` does not. When `animationAsset` names a clip that a reimport removed, playback stops with a warning instead of quietly running a different one, which is what a shifted `clip` index would do.
 
@@ -84,12 +84,4 @@ cmake --build --preset windows-msvc-debug
 ctest --test-dir builds/windows-msvc-debug --output-on-failure
 ```
 
-`games/GltfShowcase` is an original, reproducible fixture containing the same checker-textured flag as external `.gltf` + `.bin` + PNG and embedded `.glb`. It has two joints, a morph target and two clips. `tools/AssetCooker/tests/generate_fixtures.py` regenerates the source fixtures; their `.import.json` files should be retained. Two instances run at different phases/speeds to expose accidentally shared playback state.
-
-From `builds/windows-msvc-debug`, view and capture the GPU result:
-
-```powershell
-.\MjolnirEngine.exe --game games/GltfShowcase --frames 90 --no-editor --capture gltf-showcase.png
-```
-
-`--capture` requires `--frames`; the final frame is saved when the surface supports readback. Automated coverage includes glTF/GLB typed cook/load, texture references, topology conversion, normalized/interleaved and sparse accessors, dependency changes, named-node reorder, failed-import publication, deleted clips, malformed payloads, interpolation, hierarchy, combined morph/skin and independent instances. `smoke.gltf_lifecycle` runs two Play/Stop cycles, checks playback restoration and GPU draw reconstruction. Smoke tests require Vulkan/GPU and fail on logged errors. This is targeted regression coverage, not glTF conformance certification.
+`tools/AssetCooker/tests/fixtures/` contains the checker-textured flag used by importer tests as external `.gltf` plus dependencies and embedded `.glb`. `tools/AssetCooker/tests/generate_fixtures.py` regenerates those test inputs. Automated coverage includes glTF/GLB typed cook/load, texture references, topology conversion, normalized/interleaved and sparse accessors, dependency changes, named-node reorder, failed-import publication, deleted clips, malformed payloads, interpolation, hierarchy and combined morph/skin. Game smoke tests require Vulkan/GPU and fail on logged errors. This is targeted regression coverage, not glTF conformance certification.
