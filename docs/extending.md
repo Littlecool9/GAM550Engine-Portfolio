@@ -307,8 +307,10 @@ the values above. Input bindings save to `project_settings.json` next to
 `games/mygame/assets/meshes/cube.mesh.json`.
 
 Build. The root CMakeLists globs for `game.json`, so the build re-runs configure,
-cooks the game's `assetsRoot`, copies the game next to the executable, and
-registers a `smoke.mygame` test. Then run `MjolnirEngine --game games/mygame`,
+cooks the game's `assetsRoot`, copies its `assets/`/`game.json` next to the
+executable (every build) and seeds `scenes/` there once (first configure only
+- see [architecture.md](architecture.md)'s "A scene"), and registers a
+`smoke.mygame` test. Then run `MjolnirEngine --game games/mygame`,
 set `defaultGame` in `engine.json`, or pick it in the editor under
 Project > Open Project, which lists every game found at startup by its `name`
 and restarts the editor into the one you pick.

@@ -76,6 +76,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${game_manifests}
 
 set(game_names "")
 set(game_asset_roots "")
+set(game_copy_commands "")
 foreach(manifest IN LISTS game_manifests)
     get_filename_component(game_dir "${manifest}" DIRECTORY)
     get_filename_component(game_name "${game_dir}" NAME)
@@ -98,6 +99,22 @@ foreach(manifest IN LISTS game_manifests)
     if(IS_DIRECTORY "${assets_abs}")
         file(RELATIVE_PATH assets_rel "${CMAKE_SOURCE_DIR}" "${assets_abs}")
         list(APPEND game_asset_roots "${assets_rel}")
+        list(APPEND game_copy_commands COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
+             "${assets_abs}" "$<TARGET_FILE_DIR:MjolnirEngine>/games/${game_name}/${assets_root}")
+    endif()
+
+    list(APPEND game_copy_commands COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+         "${manifest}" "$<TARGET_FILE_DIR:MjolnirEngine>/games/${game_name}/game.json")
+
+    set(scene_dest "${CMAKE_BINARY_DIR}/games/${game_name}/scenes")
+    if(IS_DIRECTORY "${game_dir}/scenes" AND NOT EXISTS "${scene_dest}")
+        file(COPY "${game_dir}/scenes" DESTINATION "${CMAKE_BINARY_DIR}/games/${game_name}")
+    endif()
+
+    set(settings_src "${game_dir}/project_settings.json")
+    set(settings_dest "${CMAKE_BINARY_DIR}/games/${game_name}/project_settings.json")
+    if(EXISTS "${settings_src}" AND NOT EXISTS "${settings_dest}")
+        file(COPY "${settings_src}" DESTINATION "${CMAKE_BINARY_DIR}/games/${game_name}")
     endif()
 endforeach()
 
@@ -108,13 +125,11 @@ engine_cook_assets(MjolnirEngine
 engine_copy_fonts(MjolnirEngine SOURCE_DIR fonts)
 engine_copy_branding(MjolnirEngine SOURCE_DIR branding)
 
-# Not POST_BUILD, which only runs on relink; unchanged files are skipped
 add_custom_target(MjolnirEngine_copy_games
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
-            "${CMAKE_SOURCE_DIR}/games" "$<TARGET_FILE_DIR:MjolnirEngine>/games"
+    ${game_copy_commands}
     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
             "${CMAKE_SOURCE_DIR}/engine.json" "$<TARGET_FILE_DIR:MjolnirEngine>/engine.json"
-    COMMENT "Copying game projects and engine.json next to MjolnirEngine"
+    COMMENT "Copying game assets/manifests and engine.json next to MjolnirEngine"
     VERBATIM)
 add_dependencies(MjolnirEngine MjolnirEngine_copy_games)
 
