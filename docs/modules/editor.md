@@ -89,7 +89,7 @@ EditorCamera &SceneCamera();
 | `ProjectMenuEntry` | `editor/Editor.h` | `{mDir, mName}` for one game in Open Project |
 | `EditorActions` | `editor/Editor.h` | `{mScene, mOpenProject}`, what the menus and toolbar asked for this frame |
 | `EditorCamera` | `editor/EditorCamera.h` | Free-fly scene camera, position + yaw/pitch, outside the `World` |
-| `Selection` | `editor/Selection.h` | `{mSelected}`, the `World` resource `Hierarchy` writes and `Inspector` reads |
+| `Selection` | `editor/Selection.h` | `{mSelected}` (a `vector<Entity>`, ordered by selection - `.back()` is primary), the `World` resource `Hierarchy` and viewport picking write and `Inspector`/the gizmo read |
 
 `LogPanel`, in `src/editor/panels/LogPanel.cpp`, renders `core`'s `LogHistory`
 into the `Output` dock. `HierarchyPanel`, in
@@ -100,14 +100,32 @@ entities `ParentOf` reports null for). `InspectorPanel`, in
 into the `Inspector` dock. None of the three are public — panels are reached
 only through `DrawLayout`.
 
-Clicking an entity in `Hierarchy` writes it into `Selection`
-(`editor/Selection.h`), a `World` resource `HierarchyPanel` installs on first
-draw if nothing already has. `HierarchyPanel` clears it back to `kNullEntity`
-whenever the selected entity is no longer alive, so a stale handle never
-lingers past the frame its entity died. `InspectorPanel` reads it with
-`TryResource` rather than `Resource`, so it degrades to "No entity selected"
-instead of asserting on a frame where `Hierarchy` hasn't drawn yet (e.g. it
-starts collapsed).
+Clicking an entity in `Hierarchy`, or clicking it directly in the scene
+viewport (`Editor::UpdateViewportPicking`, a ray/AABB test against every
+`(WorldTransform, MeshRenderer, MeshBounds)` entity - see
+[renderer.md](renderer.md) for `MeshBounds`), writes it into `Selection`
+(`editor/Selection.h`), a `World` resource `HierarchyPanel` installs on
+first draw if nothing already has. Both call the same
+`ApplyClick(Selection&, Entity, bool additive)`: a plain click replaces the
+whole selection, `additive` (ctrl- or shift-click, `io.KeyCtrl ||
+io.KeyShift` - either works, same effect) toggles the clicked entity's
+membership instead, and a null `Entity` (clicked empty space) clears the
+selection unless `additive`. `HierarchyPanel` prunes any no-longer-alive
+entities out of `mSelected` every frame, so a stale handle never lingers
+past the frame its entity died - this runs before viewport picking in
+`DrawLayout`, so picking never has to prune again itself. `InspectorPanel`
+reads it with `TryResource` rather than `Resource`, so it degrades to "No
+entity selected" instead of asserting on a frame where `Hierarchy` hasn't
+drawn yet (e.g. it starts collapsed); with more than one entity selected it
+shows a plain "N objects selected" instead of drawing components. The
+transform gizmo (`DrawViewportGizmo`) only ever manipulates
+`Selection::Primary()` (the most recently selected entity) - there is no
+multi-object gizmo, so the others stay selected but untouched by it.
+`DrawSelectionHighlights` draws a wireframe box (from each entity's
+`MeshBounds`, projected with the same `viewProj` `UpdateViewportPicking`
+builds) over every selected entity, not just the primary - brighter/opaque
+for the primary, dimmer for the rest - since the gizmo alone gives no
+viewport-visible sign that a non-primary entity is still selected.
 
 `InspectorPanel` walks every `seq` up to `kMaxComponentTypes`, asking
 `ComponentRegistry::FindBySeq` for each one and skipping those the selection
@@ -120,9 +138,12 @@ Each field reads into a 64-byte scratch buffer (large enough for a `Mat4`,
 control reports an edit — so a component with a custom accessor (`Transform`'s
 `SetPosition` and friends) runs through it rather than being memcpy'd under
 it. A `FieldDesc::ReadOnly` field (`WorldTransform.matrix`) still shows its
-current value, greyed out via `ImGui::BeginDisabled`. No 3D gizmo and no
-component add/remove — numeric/text controls over the existing field tables
-only, per the roadmap's scope cut.
+current value, greyed out via `ImGui::BeginDisabled`. No component
+add/remove — numeric/text controls over the existing field tables only, per
+the roadmap's scope cut. (A 3D transform gizmo does exist, drawn over the
+viewport by `DrawViewportGizmo` via ImGuizmo - it's a separate,
+`Selection`-driven overlay, not part of `InspectorPanel`'s field-table
+drawing described here.)
 
 ## Rules
 
@@ -197,8 +218,10 @@ Open Project asks for, but not the menu or the dialog themselves.
    explicitly, same as the "no gizmo" cut below.
 2. **`Hierarchy` shows no entity names.** No component carries a display
    name yet, so each row is just `Entity <index>`.
-3. **No 3D gizmo for `Transform`.** `Inspector` edits `position`/`rotation`/
-   `scale` as plain drag boxes; a viewport gizmo is its own issue (#59).
+3. **No multi-object transform gizmo.** With more than one entity selected,
+   `DrawViewportGizmo` only manipulates `Selection::Primary()` - moving
+   several selected objects together as a group, preserving their relative
+   offsets, needs a shared-pivot gizmo this doesn't have.
 4. **Serialized custom layouts**, beyond whatever `imgui.ini` remembers.
 5. **Input routing**, beyond what `ImGui_ImplGlfw` gives for free.
 6. **Make `Editor` optional on `App`** — a `unique_ptr`, null in a packaged game
@@ -208,8 +231,46 @@ Open Project asks for, but not the menu or the dialog themselves.
    lets you look around the live World independent of the game camera. Needs
    `RenderSystem::AddViewport` (see [renderer.md](renderer.md)) wired to a
    second panel; nothing calls it yet.
+8. **Viewport picking only tests axis-aligned bounding boxes**, not actual
+   mesh geometry - a click inside an object's box but over empty space
+   between its triangles (e.g. near a corner) still selects it. No
+   per-triangle picking, matching the renderer's own choice not to retain
+   CPU-side mesh geometry after upload.
 
 ## Changed
+
+*2026-09-21* — **Shift-click is now equivalent to ctrl-click, and every
+selected entity gets a viewport outline, not just the primary.** Was:
+`additive` was `io.KeyCtrl` alone, so shift-click silently behaved like a
+plain replacing click; the only viewport-visible sign of selection was the
+gizmo on `Selection::Primary()`, so ctrl-clicking a second entity looked
+indistinguishable from replacing the selection unless you were watching the
+Hierarchy panel. Now: `additive` is `io.KeyCtrl || io.KeyShift` in both
+`Editor::UpdateViewportPicking` and `HierarchyPanel`, and a new
+`Editor::DrawSelectionHighlights` draws a wireframe `MeshBounds` box over
+every entity in `Selection::mSelected` each frame (before
+`DrawViewportGizmo`, same `viewProj` `UpdateViewportPicking` builds, via
+`ImGui::GetForegroundDrawList` the same way the gizmo already draws over
+the scene).
+
+*2026-09-21* — **Clicking an object in the scene viewport selects it, and
+`Selection` supports more than one entity.** Was: the only way to select
+anything was a `Hierarchy` row, and `Selection::mSelected` was a single
+`Entity`. Now: `Editor::UpdateViewportPicking` runs each frame (after
+`HierarchyPanel::Draw`, before `DrawViewportGizmo`, in `DrawLayout`),
+edge-detecting a left click inside the scene viewport rect (guarded by
+`!WantsCaptureMouse()` and `!ImGuizmo::IsOver()/IsUsing()`, so it never
+fires over a panel or while dragging the gizmo), builds a world-space ray
+from the click (`CameraMath.h`'s new `MakeCameraRay`, using the same
+`viewProj` convention `MakeViewProjection` already produces), and finds the
+nearest entity whose `MeshBounds` (new component, see
+[renderer.md](renderer.md)) it hits in local space
+(`RayIntersectsAABB`). `Selection::mSelected` is now a `vector<Entity>`;
+`ApplyClick` (`editor/Selection.h`) is the one place the
+replace/toggle/deselect rule lives, shared by `HierarchyPanel` and viewport
+picking so ctrl-click behaves identically from either entry point.
+`InspectorPanel` shows "N objects selected" for more than one;
+`DrawViewportGizmo` manipulates only `Selection::Primary()`.
 
 *2026-09-17* — **`Inspector` populated from the Selection.** Was: an empty
 `ImGui::Begin`/`End`, same as `Hierarchy` before it. Now: `InspectorPanel`

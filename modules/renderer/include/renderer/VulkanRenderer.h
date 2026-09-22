@@ -15,8 +15,10 @@
 
 #include <volk.h>
 
+#include <glm/geometric.hpp>
 #include <glm/mat3x3.hpp>
 #include <glm/mat4x4.hpp>
+#include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
 #include <cstddef>
@@ -75,6 +77,7 @@ namespace mir
         VkRect2D rect{};
         std::span<const DrawItem> items;
         glm::mat4 viewProj{ 1.0f };
+        glm::vec3 cameraPos{ 0.0f };
     };
 
     class VulkanRenderer
@@ -110,6 +113,14 @@ namespace mir
 
         void SetClearColor(const glm::vec4 &color) { mClearColor = color; }
 
+        void SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color)
+        {
+            mLightDirection = glm::normalize(direction);
+            mLightColor = color;
+        }
+
+        void SetAmbientColor(const glm::vec3 &color) { mAmbientColor = color; }
+
         void Shutdown();
 
     private:
@@ -140,15 +151,14 @@ namespace mir
         bool CreateDefaultTextures();
         bool CreateCameraResources();
         void DestroyCameraResources();
-        // set 2: the per-draw storage buffer a model material reads.
         bool CreateModelDescriptors();
         bool BindModelDescriptors(VkCommandBuffer cmd, const GpuMaterial &material, const DrawItem &item);
         void ResetModelFrame(uint32_t frame);
         void DestroyModelResources(bool shutdown);
         bool RecordCapture(VkCommandBuffer cmd, uint32_t imageIndex);
         void FinishCapture();
-        // Builds one VkPipeline from a desc.
         VkPipeline BuildPipeline(const MaterialDesc &desc);
+        bool CreateSkyPipeline();
         void DestroyMeshes();
         void DestroyMaterials();
         void DestroyTextures();
@@ -157,21 +167,20 @@ namespace mir
         const GpuTexture *FindTexture(TextureHandle handle) const;
         void NameObject(VkObjectType type, uint64_t handle, const char *name);
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
-        // Draws one view's items, clipped to its rect. viewIndex selects this
-        // view's slot in the current frame's camera UBO.
         void RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex);
-        // Writes view's viewProj into this frame's camera UBO at viewIndex.
-        void WriteCameraData(const glm::mat4 &viewProj, uint32_t viewIndex);
+        void WriteCameraData(const glm::mat4 &viewProj, const glm::vec3 &cameraPosWS, uint32_t viewIndex);
 
     private:
         constexpr static uint32_t VulkanVersion{ VK_API_VERSION_1_4 };
         constexpr static uint32_t kFramesInFlight = 2;
 
-        // 32-bit float depth, no stencil.
         constexpr static VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
-        // Default: dark gray. Overridden via SetClearColor.
         glm::vec4 mClearColor{ 0.02f, 0.02f, 0.02f, 1.0f };
+
+        glm::vec3 mLightDirection{ glm::normalize(glm::vec3(0.4f, 0.7f, 0.5f)) };
+        glm::vec3 mLightColor{ 0.85f, 0.85f, 0.85f };
+        glm::vec3 mAmbientColor{ 0.25f, 0.25f, 0.25f };
 
         const ISurfaceProvider *mWindow;
         VkInstance mVulkanInstance = VK_NULL_HANDLE;
@@ -208,8 +217,6 @@ namespace mir
         // dont start at 0 or 1 or else underflows
         uint64_t mNextSignalValue = kFramesInFlight + 1;
 
-        // Shared among materials as all inputs are shaped the same
-        // = DrawItem + Vertex format
         VkPipelineLayout mPipelineLayout = VK_NULL_HANDLE;
 
         // set 0: binding 0 = base color, binding 1 = normal map.
@@ -229,13 +236,9 @@ namespace mir
 
         VkBuffer mCameraBuffers[kFramesInFlight]{};
         VmaAllocation mCameraAllocations[kFramesInFlight]{};
-        // Persistently mapped; one kMaxViewsPerFrame-slice buffer per frame.
         std::byte *mCameraMapped[kFramesInFlight]{};
-        // sizeof(CameraData) rounded up to minUniformBufferOffsetAlignment.
         VkDeviceSize mCameraAlignedSize = 0;
 
-        // set 2: binding 0 = one model draw's deformation + material data,
-        // allocated per draw out of the frame's pool, which is reset each frame.
         VkDescriptorSetLayout mModelSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool mModelPools[kFramesInFlight]{};
 
@@ -246,6 +249,9 @@ namespace mir
         VkBuffer mCaptureBuffer = VK_NULL_HANDLE;
         VmaAllocation mCaptureAllocation = VK_NULL_HANDLE;
         bool mCanCapture = false;
+
+        VkPipelineLayout mSkyPipelineLayout = VK_NULL_HANDLE;
+        VkPipeline mSkyPipeline = VK_NULL_HANDLE;
 
         // One buffer pair per mesh
         struct GpuMesh

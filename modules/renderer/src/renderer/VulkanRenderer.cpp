@@ -68,14 +68,15 @@ namespace mir
             glm::vec4 tint;       // 16
         };
 
-        // The one shader that reads set 2; see BindModelDescriptors.
         constexpr std::string_view kModelShaderName = "model";
-
-        // set 1, binding 0. One per RenderView, sliced into the per-frame
-        // camera UBO (see mCameraAlignedSize).
         struct CameraData
         {
             glm::mat4 viewProj;
+            glm::vec4 lightDirWS;   // xyz = normalized direction *toward* the light/sun
+            glm::vec4 lightColor;   // rgb = light color/intensity
+            glm::vec4 ambientColor; // rgb = flat ambient term
+            glm::mat4 invViewProj;
+            glm::vec4 cameraPosWS;  // xyz = camera world position
         };
 
         VkDeviceSize AlignUp(VkDeviceSize size, VkDeviceSize alignment)
@@ -455,6 +456,9 @@ namespace mir
         if (!CreatePipelineLayout())
             return false;
 
+        if (!CreateSkyPipeline())
+            return false;
+
         mDefaultMaterial = CreateMaterial(MaterialDesc{});
         if (mDefaultMaterial.IsNull())
             return false;
@@ -463,6 +467,7 @@ namespace mir
         NameObject(VK_OBJECT_TYPE_QUEUE, reinterpret_cast<uint64_t>(mGfxQueue), "Graphics+present queue");
         NameObject(VK_OBJECT_TYPE_SWAPCHAIN_KHR, reinterpret_cast<uint64_t>(mSwapchain), "Swapchain");
         NameObject(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(mMaterials[mDefaultMaterial.mIndex].mPipeline), "Default material pipeline");
+        NameObject(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(mSkyPipeline), "Sky pipeline");
 
         for (size_t i = 0; i < mSwapchainImages.size(); ++i)
         {
@@ -572,6 +577,18 @@ namespace mir
             {
                 vkDestroyPipelineLayout(mDevice, mPipelineLayout, nullptr);
                 mPipelineLayout = VK_NULL_HANDLE;
+            }
+
+            if (mSkyPipeline != VK_NULL_HANDLE)
+            {
+                vkDestroyPipeline(mDevice, mSkyPipeline, nullptr);
+                mSkyPipeline = VK_NULL_HANDLE;
+            }
+
+            if (mSkyPipelineLayout != VK_NULL_HANDLE)
+            {
+                vkDestroyPipelineLayout(mDevice, mSkyPipelineLayout, nullptr);
+                mSkyPipelineLayout = VK_NULL_HANDLE;
             }
 
             DestroyRenderCompleteSemaphores();
@@ -1168,10 +1185,141 @@ namespace mir
         return true;
     }
 
+    bool VulkanRenderer::CreateSkyPipeline()
+    {
+        VkShaderModule vertModule = CreateShaderModule(mDevice, ShaderPath("sky.vertexMain.spv"));
+        VkShaderModule fragModule = CreateShaderModule(mDevice, ShaderPath("sky.fragmentMain.spv"));
+
+        if (vertModule == VK_NULL_HANDLE || fragModule == VK_NULL_HANDLE)
+        {
+            if (vertModule != VK_NULL_HANDLE)
+                vkDestroyShaderModule(mDevice, vertModule, nullptr);
+            if (fragModule != VK_NULL_HANDLE)
+                vkDestroyShaderModule(mDevice, fragModule, nullptr);
+            return false;
+        }
+
+        const VkPipelineLayoutCreateInfo layoutInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 1,
+            .pSetLayouts = &mCameraSetLayout };
+
+        if (vkCreatePipelineLayout(mDevice, &layoutInfo, nullptr, &mSkyPipelineLayout) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateSkyPipeline: vkCreatePipelineLayout failed");
+            vkDestroyShaderModule(mDevice, vertModule, nullptr);
+            vkDestroyShaderModule(mDevice, fragModule, nullptr);
+            return false;
+        }
+
+        const VkPipelineShaderStageCreateInfo stages[]{
+            { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+             .stage = VK_SHADER_STAGE_VERTEX_BIT,
+             .module = vertModule,
+             .pName = "vertexMain" },
+            { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+             .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+             .module = fragModule,
+             .pName = "fragmentMain" } };
+
+        const VkPipelineVertexInputStateCreateInfo vertexInput{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+
+        const VkPipelineInputAssemblyStateCreateInfo inputAssembly{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .primitiveRestartEnable = VK_FALSE };
+
+        const VkPipelineViewportStateCreateInfo viewportState{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .viewportCount = 1,
+            .pViewports = nullptr,
+            .scissorCount = 1,
+            .pScissors = nullptr };
+
+        const VkPipelineRasterizationStateCreateInfo rasterizer{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .depthClampEnable = VK_FALSE,
+            .rasterizerDiscardEnable = VK_FALSE,
+            .polygonMode = VK_POLYGON_MODE_FILL,
+            .cullMode = VK_CULL_MODE_NONE,
+            .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .depthBiasEnable = VK_FALSE,
+            .lineWidth = 1.0f };
+
+        const VkPipelineMultisampleStateCreateInfo multisample{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable = VK_FALSE };
+
+        const VkPipelineColorBlendAttachmentState blendAttachment{
+            .blendEnable = VK_FALSE,
+            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                              VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT };
+
+        const VkPipelineDepthStencilStateCreateInfo depthStencil{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .depthTestEnable = VK_TRUE,
+            .depthWriteEnable = VK_FALSE,
+            .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+            .depthBoundsTestEnable = VK_FALSE,
+            .stencilTestEnable = VK_FALSE };
+
+        const VkPipelineColorBlendStateCreateInfo colorBlend{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .logicOpEnable = VK_FALSE,
+            .attachmentCount = 1,
+            .pAttachments = &blendAttachment };
+
+        const VkDynamicState dynamicStates[]{
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_SCISSOR };
+
+        const VkPipelineDynamicStateCreateInfo dynamicState{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .dynamicStateCount = 2,
+            .pDynamicStates = dynamicStates };
+
+        const VkPipelineRenderingCreateInfo renderingInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .colorAttachmentCount = 1,
+            .pColorAttachmentFormats = &mSwapchainFormat,
+            .depthAttachmentFormat = kDepthFormat };
+
+        const VkGraphicsPipelineCreateInfo pipelineInfo{
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = &renderingInfo,
+            .stageCount = 2,
+            .pStages = stages,
+            .pVertexInputState = &vertexInput,
+            .pInputAssemblyState = &inputAssembly,
+            .pViewportState = &viewportState,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisample,
+            .pDepthStencilState = &depthStencil,
+            .pColorBlendState = &colorBlend,
+            .pDynamicState = &dynamicState,
+            .layout = mSkyPipelineLayout,
+            .renderPass = VK_NULL_HANDLE,
+            .subpass = 0 };
+
+        const VkResult result = vkCreateGraphicsPipelines(
+            mDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &mSkyPipeline);
+
+        vkDestroyShaderModule(mDevice, vertModule, nullptr);
+        vkDestroyShaderModule(mDevice, fragModule, nullptr);
+
+        if (result != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateSkyPipeline: vkCreateGraphicsPipelines failed: {}", static_cast<int>(result));
+            return false;
+        }
+
+        return true;
+    }
+
     VkSampler VulkanRenderer::AcquireSampler(const SamplerDesc &desc)
     {
-        // Pack the desc into a key. Every field is a small enum or a bool, so
-        // 8 bits each is plenty and the packing stays readable.
         const uint64_t key = (static_cast<uint64_t>(desc.magFilter) << 40) |
                              (static_cast<uint64_t>(desc.minFilter) << 32) |
                              (static_cast<uint64_t>(desc.mipmapMode) << 24) |
@@ -1193,8 +1341,6 @@ namespace mir
             .anisotropyEnable = VK_FALSE,
             .compareEnable = VK_FALSE,
             .minLod = 0.0f,
-            // The image decides how many levels there really are; this only has
-            // to stop a non-mipped material from reading past level 0.
             .maxLod = desc.useMips ? VK_LOD_CLAMP_NONE : 0.0f,
             .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK };
 
@@ -1251,7 +1397,9 @@ namespace mir
             .binding = 0,
             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
             .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT };
+            // Fragment stage added alongside vertex: lit shaders read the
+            // light fields per-pixel now (see default.slang).
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT };
 
         const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
@@ -1358,9 +1506,15 @@ namespace mir
         }
     }
 
-    void VulkanRenderer::WriteCameraData(const glm::mat4 &viewProj, uint32_t viewIndex)
+    void VulkanRenderer::WriteCameraData(const glm::mat4 &viewProj, const glm::vec3 &cameraPosWS, uint32_t viewIndex)
     {
-        const CameraData data{ viewProj };
+        const CameraData data{
+            .viewProj = viewProj,
+            .lightDirWS = glm::vec4(mLightDirection, 0.0f),
+            .lightColor = glm::vec4(mLightColor, 0.0f),
+            .ambientColor = glm::vec4(mAmbientColor, 0.0f),
+            .invViewProj = glm::inverse(viewProj),
+            .cameraPosWS = glm::vec4(cameraPosWS, 1.0f) };
         const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
 
         std::byte *const dst = mCameraMapped[mFrameIndex] + offset;
@@ -2173,7 +2327,7 @@ namespace mir
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &rect);
 
-        WriteCameraData(view.viewProj, viewIndex);
+        WriteCameraData(view.viewProj, view.cameraPos, viewIndex);
         const uint32_t cameraOffset = static_cast<uint32_t>(viewIndex * mCameraAlignedSize);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
             1, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
@@ -2229,6 +2383,15 @@ namespace mir
 
             vkCmdDrawIndexed(cmd, mesh->mIndexCount, 1, 0, 0, 0);
         }
+
+        // Sky last: depth test (LEQUAL, no write) means the fragment shader
+        // only runs where nothing above wrote depth, i.e. still at the far
+        // clear value - a fullscreen ray-marched shader paying its cost only
+        // on actual background pixels, with early-z doing the rejection.
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipelineLayout,
+            0, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
     }
 
     void VulkanRenderer::RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views)

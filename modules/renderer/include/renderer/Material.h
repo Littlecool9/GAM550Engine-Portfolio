@@ -31,11 +31,6 @@ namespace mir
 
     inline constexpr MaterialHandle kNullMaterial{};
 
-    // How a material's textures are filtered and wrapped. Sampler state belongs
-    // to the material, not the texture: set 0 holds combined image samplers, so
-    // the sampler is written into the descriptor alongside the image view, and
-    // two materials may sample one image differently. Importers translate their
-    // own conventions (glTF's GL enums, say) into these before they get here.
     struct SamplerDesc
     {
         VkFilter magFilter = VK_FILTER_LINEAR;
@@ -44,7 +39,6 @@ namespace mir
         VkSamplerAddressMode addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
         VkSamplerAddressMode addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
 
-        // false clamps maxLod to 0, so a mipped image samples only level 0.
         bool useMips = false;
 
         constexpr bool operator==(const SamplerDesc &) const = default;
@@ -59,8 +53,7 @@ namespace mir
 
     struct MaterialDesc
     {
-        // Compiled entry points are expected to be named vertexMain/fragmentMain
-        std::string shaderName = "triangle";
+        std::string shaderName = "default";
 
         VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
         VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL;
@@ -73,7 +66,6 @@ namespace mir
 
         SamplerDesc sampler;
 
-        // Blend also turns on alpha blending and turns off depth writes.
         MaterialAlphaMode alphaMode = MaterialAlphaMode::Opaque;
         float alphaCutoff = 0.5f;
     };

@@ -157,7 +157,15 @@ namespace mir
     void InspectorPanel::Draw(World &world, const AssetImportView &assets)
     {
         const Selection *selection = world.TryResource<Selection>();
-        const Entity entity = selection != nullptr ? selection->mSelected : kNullEntity;
+        const size_t selectedCount = selection != nullptr ? selection->mSelected.size() : 0;
+
+        if (selectedCount > 1)
+        {
+            ImGui::TextDisabled("%zu objects selected.", selectedCount);
+            return;
+        }
+
+        const Entity entity = selectedCount == 1 ? selection->mSelected.front() : kNullEntity;
 
         if (entity.IsNull() || !world.IsAlive(entity))
         {

@@ -176,14 +176,9 @@ namespace mir
                 const glm::mat4 viewProj = MakeViewProjection(cameraWorld, camera.mFovYDegrees,
                     camera.mNearZ, camera.mFarZ, aspect);
 
-                // DrawItem::model is a plain world matrix, so the item list
-                // itself is viewport-independent - but the transparent sort is
-                // not, so each viewport gets its own ordered copy.
                 std::vector<DrawItem> &items = mDrawItemsPerViewport[i];
                 items = mDrawItems;
 
-                // Opaque first, then transparent back to front in this
-                // viewport's clip space: blending needs a per-camera order.
                 std::stable_sort(items.begin(), items.end(),
                     [&viewProj](const DrawItem &a, const DrawItem &b)
                     {
@@ -197,7 +192,8 @@ namespace mir
                                pb.z / (std::abs(pb.w) > 1e-8f ? pb.w : 1e-8f);
                     });
 
-                mRenderViews.push_back(RenderView{ viewport.mRect, items, viewProj });
+                mRenderViews.push_back(
+                    RenderView{ viewport.mRect, items, viewProj, glm::vec3(cameraWorld[3]) });
             }
 
             if (warnNoCamera && !mWarnedNoCamera)
@@ -216,7 +212,6 @@ namespace mir
 
         std::vector<Viewport> mViewports;
 
-        // Built once per frame, then copied and sorted per viewport.
         std::vector<DrawItem> mDrawItems;
         std::vector<std::vector<DrawItem>> mDrawItemsPerViewport;
         std::vector<RenderView> mRenderViews;
