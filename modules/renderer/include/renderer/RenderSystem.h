@@ -94,9 +94,6 @@ namespace mir
 
         void OnUpdate(SystemContext &context) override
         {
-            // No color/density UI yet - the Project Settings toggle just
-            // flips distance fog on with these, off means density 0 (see
-            // VulkanRenderer::SetFog).
             constexpr glm::vec3 kDefaultFogColor{ 0.5f, 0.6f, 0.7f };
             constexpr float kDefaultFogDensity = 0.015f;
 
