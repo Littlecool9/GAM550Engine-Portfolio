@@ -14,6 +14,7 @@
 #include <core/ecs/System.h>
 #include <core/ecs/components/WorldTransform.h>
 #include <core/log/Log.h>
+#include <renderer/RenderSettings.h>
 #include <renderer/components/Camera.h>
 #include <renderer/components/MeshRenderer.h>
 
@@ -91,8 +92,17 @@ namespace mir
             }
         }
 
-        void OnUpdate(SystemContext &) override
+        void OnUpdate(SystemContext &context) override
         {
+            // No color/density UI yet - the Project Settings toggle just
+            // flips distance fog on with these, off means density 0 (see
+            // VulkanRenderer::SetFog).
+            constexpr glm::vec3 kDefaultFogColor{ 0.5f, 0.6f, 0.7f };
+            constexpr float kDefaultFogDensity = 0.015f;
+
+            const RenderSettings &renderSettings = context.world.Resource<RenderSettings>();
+            mRenderer.SetFog(kDefaultFogColor, renderSettings.fog ? kDefaultFogDensity : 0.0f);
+
             bool haveDefaultCamera = false;
             glm::mat4 defaultCameraWorld{ 1.0f };
             Camera defaultCamera{};

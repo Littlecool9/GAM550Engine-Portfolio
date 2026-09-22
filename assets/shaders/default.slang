@@ -36,6 +36,7 @@ cbuffer CameraData
     float4 ambientColor;
     float4x4 invViewProj;
     float4 cameraPosWS;
+    float4 fogColor; // rgb = fog color, a = density (0 = disabled)
 };
 
 [shader("vertex")]
@@ -71,6 +72,10 @@ float4 fragmentMain(VSOutput input) : SV_Target
     float3 albedo = kAlbedo * input.tint;
     float3 color = albedo * (ambientColor.rgb + lightColor.rgb * diffuse) +
                    lightColor.rgb * kSpecularStrength * specular;
+
+    float dist = length(cameraPosWS.xyz - input.worldPos);
+    float fogFactor = clamp(1.0 - exp(-fogColor.a * dist), 0.0, 1.0);
+    color = lerp(color, fogColor.rgb, fogFactor);
 
     return float4(color, 1.0);
 }

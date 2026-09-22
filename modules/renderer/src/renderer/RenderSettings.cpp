@@ -37,6 +37,7 @@ namespace mir
             return settings;
 
         settings.rayTracing = renderingIt->value("rayTracing", false);
+        settings.fog = renderingIt->value("fog", false);
         return settings;
     }
 
@@ -44,7 +45,7 @@ namespace mir
     {
         return UpdateJsonFile(path, [this](json &root)
             {
-                root["rendering"] = json{ { "rayTracing", rayTracing } };
+                root["rendering"] = json{ { "rayTracing", rayTracing }, { "fog", fog } };
             });
     }
 }
