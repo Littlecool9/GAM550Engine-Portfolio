@@ -80,6 +80,7 @@ through it for anything touching a JSON file.
 | `window` | An OS window and its event pump | [window.md](modules/window.md) |
 | `renderer` | The whole Vulkan path, and render-facing components | [renderer.md](modules/renderer.md) |
 | `assets` | Cooked blobs, manifest, cache | [assets.md](modules/assets.md) |
+| `animation` | Model pose sampling and per-instance playback data | [animation.md](modules/animation.md) |
 | `scene` | Scene save and load | [scene.md](modules/scene.md) |
 | `serial` | JSON documents on disk | [serial.md](modules/serial.md) |
 | `script` | Lua embedding and ECS bindings | [script.md](modules/script.md) |

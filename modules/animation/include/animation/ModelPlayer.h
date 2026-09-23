@@ -17,7 +17,7 @@ namespace mir
         int32_t clip = 0;
         int32_t scene = -1;
         float time = 0, speed = 1;
-        bool playing = true, loop = true, preview = false;
+        bool playing = true, loop = true;
     };
     MIR_ASSERT_COMPONENT(ModelPlayer);
     inline void RegisterModelPlayer()
@@ -31,8 +31,7 @@ namespace mir
             {"time", FieldKind::Float, offsetof(ModelPlayer, time)},
             {"speed", FieldKind::Float, offsetof(ModelPlayer, speed)},
             {"playing", FieldKind::Bool, offsetof(ModelPlayer, playing)},
-            {"loop", FieldKind::Bool, offsetof(ModelPlayer, loop)},
-            {"preview", FieldKind::Bool, offsetof(ModelPlayer, preview)}};
+            {"loop", FieldKind::Bool, offsetof(ModelPlayer, loop)}};
         ComponentRegistry::Instance().Register<ModelPlayer>(fields);
     }
     // Optional per-instance overrides keyed by PackEntity and stable node key.

@@ -22,6 +22,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
+#include <string_view>
 
 namespace mir
 {
@@ -127,7 +129,16 @@ namespace mir
                                         FieldBuffer value{};
                                         std::snprintf(reinterpret_cast<char *>(value.mBytes), kFieldStringCapacity,
                                                       "%016llx", static_cast<unsigned long long>(model.mAssetId));
-                                        modelAsset->Write(component, value.mBytes);
+                                        if (std::string_view(reinterpret_cast<const char *>(value.mBytes)) != currentId)
+                                        {
+                                            modelAsset->Write(component, value.mBytes);
+                                            // A clip ID from the previous model must not override the new
+                                            // model's clip index. Drop the path fallback and restart playback.
+                                            FieldBuffer empty{};
+                                            for (std::string_view name : {"modelName", "animationAsset", "clip", "time"})
+                                                if (const FieldDesc *field = ops.FindField(name))
+                                                    field->Write(component, empty.mBytes);
+                                        }
                                     }
                                 ImGui::EndCombo();
                             }
@@ -135,6 +146,13 @@ namespace mir
                     }
                     for (const FieldDesc &field : ops.mFields)
                     {
+                        // These are persistence/lookup details. Model selection goes through
+                        // the picker above; clip selection uses the public clip index.
+                        if (ops.mType.name == "ModelPlayer" &&
+                            (field.mName == "modelName" || field.mName == "modelAsset" ||
+                             field.mName == "animationAsset"))
+                            continue;
+
                         FieldBuffer buffer{};
                         field.Read(component, buffer.mBytes);
 

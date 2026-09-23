@@ -392,8 +392,8 @@ namespace mir
                                                             ? HexId(entry.mAssetId).c_str()
                                                             : std::to_string(entry.mIndex).c_str());
                             ImGui::SetItemTooltip("%s", entry.mAssetId != 0
-                                                            ? "Paste into ModelPlayer's modelAsset / animationAsset"
-                                                            : "Paste into ModelPlayer's scene field");
+                                                            ? "Asset id for scene JSON or scripts"
+                                                            : "Use in ModelPlayer's scene field");
                             ImGui::PopID();
                         }
                     }

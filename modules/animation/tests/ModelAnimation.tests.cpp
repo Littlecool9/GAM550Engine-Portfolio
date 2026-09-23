@@ -1,7 +1,17 @@
 #include <animation/ModelAnimation.h>
+#include <animation/ModelPlayer.h>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 using namespace mir;
+TEST_CASE("ModelPlayer scene fields omit transient preview state", "[animation]")
+{
+    RegisterModelPlayer();
+    const ComponentOps *ops = ComponentRegistry::Instance().Find("ModelPlayer");
+    REQUIRE(ops != nullptr);
+    CHECK(ops->FindField("preview") == nullptr);
+    CHECK(ops->FindField("modelAsset") != nullptr);
+    CHECK(ops->FindField("animationAsset") != nullptr);
+}
 TEST_CASE("Animation sampling respects step linear and cubic time scaling", "[animation]")
 {
     AnimationTrack t;

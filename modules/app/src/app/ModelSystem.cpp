@@ -238,7 +238,7 @@ namespace mir
                                       static_cast<unsigned long long>(id.value));
                     if (!std::isfinite(player.time) || !std::isfinite(player.speed))
                         throw std::runtime_error("non-finite animation clock");
-                    if (player.playing && (IsSimulating(context.world) || (IsEditing(context.world) && player.preview)))
+                    if (player.playing && IsSimulating(context.world))
                         player.time += context.dt * player.speed;
                     uint32_t clip = uint32_t(player.clip);
                     if (player.animationAsset[0] != '\0')
