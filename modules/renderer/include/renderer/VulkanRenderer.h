@@ -93,6 +93,10 @@ namespace mir
 
         void DrawFrame(std::span<const RenderView> views);
 
+        void TraceFrame(std::span<const RenderView> views);
+
+        bool RayTracingSupported() const { return mRayTracingSupported; }
+
         void SetClearColor(const glm::vec4 &color) { mClearColor = color; }
 
         void SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color)
@@ -141,6 +145,21 @@ namespace mir
         void DestroyMeshes();
         void DestroyMaterials();
         void DestroyTextures();
+
+        bool CreateAccelerationStructureObject(VkDeviceSize size, VkAccelerationStructureTypeKHR type,
+            VkBuffer &outBuffer, VmaAllocation &outAllocation, VkAccelerationStructureKHR &outAS);
+        bool CreateRtOutputImages();
+        void DestroyRtOutputImages();
+        bool CreateRtScene();
+        void DestroyRtScene();
+        bool CreateRtPipeline();
+        void WriteRtDescriptorSets();
+        bool BuildBLAS(GpuMesh &mesh, uint32_t vertexCount, uint32_t indexCount, VkCommandBuffer cmd,
+            VkBuffer &outScratchBuffer, VmaAllocation &outScratchAllocation);
+        void DestroyBLAS(GpuMesh &mesh);
+        void RecordTlasBuild(VkCommandBuffer cmd, uint32_t frameIndex, std::span<const DrawItem> items);
+        void RecordRtFrame(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
+
         const GpuMesh *FindMesh(MeshHandle handle) const;
         const GpuMaterial *FindMaterial(MaterialHandle handle) const;
         const GpuTexture *FindTexture(TextureHandle handle) const;
@@ -223,6 +242,40 @@ namespace mir
         VkPipelineLayout mSkyPipelineLayout = VK_NULL_HANDLE;
         VkPipeline mSkyPipeline = VK_NULL_HANDLE;
 
+        bool mRayTracingSupported = false;
+        VkPhysicalDeviceRayTracingPipelinePropertiesKHR mRtProperties{};
+
+        VkDescriptorSetLayout mRtSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool mRtDescriptorPool = VK_NULL_HANDLE;
+        VkDescriptorSet mRtDescriptorSets[kFramesInFlight]{};
+        VkPipelineLayout mRtPipelineLayout = VK_NULL_HANDLE;
+        VkPipeline mRtPipeline = VK_NULL_HANDLE;
+
+        VkBuffer mSbtBuffer = VK_NULL_HANDLE;
+        VmaAllocation mSbtAllocation = VK_NULL_HANDLE;
+        VkStridedDeviceAddressRegionKHR mSbtRaygenRegion{};
+        VkStridedDeviceAddressRegionKHR mSbtMissRegion{};
+        VkStridedDeviceAddressRegionKHR mSbtHitRegion{};
+        VkStridedDeviceAddressRegionKHR mSbtCallableRegion{};
+
+        constexpr static uint32_t kMaxRtInstances = 256;
+
+        VkImage mRtOutputImages[kFramesInFlight]{};
+        VmaAllocation mRtOutputAllocations[kFramesInFlight]{};
+        VkImageView mRtOutputViews[kFramesInFlight]{};
+
+        VkAccelerationStructureKHR mTlas[kFramesInFlight]{};
+        VkBuffer mTlasBuffers[kFramesInFlight]{};
+        VmaAllocation mTlasAllocations[kFramesInFlight]{};
+
+        VkBuffer mTlasScratchBuffers[kFramesInFlight]{};
+        VmaAllocation mTlasScratchAllocations[kFramesInFlight]{};
+        VkDeviceAddress mTlasScratchAddresses[kFramesInFlight]{};
+
+        VkBuffer mInstanceBuffers[kFramesInFlight]{};
+        VmaAllocation mInstanceAllocations[kFramesInFlight]{};
+        std::byte *mInstanceMapped[kFramesInFlight]{};
+
         // One buffer pair per mesh
         struct GpuMesh
         {
@@ -232,6 +285,11 @@ namespace mir
             VmaAllocation mIndexAllocation = VK_NULL_HANDLE;
             uint32_t mIndexCount = 0;
             uint32_t mGeneration = 0; //< 0 = slot never filled
+
+            VkAccelerationStructureKHR mBlas = VK_NULL_HANDLE;
+            VkBuffer mBlasBuffer = VK_NULL_HANDLE;
+            VmaAllocation mBlasAllocation = VK_NULL_HANDLE;
+            VkDeviceAddress mBlasAddress = 0;
         };
 
         std::vector<GpuMesh> mMeshes;
