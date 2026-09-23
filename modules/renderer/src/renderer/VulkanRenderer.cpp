@@ -1629,10 +1629,56 @@ namespace mir
 
         vkUpdateDescriptorSets(mDevice, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
-        mMaterials.push_back(GpuMaterial{ pipeline, descriptorSet });
+        uint32_t index;
+        uint32_t generation;
+        if (!mFreeMaterialIndices.empty())
+        {
+            index = mFreeMaterialIndices.back();
+            mFreeMaterialIndices.pop_back();
+            generation = mMaterials[index].mGeneration;
+            mMaterials[index] = GpuMaterial{ pipeline, descriptorSet, generation };
+        }
+        else
+        {
+            index = static_cast<uint32_t>(mMaterials.size());
+            generation = 1;
+            mMaterials.push_back(GpuMaterial{ pipeline, descriptorSet, generation });
+        }
 
-        MIR_LOG_INFO("Material created: {} (index {})", desc.shaderName, mMaterials.size() - 1);
-        return MaterialHandle{ static_cast<uint32_t>(mMaterials.size() - 1), 0 };
+        MIR_LOG_INFO("Material created: {} (index {})", desc.shaderName, index);
+        return MaterialHandle{ index, generation };
+    }
+
+    bool VulkanRenderer::DestroyMaterial(MaterialHandle handle)
+    {
+        if (handle == mDefaultMaterial)
+        {
+            MIR_LOG_ERROR("DestroyMaterial: refusing to destroy the default material");
+            return false;
+        }
+
+        if (handle.IsNull() || handle.mIndex >= mMaterials.size() ||
+            mMaterials[handle.mIndex].mGeneration != handle.mGeneration)
+        {
+            MIR_LOG_ERROR("DestroyMaterial: handle is null or stale");
+            return false;
+        }
+
+        // in-flight frames may still be drawing with this pipeline/set
+        vkDeviceWaitIdle(mDevice);
+
+        GpuMaterial &material = mMaterials[handle.mIndex];
+        if (material.mDescriptorSet != VK_NULL_HANDLE)
+            vkFreeDescriptorSets(mDevice, mMaterialDescriptorPool, 1, &material.mDescriptorSet);
+        if (material.mPipeline != VK_NULL_HANDLE)
+            vkDestroyPipeline(mDevice, material.mPipeline, nullptr);
+
+        const uint32_t nextGeneration = material.mGeneration + 1;
+        material = GpuMaterial{};
+        material.mGeneration = nextGeneration; // every outstanding copy of handle is now stale
+
+        mFreeMaterialIndices.push_back(handle.mIndex);
+        return true;
     }
 
     void VulkanRenderer::DestroyMaterials()
@@ -1645,6 +1691,7 @@ namespace mir
                 vkDestroyPipeline(mDevice, material.mPipeline, nullptr);
         }
         mMaterials.clear();
+        mFreeMaterialIndices.clear();
     }
 
     void VulkanRenderer::ReleaseSceneResources()
@@ -1696,7 +1743,8 @@ namespace mir
 
         mMaterials.clear();
         mMaterials.push_back(defaultMaterial);
-        mDefaultMaterial = MaterialHandle{ 0, 0 };
+        mFreeMaterialIndices.clear();
+        mDefaultMaterial = MaterialHandle{ 0, defaultMaterial.mGeneration };
 
         MIR_LOG_INFO("Released {} meshes, {} materials and {} textures", meshCount, released, releasedTextures);
     }
@@ -1706,7 +1754,12 @@ namespace mir
         if (handle.IsNull() || handle.mIndex >= mMaterials.size())
             return nullptr;
 
-        return &mMaterials[handle.mIndex];
+        const GpuMaterial &material = mMaterials[handle.mIndex];
+
+        if (material.mGeneration != handle.mGeneration)
+            return nullptr;
+
+        return &material;
     }
 
     MeshHandle VulkanRenderer::CreateMesh(std::span<const Vertex> vertices,
@@ -1813,8 +1866,20 @@ namespace mir
         vkDestroyCommandPool(mDevice, uploadPool, nullptr);
         vmaDestroyBuffer(mAllocator, staging, stagingAllocation);
 
-        const uint32_t index = static_cast<uint32_t>(mMeshes.size());
-        mMeshes.push_back(mesh);
+        uint32_t index;
+        if (!mFreeMeshIndices.empty())
+        {
+            index = mFreeMeshIndices.back();
+            mFreeMeshIndices.pop_back();
+            // DestroyMesh already bumped the slot's generation; keep it.
+            mesh.mGeneration = mMeshes[index].mGeneration;
+            mMeshes[index] = mesh;
+        }
+        else
+        {
+            index = static_cast<uint32_t>(mMeshes.size());
+            mMeshes.push_back(mesh);
+        }
 
         NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mesh.mVertexBuffer),
             std::format("Mesh {} vertices", index).c_str());
@@ -1825,6 +1890,33 @@ namespace mir
             index, vertices.size(), indices.size(), vertexBytes + indexBytes);
 
         return MeshHandle{ index, mesh.mGeneration };
+    }
+
+    bool VulkanRenderer::DestroyMesh(MeshHandle handle)
+    {
+        if (handle.IsNull() || handle.mIndex >= mMeshes.size() ||
+            mMeshes[handle.mIndex].mGeneration != handle.mGeneration)
+        {
+            MIR_LOG_ERROR("DestroyMesh: handle is null or stale");
+            return false;
+        }
+
+        // in-flight frames (up to kFramesInFlight - 1 old ones) may still be
+        // drawing from this buffer - see ReleaseSceneResources.
+        vkDeviceWaitIdle(mDevice);
+
+        GpuMesh &mesh = mMeshes[handle.mIndex];
+        if (mesh.mVertexBuffer != VK_NULL_HANDLE)
+            vmaDestroyBuffer(mAllocator, mesh.mVertexBuffer, mesh.mVertexAllocation);
+        if (mesh.mIndexBuffer != VK_NULL_HANDLE)
+            vmaDestroyBuffer(mAllocator, mesh.mIndexBuffer, mesh.mIndexAllocation);
+
+        const uint32_t nextGeneration = mesh.mGeneration + 1;
+        mesh = GpuMesh{};
+        mesh.mGeneration = nextGeneration; // every outstanding copy of handle is now stale
+
+        mFreeMeshIndices.push_back(handle.mIndex);
+        return true;
     }
 
     const VulkanRenderer::GpuMesh *VulkanRenderer::FindMesh(MeshHandle handle) const
@@ -1850,6 +1942,7 @@ namespace mir
                 vmaDestroyBuffer(mAllocator, mesh.mIndexBuffer, mesh.mIndexAllocation);
         }
         mMeshes.clear();
+        mFreeMeshIndices.clear();
     }
 
     TextureHandle VulkanRenderer::CreateTexture(const TextureDesc &desc)
