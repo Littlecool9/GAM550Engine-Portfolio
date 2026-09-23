@@ -79,9 +79,13 @@ namespace mir
         void SetImGuiDrawData(ImDrawData *drawData) { mImguiDrawData = drawData; }
         MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
 
+        bool DestroyMesh(MeshHandle handle);
+
         TextureHandle CreateTexture(const TextureDesc &desc);
 
         MaterialHandle CreateMaterial(const MaterialDesc &desc);
+
+        bool DestroyMaterial(MaterialHandle handle);
 
         void ReleaseSceneResources();
 
@@ -232,13 +236,17 @@ namespace mir
 
         std::vector<GpuMesh> mMeshes;
 
+        std::vector<uint32_t> mFreeMeshIndices;
+
         struct GpuMaterial
         {
             VkPipeline mPipeline = VK_NULL_HANDLE;
             VkDescriptorSet mDescriptorSet = VK_NULL_HANDLE;
+            uint32_t mGeneration = 0;
         };
 
         std::vector<GpuMaterial> mMaterials;
+        std::vector<uint32_t> mFreeMaterialIndices;
 
         MaterialHandle mDefaultMaterial;
 

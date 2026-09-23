@@ -51,8 +51,10 @@ barriers, and frame pacing is one timeline semaphore rather than a fence pool.
 bool Initialize(const RendererDesc &desc);   // takes an ISurfaceProvider, never a Window
 
 MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
+bool DestroyMesh(MeshHandle handle);         // false if handle is null/stale; frees that mesh alone
 TextureHandle CreateTexture(const TextureDesc &desc);
 MaterialHandle CreateMaterial(const MaterialDesc &desc);
+bool DestroyMaterial(MaterialHandle handle); // same contract; always false on the default material
 void ReleaseSceneResources();                // every mesh, material and texture but the defaults
 
 void DrawFrame(std::span<const RenderView> views);
@@ -191,6 +193,29 @@ generations are not bumped, so a handle kept across the call names whatever is
 created next in its slot, with no error. `App` calls it only right after
 unloading a scene, when no `MeshRenderer` is left.
 
+**`DestroyMesh`/`DestroyMaterial` free one handle at a time, unlike
+`ReleaseSceneResources`, and unlike it they *do* bump the slot's generation**
+— immediately, at destroy, not when the slot is later reused — so every
+outstanding copy of that handle fails `FindMesh`/`FindMaterial` from the
+moment it's destroyed, not just once something else happens to occupy its
+slot. The freed index goes on a small free-list (`mFreeMeshIndices`/
+`mFreeMaterialIndices`) that the next `CreateMesh`/`CreateMaterial` checks
+before growing the vector, so a create/destroy/create cycle reuses the slot
+rather than growing forever. Both wait for the device to go idle first, same
+reason as `ReleaseSceneResources` — an in-flight frame may still be drawing
+from the buffers/pipeline about to be freed. **Same caller-vouches-for-
+handles rule as `ReleaseSceneResources`**, just at one-handle granularity: a
+`MeshRenderer`/material reference that outlives its handle's destroy isn't
+prevented, it just starts missing in `FindMesh`/`FindMaterial` and silently
+stops drawing (`RecordView`'s existing null-mesh skip / default-material
+fallback), rather than crashing. `DestroyMaterial` additionally always
+refuses on `mDefaultMaterial` — `CreateMaterial`'s own invalid-handle
+fallback needs it alive for the process lifetime, the same reason
+`ReleaseSceneResources` special-cases it. Textures have no per-handle
+destroy yet (see Backlog); `FindMaterial` now checks `GpuMaterial::mGeneration`
+too, matching the mesh/texture slots — it previously only bounds-checked,
+since nothing before this could make a stale material index possible.
+
 **`RenderSystem` runs in `Render` because `TransformPropagateSystem` runs in
 `PostUpdate`.** Placed any earlier, it would draw the previous frame's matrices.
 
@@ -242,9 +267,11 @@ No tests. Everything here needs a device, and the module is verified by running.
 
 ## Backlog
 
-1. **Per-handle destroy for meshes and materials.** `ReleaseSceneResources` frees
-   everything at once. Nothing can free a single mesh, and a stale handle is not
-   detected.
+1. **Per-handle destroy for textures.** Meshes and materials have it
+   (`DestroyMesh`/`DestroyMaterial` — see Changed); textures still only go
+   away in bulk, via `ReleaseSceneResources`/`DestroyTextures`. Lower
+   priority than meshes/materials were: nothing today creates or discards
+   textures at a rate that makes the gap felt.
 2. **Draw-item sorting and batching.** There is one pipeline bind per item today,
    so a frame scales with the number of distinct materials rather than with draw
    count.
@@ -272,6 +299,30 @@ No tests. Everything here needs a device, and the module is verified by running.
    black rather than lit by anything but `SetAmbientColor`.
 
 ## Changed
+
+*2026-09-22* — **`DestroyMesh`/`DestroyMaterial`: per-handle destroy for
+meshes and materials.** Was: only `ReleaseSceneResources` could free
+anything, all meshes/materials at once, and a stale handle was never
+detected for materials at all (`FindMaterial` only bounds-checked; `GpuMaterial`
+had no generation field). Now: both destroy one handle, validate it first
+(null/out-of-range/stale generation all rejected, logged, `false` returned),
+`vkDeviceWaitIdle` before touching any Vulkan object (same in-flight-frame
+concern `ReleaseSceneResources` already had), then free the buffers/pipeline
++ descriptor set, bump the slot's generation so every outstanding copy of
+the handle is immediately stale, and push the index onto a small free-list
+(`mFreeMeshIndices`/`mFreeMaterialIndices`) that `CreateMesh`/`CreateMaterial`
+now check before growing their vector — a create/destroy/create cycle
+reuses the slot instead of growing it forever. `GpuMaterial` gained
+`mGeneration` (same `0 = never filled` convention as `GpuMesh`/`GpuTexture`),
+and `CreateMaterial`'s returned handle now carries its slot's real
+generation instead of a hardcoded `0`; `ReleaseSceneResources`'s
+default-material-repositioning line was fixed to match (`MaterialHandle{0,
+defaultMaterial.mGeneration}`, not `{0, 0}`) since a hardcoded `0` there
+would have started rejecting `mDefaultMaterial` itself the moment
+`CreateMaterial` began returning real generations. Caller-vouches-for-
+handles, same decision `ReleaseSceneResources` already made, now
+documented for the one-handle case too (see Rules). Textures untouched —
+out of scope for this pass, tracked in Backlog. Issue #36.
 
 *2026-09-22* — **Distance fog gained a Project Settings toggle.** Was:
 `SetFog` had no caller, so fog never showed regardless of build. Now:
