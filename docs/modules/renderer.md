@@ -194,6 +194,59 @@ the window still shows the clear color instead of stale/undefined content.
 with the checkbox on, it falls back to `DrawFrame` with a one-shot warning,
 the same pattern `mWarnedNoCamera` already uses.
 
+**`closestHitMain` gets no interpolated vertex attributes for free the way
+rasterization does - it fetches them itself, off the mesh's own vertex/
+index buffers, through native Slang pointers, the same buffers `BuildBLAS`
+already made `SHADER_DEVICE_ADDRESS`-capable.** First attempt used
+`vk::RawBufferLoad<T>(uint64_t address)`, the HLSL-for-Vulkan idiom - it
+does not exist in this Slang toolchain (`error[E30027]: member not found`
+on `vk::RawBufferLoad`). Slang's own maintainers' documented answer for
+this exact situation (buffer-device-address data in Vulkan) is to declare
+the field itself as a native pointer type (`T*`), not a `uint64_t` cast at
+the call site - `vkGetBufferDeviceAddress`'s 64-bit value and a Slang
+pointer are the same bit pattern, so the C++ side (`GetBufferAddress`)
+needed no change at all, only the shader-side field types
+(`RtInstanceInfo::vertexAddress`/`indexAddress` are `float*`/`uint*`, not
+`uint64_t`) and how they're read (`ptr[i]`, ordinary pointer-array
+indexing in units of the pointee - `float`, so vertex `i`'s data starts at
+`ptr[i * 9]`, 9 floats being `Vertex`'s 36-byte stride - not
+`vk::RawBufferLoad`'s manual byte-offset arithmetic).
+`RecordTlasBuild` writes a second, parallel per-frame array alongside the
+`VkAccelerationStructureInstanceKHR` one it already built - one
+`RtInstanceInfo` (vertex/index buffer addresses, tint, the same 3-column
+normal matrix `PushData` uses for raster, and a lit/unlit flag) per traced
+instance, same index. `VkAccelerationStructureInstanceKHR::instanceCustomIndex`
+is what ties the two together - it's set to that same index now (was
+hardcoded `0`, harmless while nothing read it, not once `InstanceID()`
+became how the hit shader finds its `RtInstanceInfo`). The lit/unlit flag
+comes from `GpuMaterial::mUnlit`, set once in `CreateMaterial` from
+`desc.shaderName == "unlit"` - the only reason a `MaterialHandle` couldn't
+answer "which shader was this built from" before now is that nothing
+needed to ask; the shader name was read once, at `BuildPipeline` time, and
+discarded. `RecordTlasBuild` resolves each item's material the same way
+`RecordView` already does (`FindMaterial`, falling back to
+`mDefaultMaterial` on a miss) rather than inventing a second fallback
+rule. `closestHitMain` fetches the hit triangle's 3 indices, then either
+its 3 vertex colors (unlit - `Vertex::color`, `renderer/Mesh.h`, offset 3
+floats into its 9-float stride) or its 3 normals (lit, offset 6),
+barycentric-interpolates, and runs the exact same math its raster
+counterpart does:
+`vertexColor * tint` for unlit, `default.slang`'s
+ambient+diffuse+Blinn-Phong (down to the same `kAlbedo`/`kSpecularStrength`/
+`kShininess` constants) for lit, both finished off with the same
+exponential-fog blend both raster shaders already apply -
+`RayTCurrent()` (the ray's own hit distance) standing in for raster's
+`length(cameraPosWS - worldPos)`, since the ray origin already *is* the
+camera and its direction is already normalized.
+
+**`missMain` is a flat vertical-gradient placeholder, not `sky.slang`'s
+Nishita atmosphere.** Porting the real thing means either duplicating
+`Atmosphere()` and its constants into `raytrace.slang`, or introducing a
+shared `#include`d file that `cmake/Shaders.cmake`'s dependency tracking
+doesn't know to watch (`engine_add_shaders`'s `DEPENDS` only names the one
+source file passed to it) - real scope, deliberately left for later (see
+Backlog) rather than folded into this pass.
+
 **`RenderSettings` owns only `project_settings.json`'s `"rendering"` key**,
 the same way `InputMap` (see the `input` module) owns only `"input"`. Each
 type's `SaveFile` goes through `UpdateJsonFile` (see
@@ -237,12 +290,14 @@ can share one command buffer without colliding. Only `DrawItem::model` (the
 world transform) and the normal matrix still travel per-item, in the push
 constant.
 
-Set 1's binding `stageFlags` gained `VK_SHADER_STAGE_RAYGEN_BIT_KHR`
-(`mRayTracingSupported`-gated, same as everything else RT) alongside the
-existing vertex/fragment flags — `raytrace.slang`'s `rayGenMain` reads
-`CameraData` too (`invViewProj`/`cameraPosWS`, same fields `sky.slang`
-reads). Missing this the first time round failed
-`vkCreateRayTracingPipelinesKHR` outright
+Set 1's binding `stageFlags` gained `VK_SHADER_STAGE_RAYGEN_BIT_KHR` and
+`VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR` (`mRayTracingSupported`-gated, same
+as everything else RT) alongside the existing vertex/fragment flags —
+`raytrace.slang`'s `rayGenMain` and `closestHitMain` both read `CameraData`
+(`invViewProj`/`cameraPosWS`, same fields `sky.slang` reads, plus
+`lightDirWS`/`ambientColor`/`fogColor` for `closestHitMain`'s shading).
+Missing either flag failed `vkCreateRayTracingPipelinesKHR` outright, one
+stage at a time as each shader started actually reading the buffer
 (`VUID-VkRayTracingPipelineCreateInfoKHR-layout-07988` — a shader's stage
 must be in the binding's `stageFlags`, not just declared as a set/binding
 number match) - broadening `stageFlags` is free at runtime for the
@@ -399,21 +454,49 @@ No tests. Everything here needs a device, and the module is verified by running.
    since sky and lit shading already read the same UBO fields — see the
    set-1 rules above). There's also no moon/stars, so full night is flat
    black rather than lit by anything but `SetAmbientColor`.
-8. **RT is a proof of concept, not a usable render mode yet — issue #55.**
-   `kMaxRtInstances` (256) is a fixed cap with no overflow handling beyond
-   silently dropping the rest; the TLAS rebuilds fully every `TraceFrame`
-   call with no dirty-tracking; `closestHitMain`/`missMain` write flat/
-   barycentric placeholder colors instead of reading real material data or
-   sampling the sky; there's no BLAS rebuild-on-mesh-destroy story beyond
-   `DestroyMesh` already freeing it (a *moved* or *re-meshed* entity has no
-   update path); and `TraceFrame` only ever traces `views[0]` - a second
-   viewport on screen at once is backlog item 6 regardless of raster/RT,
-   and RT inherits that gap rather than fixing it. (It *does* clip to
-   `views[0]`'s own rect now, same as raster - see the 2026-09-22 Changed
-   entry below - so it no longer paints over the whole window in the
-   editor; only the "more than one viewport" limitation remains.)
+8. **RT still isn't full parity with raster — issue #55 closed the
+   material-shading gap, not the rest.** `kMaxRtInstances` (256) is a fixed
+   cap with no overflow handling beyond silently dropping the rest; the
+   TLAS rebuilds fully every `TraceFrame` call with no dirty-tracking (see
+   the Rules section above - correct, just not efficient); `missMain` is a
+   flat gradient, not `sky.slang`'s real atmosphere (porting it needs a
+   shared-include story `cmake/Shaders.cmake` doesn't have yet - see
+   Rules); only the two shaders that exist (`default`/`unlit`) get RT
+   parity, so a third custom material shader would trace with whichever of
+   those two `GpuMaterial::mUnlit` happens to pick, not its own look; and
+   `TraceFrame` only ever traces `views[0]` - a second viewport on screen
+   at once is backlog item 6 regardless of raster/RT, and RT inherits that
+   gap rather than fixing it.
 
 ## Changed
+
+*2026-09-22* — **RT closest-hit shading reads real material data — issue
+#55.** Was: `closestHitMain` wrote a flat barycentric tint regardless of
+what was hit; `missMain` wrote one flat color. Now: `RecordTlasBuild`
+writes a second per-instance array (`RtInstanceInfo` - vertex/index buffer
+addresses, tint, normal matrix, a lit/unlit flag) alongside the
+`VkAccelerationStructureInstanceKHR` one it already built, indexed by
+`instanceCustomIndex` (now actually set to the instance's index, was
+hardcoded `0`); a new set-0 binding 2 (`VK_DESCRIPTOR_TYPE_STORAGE_BUFFER`,
+closest-hit stage only) exposes it. `GpuMaterial` gained `mUnlit`
+(`CreateMaterial`, from `desc.shaderName == "unlit"`) so `RecordTlasBuild`
+can tell the two apart per item, same `FindMaterial`-with-fallback-to-
+default lookup `RecordView` already does. `closestHitMain` fetches its
+triangle's vertices off the mesh's own buffers through native Slang
+pointers (`float*`/`uint*` struct fields, not `vk::RawBufferLoad` - see
+Rules for why), the same `SHADER_DEVICE_ADDRESS`-capable buffers
+`BuildBLAS` already needed, barycentric-interpolates color or normal
+depending on the flag,
+and runs the same math `unlit.slang`/`default.slang` do (down to
+`default.slang`'s exact Blinn-Phong constants), finished with the same
+exponential fog both raster shaders apply. `missMain` got a cheap vertical
+gradient instead of one flat color - still not `sky.slang`'s atmosphere,
+see Rules/Backlog for why that's a separate piece of work. Criteria 2
+(BLAS/TLAS rebuild on mesh add/remove) and 3 (runtime raster/RT toggle)
+were already satisfied by #50's design - full-every-frame TLAS rebuild is
+a superset of "rebuild on change," and `RenderSystem::OnUpdate` already
+re-read the toggle every frame - re-verified manually rather than
+re-implemented. Issue #55.
 
 *2026-09-22* — **`TraceFrame` clips to the viewport rect, same as raster.**
 Was: `RecordRtFrame` traced and blitted the whole swapchain regardless of

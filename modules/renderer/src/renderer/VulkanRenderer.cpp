@@ -77,6 +77,18 @@ namespace mir
             glm::vec4 fogColor;     // rgb = fog color, a = density (0 = disabled)
         };
 
+        struct RtInstanceInfo
+        {
+            VkDeviceAddress vertexAddress;
+            VkDeviceAddress indexAddress;
+            glm::vec4 tint;
+            glm::vec4 normalCol0;
+            glm::vec4 normalCol1;
+            glm::vec4 normalCol2;
+            uint32_t unlit;
+            uint32_t pad[3];
+        };
+
         VkDeviceSize AlignUp(VkDeviceSize size, VkDeviceSize alignment)
         {
             if (alignment == 0)
@@ -1489,7 +1501,7 @@ namespace mir
             return false;
         }
 
-        const std::array<VkDescriptorSetLayoutBinding, 2> setBindings{ {
+        const std::array<VkDescriptorSetLayoutBinding, 3> setBindings{ {
             { .binding = 0,
              .descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
              .descriptorCount = 1,
@@ -1497,7 +1509,11 @@ namespace mir
             { .binding = 1,
              .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
              .descriptorCount = 1,
-             .stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR } } };
+             .stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR },
+            { .binding = 2,
+             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+             .descriptorCount = 1,
+             .stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR } } };
 
         const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
@@ -1513,9 +1529,10 @@ namespace mir
             return false;
         }
 
-        const std::array<VkDescriptorPoolSize, 2> poolSizes{ {
+        const std::array<VkDescriptorPoolSize, 3> poolSizes{ {
             { .type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, .descriptorCount = kFramesInFlight },
-            { .type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = kFramesInFlight } } };
+            { .type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = kFramesInFlight },
+            { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = kFramesInFlight } } };
 
         const VkDescriptorPoolCreateInfo poolInfo{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -1688,7 +1705,12 @@ namespace mir
                 .imageView = mRtOutputViews[i],
                 .imageLayout = VK_IMAGE_LAYOUT_GENERAL };
 
-            const std::array<VkWriteDescriptorSet, 2> writes{ {
+            const VkDescriptorBufferInfo instanceInfoBufferInfo{
+                .buffer = mRtInstanceInfoBuffers[i],
+                .offset = 0,
+                .range = VK_WHOLE_SIZE };
+
+            const std::array<VkWriteDescriptorSet, 3> writes{ {
                 { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                  .pNext = &accelWrite,
                  .dstSet = mRtDescriptorSets[i],
@@ -1700,7 +1722,13 @@ namespace mir
                  .dstBinding = 1,
                  .descriptorCount = 1,
                  .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                 .pImageInfo = &imageInfo } } };
+                 .pImageInfo = &imageInfo },
+                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                 .dstSet = mRtDescriptorSets[i],
+                 .dstBinding = 2,
+                 .descriptorCount = 1,
+                 .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                 .pBufferInfo = &instanceInfoBufferInfo } } };
 
             vkUpdateDescriptorSets(mDevice, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         }
@@ -1764,7 +1792,7 @@ namespace mir
 
         VkShaderStageFlags cameraStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         if (mRayTracingSupported)
-            cameraStages |= VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+            cameraStages |= VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
 
         const VkDescriptorSetLayoutBinding binding{
             .binding = 0,
@@ -1917,6 +1945,18 @@ namespace mir
             }
             mInstanceMapped[i] = static_cast<std::byte *>(instanceInfo.pMappedData);
 
+            VmaAllocationInfo instanceRtInfo{};
+            if (!CreateBuffer(mAllocator, sizeof(RtInstanceInfo) * kMaxRtInstances,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                mRtInstanceInfoBuffers[i], mRtInstanceInfoAllocations[i], &instanceRtInfo))
+            {
+                MIR_LOG_CRITICAL("CreateRtScene: instance info buffer allocation failed for frame {}", i);
+                return false;
+            }
+            mRtInstanceInfoMapped[i] = static_cast<std::byte *>(instanceRtInfo.pMappedData);
+
             const VkAccelerationStructureGeometryInstancesDataKHR instancesData{
                 .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR,
                 .arrayOfPointers = VK_FALSE };
@@ -1988,6 +2028,13 @@ namespace mir
                 mInstanceAllocations[i] = VK_NULL_HANDLE;
                 mInstanceMapped[i] = nullptr;
             }
+            if (mRtInstanceInfoBuffers[i] != VK_NULL_HANDLE)
+            {
+                vmaDestroyBuffer(mAllocator, mRtInstanceInfoBuffers[i], mRtInstanceInfoAllocations[i]);
+                mRtInstanceInfoBuffers[i] = VK_NULL_HANDLE;
+                mRtInstanceInfoAllocations[i] = VK_NULL_HANDLE;
+                mRtInstanceInfoMapped[i] = nullptr;
+            }
             mTlasScratchAddresses[i] = 0;
         }
     }
@@ -1995,6 +2042,7 @@ namespace mir
     void VulkanRenderer::RecordTlasBuild(VkCommandBuffer cmd, uint32_t frameIndex, std::span<const DrawItem> items)
     {
         auto *const instances = reinterpret_cast<VkAccelerationStructureInstanceKHR *>(mInstanceMapped[frameIndex]);
+        auto *const instanceInfos = reinterpret_cast<RtInstanceInfo *>(mRtInstanceInfoMapped[frameIndex]);
 
         uint32_t instanceCount = 0;
         for (const DrawItem &item : items)
@@ -2008,17 +2056,35 @@ namespace mir
 
             instances[instanceCount] = VkAccelerationStructureInstanceKHR{
                 .transform = ToTransformMatrixKHR(item.model),
-                .instanceCustomIndex = 0,
+                .instanceCustomIndex = instanceCount,
                 .mask = 0xFF,
                 .instanceShaderBindingTableRecordOffset = 0,
                 .flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR,
                 .accelerationStructureReference = mesh->mBlasAddress };
+
+            const GpuMaterial *material = FindMaterial(item.material);
+            if (material == nullptr)
+                material = FindMaterial(mDefaultMaterial);
+
+            instanceInfos[instanceCount] = RtInstanceInfo{
+                .vertexAddress = GetBufferAddress(mDevice, mesh->mVertexBuffer),
+                .indexAddress = GetBufferAddress(mDevice, mesh->mIndexBuffer),
+                .tint = item.tint,
+                .normalCol0 = glm::vec4(item.normalMatrix[0], 0.0f),
+                .normalCol1 = glm::vec4(item.normalMatrix[1], 0.0f),
+                .normalCol2 = glm::vec4(item.normalMatrix[2], 0.0f),
+                .unlit = (material != nullptr && material->mUnlit) ? 1u : 0u };
+
             ++instanceCount;
         }
 
         const VkDeviceSize instanceBytes = sizeof(VkAccelerationStructureInstanceKHR) * instanceCount;
         if (instanceBytes > 0)
             vmaFlushAllocation(mAllocator, mInstanceAllocations[frameIndex], 0, instanceBytes);
+
+        const VkDeviceSize instanceInfoBytes = sizeof(RtInstanceInfo) * instanceCount;
+        if (instanceInfoBytes > 0)
+            vmaFlushAllocation(mAllocator, mRtInstanceInfoAllocations[frameIndex], 0, instanceInfoBytes);
 
         const VkAccelerationStructureGeometryInstancesDataKHR instancesData{
             .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR,
@@ -2240,6 +2306,8 @@ namespace mir
 
         vkUpdateDescriptorSets(mDevice, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
+        const bool unlit = desc.shaderName == "unlit";
+
         uint32_t index;
         uint32_t generation;
         if (!mFreeMaterialIndices.empty())
@@ -2247,13 +2315,13 @@ namespace mir
             index = mFreeMaterialIndices.back();
             mFreeMaterialIndices.pop_back();
             generation = mMaterials[index].mGeneration;
-            mMaterials[index] = GpuMaterial{ pipeline, descriptorSet, generation };
+            mMaterials[index] = GpuMaterial{ pipeline, descriptorSet, generation, unlit };
         }
         else
         {
             index = static_cast<uint32_t>(mMaterials.size());
             generation = 1;
-            mMaterials.push_back(GpuMaterial{ pipeline, descriptorSet, generation });
+            mMaterials.push_back(GpuMaterial{ pipeline, descriptorSet, generation, unlit });
         }
 
         MIR_LOG_INFO("Material created: {} (index {})", desc.shaderName, index);

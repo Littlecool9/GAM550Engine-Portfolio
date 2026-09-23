@@ -276,6 +276,10 @@ namespace mir
         VmaAllocation mInstanceAllocations[kFramesInFlight]{};
         std::byte *mInstanceMapped[kFramesInFlight]{};
 
+        VkBuffer mRtInstanceInfoBuffers[kFramesInFlight]{};
+        VmaAllocation mRtInstanceInfoAllocations[kFramesInFlight]{};
+        std::byte *mRtInstanceInfoMapped[kFramesInFlight]{};
+
         // One buffer pair per mesh
         struct GpuMesh
         {
@@ -301,6 +305,7 @@ namespace mir
             VkPipeline mPipeline = VK_NULL_HANDLE;
             VkDescriptorSet mDescriptorSet = VK_NULL_HANDLE;
             uint32_t mGeneration = 0;
+            bool mUnlit = false;
         };
 
         std::vector<GpuMaterial> mMaterials;
