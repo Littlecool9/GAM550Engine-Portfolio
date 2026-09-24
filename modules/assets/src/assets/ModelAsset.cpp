@@ -1,3 +1,11 @@
+/**
+ * @file ModelAsset.cpp
+ * @author Jackey Cen
+ * @brief Binary serialization and validation of the typed model asset payloads.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #include <algorithm>
 #include <assets/ModelAsset.h>
 #include <bit>

@@ -9,9 +9,9 @@
 
 #include <app/App.h>
 
-#include "ModelSystem.h"
 #include "SceneResolve.h"
 #include <animation/ModelPlayer.h>
+#include <animation/ModelSystem.h>
 #include <audio/AudioEmitterSystem.h>
 #include <audio/AudioListenerSystem.h>
 #include <audio/AudioSystem.h>
@@ -37,7 +37,6 @@
 #include <script/ScriptSystem.h>
 
 #include <algorithm>
-#include <charconv>
 #include <chrono>
 #include <filesystem>
 #include <system_error>
@@ -400,14 +399,9 @@ namespace mir
                         if (model.mPath == actions.mAssetImport.mModelPath && model.mAssetId != 0)
                             target = AssetId{model.mAssetId};
                     mWorld.GetOrCreateQuery<const ModelPlayer>().ForEach([&](Entity, const ModelPlayer &player) {
-                        AssetId referenced{};
-                        if (player.modelAsset[0] != '\0')
-                        {
-                            const std::string_view encoded(player.modelAsset);
-                            std::from_chars(encoded.data(), encoded.data() + encoded.size(), referenced.value, 16);
-                        }
-                        if (referenced.IsNull() && player.modelName[0] != '\0')
-                            referenced = MakeAssetId((std::filesystem::path(mProject.mAssetIdRoot) / player.modelName)
+                        AssetId referenced = player.ModelAsset();
+                        if (referenced.IsNull() && !player.ModelName().empty())
+                            referenced = MakeAssetId((std::filesystem::path(mProject.mAssetIdRoot) / player.ModelName())
                                                          .lexically_normal()
                                                          .generic_string());
                         assetActionAccepted &= referenced != target;

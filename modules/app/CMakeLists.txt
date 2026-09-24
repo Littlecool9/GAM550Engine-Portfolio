@@ -20,5 +20,4 @@ target_sources(engine_app PRIVATE
     src/app/AssetImportManager.cpp
     src/app/GameProject.cpp
     src/app/SceneResolve.cpp
-    src/app/ModelSystem.cpp
 )

@@ -1,3 +1,11 @@
+/**
+ * @file AssetImportManager.h
+ * @author Jackey Cen
+ * @brief Editor-side import queue: stages dropped files, runs AssetCooker batches and applies results in Edit.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 
 #include <app/GameProject.h>

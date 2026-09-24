@@ -1,3 +1,11 @@
+/**
+ * @file AssetImportManager.cpp
+ * @author Jackey Cen
+ * @brief Import batching, source watcher and deferred apply of AssetCooker output.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #include <app/AssetImportManager.h>
 
 #include <core/fs/Paths.h>

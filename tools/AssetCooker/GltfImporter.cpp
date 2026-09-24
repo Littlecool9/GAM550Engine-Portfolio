@@ -1,3 +1,11 @@
+/**
+ * @file GltfImporter.cpp
+ * @author Jackey Cen
+ * @brief fastgltf conversion, accessor and dependency checks, and typed asset emission.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #include "GltfImporter.h"
 #include <assets/ModelAsset.h>
 #include <core/log/Log.h>

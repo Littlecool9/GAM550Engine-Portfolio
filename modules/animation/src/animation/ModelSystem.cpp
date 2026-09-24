@@ -1,12 +1,18 @@
-#include "ModelSystem.h"
+/**
+ * @file ModelSystem.cpp
+ * @author Jackey Cen
+ * @brief GPU upload, reload and per-frame evaluation of ModelPlayer instances.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+#include "animation/ModelSystem.h"
 #include <animation/ModelPlayer.h>
-#include <charconv>
 #include <cmath>
 #include <core/ecs/EngineMode.h>
 #include <core/ecs/World.h>
 #include <core/ecs/components/WorldTransform.h>
 #include <core/log/Log.h>
-#include <cstdio>
 #include <filesystem>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <span>
@@ -212,15 +218,11 @@ namespace mir
             [&](Entity entity, ModelPlayer &player, const WorldTransform &transform) {
                 const auto packed = PackEntity(entity);
                 alive.insert(packed);
-                if (player.modelName[0] == '\0' && player.modelAsset[0] == '\0')
+                if (player.ModelName().empty() && player.ModelAsset().IsNull())
                     return;
-                const auto path = (std::filesystem::path(mRoot) / player.modelName).lexically_normal().generic_string();
-                AssetId id{};
-                if (player.modelAsset[0] != '\0')
-                {
-                    const std::string_view encoded(player.modelAsset);
-                    std::from_chars(encoded.data(), encoded.data() + encoded.size(), id.value, 16);
-                }
+                const auto path =
+                    (std::filesystem::path(mRoot) / player.ModelName()).lexically_normal().generic_string();
+                AssetId id = player.ModelAsset();
                 if (id.IsNull())
                     id = MakeAssetId(path);
                 if (mRequestedModels[packed] != id.value)
@@ -233,38 +235,30 @@ namespace mir
                 try
                 {
                     auto &data = Load(id);
-                    if (player.modelAsset[0] == '\0')
-                        std::snprintf(player.modelAsset, sizeof(player.modelAsset), "%016llx",
-                                      static_cast<unsigned long long>(id.value));
-                    if (!std::isfinite(player.time) || !std::isfinite(player.speed))
-                        throw std::runtime_error("non-finite animation clock");
-                    if (player.playing && IsSimulating(context.world))
-                        player.time += context.dt * player.speed;
-                    uint32_t clip = uint32_t(player.clip);
-                    if (player.animationAsset[0] != '\0')
+                    if (player.ModelAsset().IsNull())
+                        player.SetModelAsset(id);
+                    if (player.IsPlaying() && IsSimulating(context.world))
+                        player.SetTime(player.Time() + context.dt * player.Speed());
+                    uint32_t clip = uint32_t(player.Clip());
+                    const auto &animations = data.resources.model.animations;
+                    if (!player.AnimationAsset().IsNull())
                     {
-                        uint64_t animation = 0;
-                        const std::string_view encoded(player.animationAsset);
-                        std::from_chars(encoded.data(), encoded.data() + encoded.size(), animation, 16);
-                        const auto found =
-                            std::find_if(data.resources.model.animations.begin(), data.resources.model.animations.end(),
-                                         [&](AssetId candidate) { return candidate.value == animation; });
-                        if (found == data.resources.model.animations.end())
+                        const auto found = std::find(animations.begin(), animations.end(), player.AnimationAsset());
+                        if (found == animations.end())
                         {
-                            if (player.playing)
+                            if (player.IsPlaying())
                                 MIR_LOG_WARN("Model '{}': referenced animation was removed", path);
-                            player.playing = false;
+                            player.SetPlaying(false);
                             clip = UINT32_MAX;
                         }
                         else
-                            clip = static_cast<uint32_t>(found - data.resources.model.animations.begin());
+                            clip = static_cast<uint32_t>(found - animations.begin());
                     }
-                    else if (clip < data.resources.model.animations.size())
-                        std::snprintf(player.animationAsset, sizeof(player.animationAsset), "%016llx",
-                                      static_cast<unsigned long long>(data.resources.model.animations[clip].value));
-                    if (!player.loop && clip < data.resources.clips.size())
-                        player.time = std::clamp(player.time, 0.0f, data.resources.clips[clip].duration);
-                    auto pose = EvaluateModel(data.resources, clip, player.time, player.loop);
+                    else if (clip < animations.size())
+                        player.SetAnimationAsset(animations[clip]);
+                    if (!player.Loops() && clip < data.resources.clips.size())
+                        player.SetTime(std::clamp(player.Time(), 0.0f, data.resources.clips[clip].duration));
+                    auto pose = EvaluateModel(data.resources, clip, player.Time(), player.Loops());
                     if (overrides)
                         if (auto it = overrides->instances.find(packed); it != overrides->instances.end())
                             for (size_t i = 0; i < pose.size(); ++i)
@@ -283,7 +277,7 @@ namespace mir
                                             throw std::runtime_error("non-finite morph override");
                                     pose[i].weights = w->second;
                                 }
-                    auto visible = VisibleModelNodes(data.resources.model, uint32_t(player.scene));
+                    auto visible = VisibleModelNodes(data.resources.model, uint32_t(player.Scene()));
                     for (size_t i = 0; i < pose.size(); ++i)
                     {
                         const auto &node = data.resources.model.nodes[i];

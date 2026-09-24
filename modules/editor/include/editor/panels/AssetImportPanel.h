@@ -1,3 +1,11 @@
+/**
+ * @file AssetImportPanel.h
+ * @author Jackey Cen
+ * @brief Asset import panel: imported models, staged packages and import actions.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 
 #include <cstdint>

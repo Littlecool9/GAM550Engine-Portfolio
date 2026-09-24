@@ -1,3 +1,11 @@
+/**
+ * @file ModelAsset.h
+ * @author Jackey Cen
+ * @brief Typed Model, Mesh, Skeleton, AnimationClip, Material and Texture asset payloads.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 
 #include <assets/AssetBlob.h>

@@ -1,3 +1,11 @@
+/**
+ * @file ModelAnimation.cpp
+ * @author Jackey Cen
+ * @brief Model dependency validation, track interpolation, hierarchical pose and CPU/GPU deformation data.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #include <algorithm>
 #include <animation/ModelAnimation.h>
 #include <cmath>

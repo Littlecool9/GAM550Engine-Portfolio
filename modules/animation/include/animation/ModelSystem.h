@@ -1,3 +1,17 @@
+/**
+ * @file ModelSystem.h
+ * @author Jackey Cen
+ * @brief Turns ModelPlayer instances into GPU draws, in SystemPhase::PostUpdate.
+ *
+ * Loads each referenced model once through AssetCache, uploads its meshes,
+ * materials and textures to the VulkanRenderer, advances playback while the
+ * world is simulating, evaluates the pose and fills the ModelDrawItems resource
+ * that RenderSystem draws. Runs after TransformPropagateSystem so WorldTransform
+ * is current. PrepareReload/CommitReload swap GPU resources around an import.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 #include <animation/ModelAnimation.h>
 #include <core/ecs/System.h>

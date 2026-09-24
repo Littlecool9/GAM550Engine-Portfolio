@@ -1,3 +1,11 @@
+/**
+ * @file AssetImportPanel.cpp
+ * @author Jackey Cen
+ * @brief Draws the asset import panel and turns clicks into EditorActions import requests.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #include <editor/panels/AssetImportPanel.h>
 
 #include <editortheme/EditorTheme.h>

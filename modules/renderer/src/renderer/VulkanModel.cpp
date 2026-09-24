@@ -1,3 +1,11 @@
+/**
+ * @file VulkanModel.cpp
+ * @author Jackey Cen
+ * @brief Per-draw model data (descriptor set 2): deformation buffers and their pools, plus frame capture.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif

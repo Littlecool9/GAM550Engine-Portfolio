@@ -1,7 +1,16 @@
+/**
+ * @file ModelAnimation.tests.cpp
+ * @author Jackey Cen
+ * @brief Tests for animation/ModelAnimation and the ModelPlayer field table.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #include <animation/ModelAnimation.h>
 #include <animation/ModelPlayer.h>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 using namespace mir;
 TEST_CASE("ModelPlayer scene fields omit transient preview state", "[animation]")
 {
@@ -11,6 +20,33 @@ TEST_CASE("ModelPlayer scene fields omit transient preview state", "[animation]"
     CHECK(ops->FindField("preview") == nullptr);
     CHECK(ops->FindField("modelAsset") != nullptr);
     CHECK(ops->FindField("animationAsset") != nullptr);
+}
+TEST_CASE("ModelPlayer fields go through validating setters", "[animation]")
+{
+    RegisterModelPlayer();
+    const ComponentOps *ops = ComponentRegistry::Instance().Find("ModelPlayer");
+    REQUIRE(ops != nullptr);
+    ModelPlayer player;
+
+    char text[kFieldStringCapacity] = "00000000000000ab";
+    ops->FindField("modelAsset")->Write(&player, text);
+    CHECK(player.ModelAsset().value == 0xab);
+    char out[kFieldStringCapacity]{};
+    ops->FindField("modelAsset")->Read(&player, out);
+    CHECK(std::string_view(out) == "00000000000000ab");
+
+    char garbage[kFieldStringCapacity] = "not-hex";
+    ops->FindField("modelAsset")->Write(&player, garbage);
+    CHECK(player.ModelAsset().IsNull());
+
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    player.SetTime(2);
+    ops->FindField("time")->Write(&player, &nan);
+    CHECK(player.Time() == 2);
+    player.SetClip(-3);
+    CHECK(player.Clip() == 0);
+    player.SetScene(-5);
+    CHECK(player.Scene() == -1);
 }
 TEST_CASE("Animation sampling respects step linear and cubic time scaling", "[animation]")
 {

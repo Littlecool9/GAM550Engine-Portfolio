@@ -1,3 +1,11 @@
+/**
+ * @file ModelAnimation.h
+ * @author Jackey Cen
+ * @brief Model resource loading, clip sampling, pose evaluation, skinning and deformation packing.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 #include <assets/AssetCache.h>
 #include <assets/ModelAsset.h>

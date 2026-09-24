@@ -1,3 +1,11 @@
+/**
+ * @file GltfImporter.tests.cpp
+ * @author Jackey Cen
+ * @brief Tests for the glTF importer and AssetCooker batch, move and remove behavior.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #include "../GltfImporter.h"
 #include <algorithm>
 #include <animation/ModelAnimation.h>

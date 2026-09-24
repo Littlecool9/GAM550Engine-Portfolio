@@ -1,10 +1,10 @@
 # animation
 
 Model resource validation, clip sampling, pose evaluation, and per-instance
-playback data. The module does not own the renderer, ECS update loop, or import
-of source glTF files.
+playback data, plus `ModelSystem`, which turns them into GPU draws. The module
+does not own the renderer, the ECS update loop, or import of source glTF files.
 
-`mir::animation` · depends `mir::assets`, `mir::core` (public) · API `modules/animation/include/animation/` · review pending
+`mir::animation` · depends `mir::assets`, `mir::core`, `mir::renderer` (public) · API `modules/animation/include/animation/` · review pending
 
 ## Model
 
@@ -22,8 +22,8 @@ does not mutate shared data. The pose follows stable node keys and the Model's
 parent hierarchy. A `ModelMorphOverrides` world resource can replace sampled
 weights for one entity and node without changing the asset.
 
-`ModelSystem` lives in `app`, where it can access the asset cache and Vulkan
-renderer. It resolves each `ModelPlayer`, advances its clock only while Play is
+`ModelSystem` is registered by `app` in PostUpdate with the asset cache and the
+Vulkan renderer. It resolves each `ModelPlayer`, advances its clock only while Play is
 simulating, evaluates a pose, and submits per-draw deformation data. The
 renderer shader applies morph, then skin, then the instance transform;
 `DeformPrimitive` provides the CPU reference for that order.
@@ -32,15 +32,15 @@ renderer shader applies morph, then skin, then the instance transform;
 
 | Type or function | Header | Role |
 |---|---|---|
-| `ModelPlayer`, `RegisterModelPlayer` | `animation/ModelPlayer.h` | Serializable per-entity selection and playback state |
+| `ModelPlayer`, `RegisterModelPlayer`, `kModelPlayerFields` | `animation/ModelPlayer.h` | Serializable per-entity selection and playback state behind validating setters |
+| `ModelSystem` | `animation/ModelSystem.h` | GPU upload, reload swap, playback clock and `ModelDrawItems` per frame |
 | `ModelMorphOverrides` | `animation/ModelPlayer.h` | Transient weights keyed by entity and stable node key |
 | `ModelResources`, `LoadModelResources` | `animation/ModelAnimation.h` | Typed model and validated dependencies |
 | `SampleAnimationTrack`, `EvaluateModel`, `NodePose` | `animation/ModelAnimation.h` | Track interpolation and a fresh hierarchical pose |
 | `ResolvePoseWorld`, `SkinMatrices`, `VisibleModelNodes` | `animation/ModelAnimation.h` | World transforms, skin palette, and selected glTF scene |
 | `DeformPrimitive`, `BuildDeformationData` | `animation/ModelAnimation.h` | CPU reference and shader buffer encoding |
 
-`ModelSystem` and its GPU resource lifetime are in `modules/app/src/app/ModelSystem.h`
-and `ModelSystem.cpp`, rather than this library. See
+See
 [glTF asset pipeline](../gltf-importer.md) for importer identity and editor use.
 
 ## Rules
@@ -65,6 +65,12 @@ hold the clock. A fixed pose can be authored with `playing = false` and an
 explicit `time`. There is no serialized preview flag. Older scene files with
 `preview` load without using that key, and the next save omits it.
 
+**State is private; the field table goes through setters.** `ModelPlayer`
+exposes accessors only. Scene load, scripts and the Inspector write through
+`kModelPlayerFields`, whose setters keep `time` and `speed` finite, `clip` at
+least 0, `scene` at least -1, and parse asset references as 16-digit hex (any
+other text becomes null). Asset references are held as `AssetId`, not text.
+
 **Scene serialization follows the component field table.**
 `RegisterModelPlayer` supplies the fields consumed by both scene save/load and
 generic scripting. Removing a field from that table changes what scene files
@@ -77,7 +83,7 @@ it does not silently render a partial model.
 
 ## State
 
-*As of 2026-09-23.* The module samples translation, rotation, scale, and
+*As of 2026-09-24.* The module samples translation, rotation, scale, and
 morph-weight tracks with STEP, LINEAR, and CUBICSPLINE interpolation. It
 evaluates hierarchy, selected glTF scene visibility, skin matrices, and
 optional per-instance morph overrides. `ModelSystem` shares loaded GPU
@@ -101,6 +107,12 @@ a model, but it has no timeline or named clip picker.
 4. Profile per-draw deformation buffer uploads before pooling or caching them.
 
 ## Changed
+
+*2026-09-24* — **ModelSystem moved into this module; ModelPlayer made private.**
+`ModelSystem` was in `app`, which left the component and its only system in
+different modules; `animation` now links `renderer` publicly for it.
+`ModelPlayer` became a class with accessors after review found every field was
+writable from anywhere, including resolved asset IDs. Scene JSON is unchanged.
 
 *2026-09-23* — **Preview removed from scene state.** `ModelPlayer.preview`
 previously let Edit mode advance the playback clock and was saved by the

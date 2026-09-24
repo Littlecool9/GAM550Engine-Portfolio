@@ -1,3 +1,11 @@
+/**
+ * @file GltfImporter.h
+ * @author Jackey Cen
+ * @brief glTF/GLB to typed model assets, with stable identity sidecars and package inventory.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
 #pragma once
 #include <assets/AssetManifest.h>
 #include <filesystem>
