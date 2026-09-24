@@ -104,6 +104,19 @@ TEST_CASE("SaveFile then LoadFile round-trips rayTracing", "[renderer]")
     REQUIRE(loaded->rayTracing);
 }
 
+TEST_CASE("SaveFile then LoadFile round-trips fog", "[renderer]")
+{
+    TempSettingsFile file{ "roundtrip_fog.json" };
+
+    mir::RenderSettings saved;
+    saved.fog = true;
+    REQUIRE(saved.SaveFile(file.mPath));
+
+    const std::optional<mir::RenderSettings> loaded = mir::RenderSettings::LoadFile(file.mPath);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->fog);
+}
+
 TEST_CASE("SaveFile preserves a sibling 'input' section instead of clobbering it", "[renderer]")
 {
     TempSettingsFile file{ "sibling_preserved.json" };

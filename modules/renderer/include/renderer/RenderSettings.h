@@ -17,6 +17,7 @@ namespace mir
     struct RenderSettings
     {
         bool rayTracing = false;
+        bool fog = false;
 
         // nullopt if the file is missing or unreadable; a file with no
         // "rendering" section loads as defaults.

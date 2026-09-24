@@ -29,7 +29,7 @@ if (!root || !root->is_object())
 
 // write one section, leaving every other section on disk untouched
 return UpdateJsonFile(path, [this](nlohmann::json &root)
-                      { root["rendering"] = nlohmann::json{{"rayTracing", rayTracing}}; });
+                      { root["rendering"] = nlohmann::json{{"rayTracing", rayTracing}, {"fog", fog}}; });
 ```
 
 ### Sharing one file

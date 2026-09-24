@@ -229,6 +229,7 @@ namespace mir
         ImGui::SeparatorText("Rendering");
 
         ImGui::Checkbox("Ray Tracing", &renderSettings.rayTracing);
+        ImGui::Checkbox("Distance Fog", &renderSettings.fog);
 
         if (ImGui::Button("Save##Rendering"))
             mRenderingStatusMessage = renderSettings.SaveFile(savePath) ? "Saved." : "Save failed - see log.";

@@ -93,9 +93,13 @@ namespace mir
         void SetImGuiDrawData(ImDrawData *drawData) { mImguiDrawData = drawData; }
         MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
 
+        bool DestroyMesh(MeshHandle handle);
+
         TextureHandle CreateTexture(const TextureDesc &desc);
 
         MaterialHandle CreateMaterial(const MaterialDesc &desc);
+
+        bool DestroyMaterial(MaterialHandle handle);
 
         void CaptureNextFrame(const std::filesystem::path &path) { mCapturePath = path; }
 
@@ -120,6 +124,12 @@ namespace mir
         }
 
         void SetAmbientColor(const glm::vec3 &color) { mAmbientColor = color; }
+
+        void SetFog(const glm::vec3 &color, float density)
+        {
+            mFogColor = color;
+            mFogDensity = density;
+        }
 
         void Shutdown();
 
@@ -181,6 +191,9 @@ namespace mir
         glm::vec3 mLightDirection{ glm::normalize(glm::vec3(0.4f, 0.7f, 0.5f)) };
         glm::vec3 mLightColor{ 0.85f, 0.85f, 0.85f };
         glm::vec3 mAmbientColor{ 0.25f, 0.25f, 0.25f };
+
+        glm::vec3 mFogColor{ 0.02f, 0.02f, 0.02f };
+        float mFogDensity = 0.0f;
 
         const ISurfaceProvider *mWindow;
         VkInstance mVulkanInstance = VK_NULL_HANDLE;
@@ -266,6 +279,8 @@ namespace mir
 
         std::vector<GpuMesh> mMeshes;
 
+        std::vector<uint32_t> mFreeMeshIndices;
+
         struct GpuMaterial
         {
             VkPipeline mPipeline = VK_NULL_HANDLE;
@@ -274,9 +289,11 @@ namespace mir
             // shader through set 2, since the push constant range is full.
             glm::vec4 mParameters{};
             bool mModelShader = false;
+            uint32_t mGeneration = 0;
         };
 
         std::vector<GpuMaterial> mMaterials;
+        std::vector<uint32_t> mFreeMaterialIndices;
 
         MaterialHandle mDefaultMaterial;
 
