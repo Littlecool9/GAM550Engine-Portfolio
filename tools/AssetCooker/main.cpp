@@ -1,5 +1,13 @@
-/** @file main.cpp @brief One-shot raw and typed asset cooking with incremental
- * glTF batches. */
+/**
+ * @file main.cpp
+ * @author Rahul Nair
+ * @brief Cooks a game's raw assets into the manifest + blob files the
+ *        runtime AssetCache loads.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include "GltfImporter.h"
 #include <algorithm>
 #include <assets/AssetBlob.h>
