@@ -21,6 +21,29 @@
 
 namespace mir
 {
+    namespace
+    {
+        // Where games/ lives. Normally that is next to the executable, beside
+        // the copies CMake made. A development build also writes an
+        // asset_workspace.json there pointing back at the source tree, so the
+        // editor's import workflow edits the real game data instead of a copy.
+        std::filesystem::path ProjectRoot()
+        {
+            const std::optional<nlohmann::json> binding =
+                ReadJsonFile(ExecutableDir() / "asset_workspace.json");
+
+            if (binding && binding->is_object() && binding->value("version", 0) == 1)
+            {
+                const std::filesystem::path source = binding->value("sourceRoot", "");
+                std::error_code ec;
+                if (std::filesystem::is_directory(source / "games", ec))
+                    return source;
+            }
+
+            return ExecutableDir();
+        }
+    } // namespace
+
     std::optional<std::string> ReadDefaultGame()
     {
         const std::filesystem::path path = ExecutableDir() / kEngineManifestFileName;
@@ -44,11 +67,11 @@ namespace mir
 
     std::optional<std::filesystem::path> NormalizeGameDir(const std::string &requested)
     {
-        const std::filesystem::path &exeDir = ExecutableDir();
+        const std::filesystem::path rootDir = ProjectRoot();
 
         std::filesystem::path dir = std::filesystem::path(requested).lexically_normal();
         if (dir.is_absolute())
-            dir = dir.lexically_relative(exeDir.lexically_normal());
+            dir = dir.lexically_relative(rootDir.lexically_normal());
 
         // lexically_normal keeps a trailing separator as an empty filename
         if (!dir.empty() && dir.filename().empty())
@@ -56,14 +79,14 @@ namespace mir
 
         if (dir.empty() || dir == "." || dir.has_root_path() || *dir.begin() == "..")
         {
-            MIR_LOG_ERROR("game directory '{}' is not inside '{}'", requested, exeDir.string());
+            MIR_LOG_ERROR("game directory '{}' is not inside '{}'", requested, rootDir.string());
             return std::nullopt;
         }
 
         std::error_code ec;
-        if (!std::filesystem::is_directory(exeDir / dir, ec))
+        if (!std::filesystem::is_directory(rootDir / dir, ec))
         {
-            MIR_LOG_ERROR("game directory '{}' does not exist", (exeDir / dir).string());
+            MIR_LOG_ERROR("game directory '{}' does not exist", (rootDir / dir).string());
             return std::nullopt;
         }
 
@@ -72,7 +95,7 @@ namespace mir
 
     std::optional<GameProject> LoadGameProject(const std::filesystem::path &gameDir)
     {
-        const std::filesystem::path root = ExecutableDir() / gameDir;
+        const std::filesystem::path root = ProjectRoot() / gameDir;
         const std::filesystem::path manifestPath = root / kGameManifestFileName;
 
         std::error_code manifestEc;
@@ -131,7 +154,7 @@ namespace mir
     {
         std::vector<GameProject> projects;
 
-        const std::filesystem::path gamesDir = ExecutableDir() / "games";
+        const std::filesystem::path gamesDir = ProjectRoot() / "games";
 
         std::error_code ec;
         for (const std::filesystem::directory_entry &entry : std::filesystem::directory_iterator(gamesDir, ec))
@@ -165,7 +188,7 @@ namespace mir
             return false;
         }
 
-        const std::filesystem::path root = ExecutableDir() / "games" / name;
+        const std::filesystem::path root = ProjectRoot() / "games" / name;
 
         std::error_code ec;
         if (std::filesystem::exists(root, ec))

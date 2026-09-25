@@ -23,7 +23,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 VK_DEFINE_HANDLE(VmaAllocator)
@@ -55,7 +57,19 @@ namespace mir
 
         // kNullMaterial means "use the renderer's default material".
         MaterialHandle material;
+
+        // Morph/skin data for a model draw, read through set 2; empty for
+        // everything else. Slot 2 is reserved for the material parameters the
+        // renderer writes in - see BindModelDescriptors.
+        std::span<const glm::vec4> deformation;
+
+        // Drawn after the opaque items, back to front. RenderSystem sorts.
+        bool transparent = false;
     };
+
+    // Draw items produced outside the MeshRenderer query (by ModelSystem),
+    // picked up by RenderSystem as a World resource.
+    struct ModelDrawItems { std::vector<DrawItem> items; };
 
     // One camera's worth of draw items, clipped to a screen-space rect
     struct RenderView
@@ -87,7 +101,15 @@ namespace mir
 
         bool DestroyMaterial(MaterialHandle handle);
 
+        void CaptureNextFrame(const std::filesystem::path &path) { mCapturePath = path; }
+
         void ReleaseSceneResources();
+
+        // Releases a selected model generation after a replacement has been
+        // prepared. Handles not present in these spans remain valid.
+        void ReleaseModelResources(std::span<const MeshHandle> meshes,
+                                   std::span<const MaterialHandle> materials,
+                                   std::span<const TextureHandle> textures);
 
         VkExtent2D SwapchainExtent() const { return mSwapchainExtent; }
 
@@ -132,10 +154,19 @@ namespace mir
         bool CreateRenderCompleteSemaphores();
         void DestroyRenderCompleteSemaphores();
         bool CreatePipelineLayout();
-        bool CreateTextureSampler();
+        // One VkSampler per distinct SamplerDesc, shared by every material that
+        // asks for it; VK_NULL_HANDLE on failure.
+        VkSampler AcquireSampler(const SamplerDesc &desc);
+        void DestroySamplers();
         bool CreateDefaultTextures();
         bool CreateCameraResources();
         void DestroyCameraResources();
+        bool CreateModelDescriptors();
+        bool BindModelDescriptors(VkCommandBuffer cmd, const GpuMaterial &material, const DrawItem &item);
+        void ResetModelFrame(uint32_t frame);
+        void DestroyModelResources(bool shutdown);
+        bool RecordCapture(VkCommandBuffer cmd, uint32_t imageIndex);
+        void FinishCapture();
         VkPipeline BuildPipeline(const MaterialDesc &desc);
         bool CreateSkyPipeline();
         void DestroyMeshes();
@@ -205,8 +236,9 @@ namespace mir
         VkDescriptorSetLayout mMaterialSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool mMaterialDescriptorPool = VK_NULL_HANDLE;
 
-        // One shared sampler.
-        VkSampler mTextureSampler = VK_NULL_HANDLE;
+        // Samplers, keyed by a packed SamplerDesc. The renderer owns them all;
+        // a GpuMaterial only borrows one.
+        std::unordered_map<uint64_t, VkSampler> mSamplers;
 
         // set 1: binding 0 = per-view viewProj, as a dynamic uniform buffer.
         constexpr static uint32_t kMaxViewsPerFrame = 16;
@@ -219,6 +251,17 @@ namespace mir
         VmaAllocation mCameraAllocations[kFramesInFlight]{};
         std::byte *mCameraMapped[kFramesInFlight]{};
         VkDeviceSize mCameraAlignedSize = 0;
+
+        VkDescriptorSetLayout mModelSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool mModelPools[kFramesInFlight]{};
+
+        struct ModelFrameBuffer { VkBuffer buffer; VmaAllocation allocation; };
+        std::vector<ModelFrameBuffer> mModelBuffers[kFramesInFlight];
+
+        std::filesystem::path mCapturePath;
+        VkBuffer mCaptureBuffer = VK_NULL_HANDLE;
+        VmaAllocation mCaptureAllocation = VK_NULL_HANDLE;
+        bool mCanCapture = false;
 
         VkPipelineLayout mSkyPipelineLayout = VK_NULL_HANDLE;
         VkPipeline mSkyPipeline = VK_NULL_HANDLE;
@@ -242,6 +285,10 @@ namespace mir
         {
             VkPipeline mPipeline = VK_NULL_HANDLE;
             VkDescriptorSet mDescriptorSet = VK_NULL_HANDLE;
+            // alphaMode, alphaCutoff, doubleSided, unused. Handed to the model
+            // shader through set 2, since the push constant range is full.
+            glm::vec4 mParameters{};
+            bool mModelShader = false;
             uint32_t mGeneration = 0;
         };
 
@@ -256,6 +303,7 @@ namespace mir
             VkImage mImage = VK_NULL_HANDLE;
             VmaAllocation mAllocation = VK_NULL_HANDLE;
             VkImageView mView = VK_NULL_HANDLE;
+            uint32_t mLevels = 1;
             uint32_t mGeneration = 0; //< 0 = slot never filled
         };
 

@@ -5,6 +5,8 @@ find_package(volk CONFIG REQUIRED)
 # VMA : vulkan memory manager
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 find_package(glm CONFIG REQUIRED)
+find_package(Stb REQUIRED)
+target_include_directories(engine_renderer PRIVATE ${Stb_INCLUDE_DIR})
 
 target_link_libraries(engine_renderer
     PUBLIC volk::volk_headers
@@ -41,6 +43,7 @@ target_sources(engine_renderer PRIVATE
     src/renderer/RenderSettings.cpp
     src/renderer/Shapes.cpp
     src/renderer/VulkanRenderer.cpp
+    src/renderer/VulkanModel.cpp
     src/renderer/vulkan/VmaImpl.cpp
 )
 if(ENGINE_FAMILY_DESKTOP)

@@ -12,6 +12,7 @@
 #include <core/ecs/EngineMode.h>
 #include <core/platform/Surface.h>
 #include <editor/EditorCamera.h>
+#include <editor/panels/AssetImportPanel.h>
 #include <editor/panels/HierarchyPanel.h>
 #include <editor/panels/InspectorPanel.h>
 #include <editor/panels/LogPanel.h>
@@ -63,6 +64,7 @@ namespace mir
         // then the same open-into-new-directory path as mOpenProject
         std::string mCreateProjectName;
         bool mCreateProjectRayTracing = false;
+        AssetImportAction mAssetImport;
     };
 
     class Editor
@@ -76,7 +78,8 @@ namespace mir
         Editor(Editor &&) = delete;
         Editor &operator=(Editor &&) = delete;
 
-        bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath, World &world);
+        bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath,
+                        World &world);
 
         void Shutdown(VulkanRenderer &renderer);
 
@@ -84,7 +87,7 @@ namespace mir
 
         EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                                  const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-                                 std::string_view currentProject, World &world);
+                                 std::string_view currentProject, World &world, const AssetImportView &assetImport);
 
         ImDrawData *EndFrame();
 
@@ -113,6 +116,7 @@ namespace mir
         bool mInitialized = false;
         bool mShowStyleEditor = false;
         bool mShowProjectSettings = false;
+        bool mShowAssetImport = false;
         std::string mImGuiIniPath;
         std::filesystem::path mProjectSettingsPath;
         VkRect2D mSceneViewportRect{};
@@ -120,6 +124,7 @@ namespace mir
         std::vector<PixelRect> mTitleBarInteractiveRects;
         LogPanel mLogPanel;
         HierarchyPanel mHierarchyPanel;
+        AssetImportPanel mAssetImportPanel;
         InspectorPanel mInspectorPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
         EditorCamera mCamera;
@@ -137,4 +142,4 @@ namespace mir
         char mNewProjectName[64] = {};
         bool mNewProjectRayTracing = false;
     };
-}
+} // namespace mir

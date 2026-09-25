@@ -69,3 +69,25 @@ TEST_CASE("LaunchProcess reports a program that does not exist", "[process]")
     const std::vector<std::string> args;
     CHECK_FALSE(mir::LaunchProcess(mir::ExecutableDir() / "no_such_program.exe", args, true).has_value());
 }
+
+TEST_CASE("ChildProcess starts on demand and exposes its eventual exit code", "[process]")
+{
+#if defined(_WIN32)
+    char *comspec = nullptr;
+    std::size_t length = 0;
+    REQUIRE(_dupenv_s(&comspec, &length, "ComSpec") == 0);
+    REQUIRE(comspec != nullptr);
+    const std::filesystem::path shell = comspec;
+    std::free(comspec);
+    const std::vector<std::string> args{"/c", "exit 7"};
+#else
+    const std::filesystem::path shell = "/bin/sh";
+    const std::vector<std::string> args{"-c", "exit 7"};
+#endif
+    mir::ChildProcess child;
+    REQUIRE(child.Start(shell, args));
+    const auto exitCode = child.Wait();
+    REQUIRE(exitCode);
+    CHECK(*exitCode == 7);
+    CHECK_FALSE(child.Running());
+}

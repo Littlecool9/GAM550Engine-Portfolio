@@ -49,6 +49,8 @@ namespace mir
 
         const RawInputSnapshot &RawInput() const override { return mRawInput; }
 
+        std::span<const std::string> DroppedFiles() const override { return mDroppedFiles; }
+
         // Read by the Win32-only title bar WndProc hook to answer
         // WM_NCHITTEST; meaningless elsewhere.
         std::span<const PixelRect> TitleBarInteractiveRects() const { return mTitleBarInteractiveRects; }
@@ -57,6 +59,8 @@ namespace mir
         static void OnFramebufferSize(GLFWwindow *handle, int width, int height);
 
         static void OnScroll(GLFWwindow *handle, double xoffset, double yoffset);
+
+        static void OnDrop(GLFWwindow *handle, int count, const char **paths);
 
         // Win32 only: installs/removes the WndProc subclass answering
         // WM_NCCALCSIZE / WM_NCHITTEST / WM_NCACTIVATE for the custom title
@@ -71,6 +75,7 @@ namespace mir
         std::string mTitle;
         bool mHasCustomTitleBar = false;
         std::vector<PixelRect> mTitleBarInteractiveRects;
+        std::vector<std::string> mDroppedFiles;
         RawInputSnapshot mRawInput;
     };
 }

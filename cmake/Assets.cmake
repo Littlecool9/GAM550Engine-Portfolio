@@ -64,13 +64,18 @@ function(engine_cook_assets target)
     # recook-on-edit, and DEPENDS on the AssetCooker target recooks when the
     # cooker itself changes.
     set(stamp "${CMAKE_BINARY_DIR}/${target}_assets_cooked.stamp")
+    # A removed file has no mtime left to invalidate the stamp. Track membership
+    # as well as individual file contents (also covers deleted glTF subassets).
+    set(source_list "${CMAKE_BINARY_DIR}/${target}_asset_sources.txt")
+    list(SORT source_files)
+    file(CONFIGURE OUTPUT "${source_list}" CONTENT "${source_files}\n" @ONLY)
 
     add_custom_command(
         OUTPUT "${stamp}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${out_dir}"
         COMMAND AssetCooker ${cooker_args} --out "${out_dir}"
         COMMAND "${CMAKE_COMMAND}" -E touch "${stamp}"
-        DEPENDS AssetCooker ${source_files}
+        DEPENDS AssetCooker "${source_list}" ${source_files}
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         COMMENT "Cooking assets for ${target}"
         VERBATIM

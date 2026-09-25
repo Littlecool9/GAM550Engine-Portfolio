@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 
 namespace mir
 {
@@ -69,6 +70,10 @@ namespace mir
             static const RawInputSnapshot kEmpty{};
             return kEmpty;
         }
+
+        // Files the OS dropped on the window during the last PollEvents.
+        // Like the scroll delta, they live for exactly one frame.
+        virtual std::span<const std::string> DroppedFiles() const { return {}; }
 
         static std::unique_ptr<Window> Create(const WindowDesc &desc);
 

@@ -5,6 +5,10 @@
 
 /logs
 
+# Local code retrieval caches
+/.rag/
+__pycache__/
+
 # IDE
 /.idea
 /.vscode

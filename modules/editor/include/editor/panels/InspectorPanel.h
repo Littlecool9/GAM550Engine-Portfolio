@@ -10,12 +10,13 @@
 #pragma once
 
 #include <core/ecs/World.h>
+#include <editor/panels/AssetImportPanel.h>
 
 namespace mir
 {
     class InspectorPanel
     {
     public:
-        void Draw(World &world);
+        void Draw(World &world, const AssetImportView &assets);
     };
-}
+} // namespace mir
