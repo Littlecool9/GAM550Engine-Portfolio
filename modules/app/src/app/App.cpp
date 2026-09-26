@@ -92,10 +92,20 @@ namespace mir
             return false;
         }
 
+        mSplash.SetProgress("Initializing UI...", 0.4f);
+        if (!mImGui.Initialize(*mWindow, mRenderer))
+        {
+            MIR_LOG_ERROR("ImGui initialization failed");
+            mRenderer.Shutdown();
+            mWindow.reset();
+            return false;
+        }
+
         mSplash.SetProgress("Initializing editor...", 0.5f);
-        if (!mEditor.Initialize(*mWindow, mRenderer, mProject.mProjectSettingsPath, mWorld))
+        if (!mEditor.Initialize(mImGui, *mWindow, mProject.mProjectSettingsPath, mWorld))
         {
             MIR_LOG_ERROR("Editor initialization failed");
+            mImGui.Shutdown(mRenderer);
             mRenderer.Shutdown();
             mWindow.reset();
             return false;
@@ -359,7 +369,7 @@ namespace mir
             if (mAssetImport.PendingApply() && IsEditing(mWorld))
                 ApplyImportedAssets();
 
-            mEditor.BeginFrame();
+            mImGui.BeginFrame();
 
             if (mWindow->Width() != 0 && mWindow->Height() != 0)
             {
@@ -423,7 +433,7 @@ namespace mir
                 }
             }
 
-            mRenderer.SetImGuiDrawData(mEditor.EndFrame());
+            mRenderer.SetImGuiDrawData(mImGui.EndFrame());
 
             mRenderSystem->SetViewportRect(0, mDesc.mEnableEditorLayout ? mEditor.SceneViewportRect() : VkRect2D{});
 
@@ -511,7 +521,8 @@ namespace mir
         mAssetManifest.reset();
         mAssetLoadFailed = false;
 
-        mEditor.Shutdown(mRenderer);
+        mEditor.Shutdown();
+        mImGui.Shutdown(mRenderer);
 
         mRenderer.Shutdown();
         mWindow.reset();

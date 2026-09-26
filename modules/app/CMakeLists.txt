@@ -6,6 +6,7 @@ target_link_libraries(engine_app
            mir::window
            mir::renderer
            mir::editor
+           mir::imguiruntime
            mir::scene
            mir::script
     PRIVATE mir::input

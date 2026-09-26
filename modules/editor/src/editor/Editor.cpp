@@ -1,8 +1,8 @@
 /**
  * @file Editor.cpp
  * @author Sumin Park
- * @brief Owns the ImGui context, backend, and the Slate editor shell
- *        (dockspace, Hierarchy/Inspector/Output panels, Debug menu).
+ * @brief The Slate editor shell (dockspace, Hierarchy/Inspector/Output
+ *        panels, Debug menu), drawn into the context ImGuiRuntime owns.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -25,8 +25,6 @@
 
 #include <IconsFontAwesome6.h>
 #include <imgui.h>
-#include <imgui_impl_glfw.h>
-#include <imgui_impl_vulkan.h>
 #include <imgui_internal.h>
 #include <ImGuizmo.h>
 
@@ -68,18 +66,20 @@ namespace mir
         }
     } // namespace
 
-    // Shutdown needs a VulkanRenderer this doesn't have, so skipping it leaks
-    // the ImGui context rather than crashing into a dangling device.
     Editor::~Editor() {}
 
-    bool Editor::Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath,
+    bool Editor::Initialize(const ImGuiRuntime &imgui, Window &window, std::filesystem::path projectSettingsPath,
                             World &world)
     {
+        if (!imgui.IsInitialized())
+        {
+            MIR_LOG_ERROR("Editor needs an initialized ImGuiRuntime");
+            return false;
+        }
+
         mProjectSettingsPath = std::move(projectSettingsPath);
 
         world.EmplaceResource<Selection>();
-
-        ImGui::CreateContext();
 
         ImGuiIO &io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -87,72 +87,28 @@ namespace mir
         mImGuiIniPath = (ExecutableDir() / "imgui.ini").string();
         io.IniFilename = mImGuiIniPath.c_str();
 
-        ImFontConfig fontConfig;
-        fontConfig.OversampleH = 3;
-        const std::string fontPath = FontPath("Inter.ttf").string();
-        if (io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 16.0f, &fontConfig) == nullptr)
-        {
-            MIR_LOG_ERROR("Failed to load font: {}", fontPath);
-            io.Fonts->AddFontDefault();
-        }
-
-        static const ImWchar iconRanges[] = {ICON_MIN_FA, ICON_MAX_FA, 0};
-        ImFontConfig iconConfig;
-        iconConfig.MergeMode = true;
-        iconConfig.PixelSnapH = true;
-        iconConfig.GlyphMinAdvanceX = 16.0f;
-        const std::string iconFontPath = FontPath(FONT_ICON_FILE_NAME_FAS).string();
-        if (io.Fonts->AddFontFromFileTTF(iconFontPath.c_str(), 16.0f, &iconConfig, iconRanges) == nullptr)
-            MIR_LOG_ERROR("Failed to load icon font: {}", iconFontPath);
-
         EditorTheme::Apply();
         EditorTheme::ScaleForDpi(window.ContentScale());
-
-        void *nativeHandle = window.NativeHandleForImGui();
-        if (nativeHandle == nullptr)
-        {
-            MIR_LOG_ERROR("Window backend has no native handle for ImGui");
-            ImGui::DestroyContext();
-            return false;
-        }
-
-        if (!ImGui_ImplGlfw_InitForVulkan(static_cast<GLFWwindow *>(nativeHandle), true))
-        {
-            MIR_LOG_ERROR("ImGui_ImplGlfw_InitForVulkan failed");
-            ImGui::DestroyContext();
-            return false;
-        }
-
-        if (!renderer.InitImGuiVulkanBackend())
-        {
-            MIR_LOG_ERROR("ImGui Vulkan backend initialization failed");
-            ImGui_ImplGlfw_Shutdown();
-            ImGui::DestroyContext();
-            return false;
-        }
 
         mWindow = &window;
         mInitialized = true;
         return true;
     }
 
-    void Editor::Shutdown(VulkanRenderer &renderer)
+    void Editor::Shutdown()
     {
         if (!mInitialized)
             return;
 
-        renderer.ShutdownImGuiVulkanBackend();
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
+        
+        ImGuiIO &io = ImGui::GetIO();
+        if (io.IniFilename != nullptr && ImGui::GetCurrentContext()->SettingsLoaded)
+            ImGui::SaveIniSettingsToDisk(io.IniFilename);
+        
+        io.IniFilename = nullptr;
+
         mWindow = nullptr;
         mInitialized = false;
-    }
-
-    void Editor::BeginFrame()
-    {
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
     }
 
     void Editor::DrawTitleBar()
@@ -703,12 +659,6 @@ namespace mir
         }
 
         return actions;
-    }
-
-    ImDrawData *Editor::EndFrame()
-    {
-        ImGui::Render();
-        return ImGui::GetDrawData();
     }
 
     bool Editor::WantsCaptureKeyboard() const { return ImGui::GetIO().WantCaptureKeyboard; }

@@ -1,7 +1,8 @@
 engine_add_module(editor)
 
 target_link_libraries(engine_editor
-    PUBLIC mir::renderer
+    PUBLIC mir::imguiruntime
+           mir::renderer
            mir::window
            mir::input
     PRIVATE mir::core

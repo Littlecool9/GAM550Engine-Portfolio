@@ -34,7 +34,8 @@ modules/              one static library each, mir::<name>
   serial/               JSON documents on disk
   script/               Lua embedding and ECS bindings
   audio/                Wwise lifetime and the per-frame pump
-  editor/               ImGui context, backends, editor shell
+  imguiruntime/         ImGui context lifetime, fonts, backends, frame bracket
+  editor/               editor shell, drawn into imguiruntime's context
   editortheme/          the Slate ImGui theme, data only
   app/                  composition root and main loop
     include/<name>/       public API — the whole surface of the module

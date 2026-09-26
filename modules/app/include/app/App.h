@@ -17,6 +17,7 @@
 #include <core/ecs/SystemScheduler.h>
 #include <core/ecs/World.h>
 #include <editor/Editor.h>
+#include <imguiruntime/ImGuiRuntime.h>
 #include <renderer/VulkanRenderer.h>
 #include <scene/PlaySnapshot.h>
 #include <scene/SceneAsset.h>
@@ -148,6 +149,7 @@ namespace mir
         SplashScreen mSplash;
         std::unique_ptr<Window> mWindow;
         VulkanRenderer mRenderer;
+        ImGuiRuntime mImGui;
         Editor mEditor;
         AssetImportManager mAssetImport;
 
