@@ -59,10 +59,11 @@ namespace mir
         std::string_view PathOf(const AssetManifestEntry &entry) const;
 
         std::size_t Count() const { return mEntries.size(); }
+        std::span<const AssetManifestEntry> Entries() const { return mEntries; }
 
     private:
         std::vector<AssetManifestEntry> mEntries;
         std::string mPathTable;
         std::unordered_map<uint64_t, uint32_t> mIndex;
     };
-}
+} // namespace mir

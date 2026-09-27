@@ -38,9 +38,11 @@ add_subdirectory(third_party)
 add_subdirectory(modules/audio)
 add_subdirectory(modules/app)
 add_subdirectory(modules/assets)
+add_subdirectory(modules/animation)
 add_subdirectory(modules/core)
 add_subdirectory(modules/editor)
 add_subdirectory(modules/editortheme)
+add_subdirectory(modules/imguiruntime)
 add_subdirectory(modules/input)
 add_subdirectory(modules/physics)
 add_subdirectory(modules/renderer)
@@ -54,6 +56,13 @@ add_subdirectory(tools/AssetCooker)
 add_executable(MjolnirEngine WIN32)
 target_sources(MjolnirEngine PRIVATE main.cpp)
 
+# Local development binding used by the editor's one-shot import workflow.
+# It is generated into the build tree and never written into game data.
+file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}" asset_workspace_source_root)
+file(GENERATE
+    OUTPUT "$<TARGET_FILE_DIR:MjolnirEngine>/asset_workspace.json"
+    CONTENT "{\n  \"version\": 1,\n  \"sourceRoot\": \"${asset_workspace_source_root}\",\n  \"assetCooker\": \"$<TARGET_FILE:AssetCooker>\"\n}\n")
+
 if(MSVC)
     set_target_properties(MjolnirEngine PROPERTIES LINK_FLAGS "/ENTRY:mainCRTStartup")
 endif()
@@ -64,6 +73,10 @@ engine_add_shaders(MjolnirEngine
 
 engine_add_shaders(MjolnirEngine
     SOURCE assets/shaders/unlit.slang
+    ENTRIES vertexMain:vertex fragmentMain:fragment)
+
+engine_add_shaders(MjolnirEngine
+    SOURCE assets/shaders/model.slang
     ENTRIES vertexMain:vertex fragmentMain:fragment)
 
 engine_add_shaders(MjolnirEngine

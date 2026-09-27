@@ -10,6 +10,8 @@
 #include <app/App.h>
 
 #include "SceneResolve.h"
+#include <animation/ModelPlayer.h>
+#include <animation/ModelSystem.h>
 #include <audio/AudioEmitterSystem.h>
 #include <audio/AudioListenerSystem.h>
 #include <audio/AudioSystem.h>
@@ -42,10 +44,7 @@
 
 namespace mir
 {
-    App::~App()
-    {
-        Shutdown();
-    }
+    App::~App() { Shutdown(); }
 
     bool App::Initialize(const AppDesc &desc)
     {
@@ -54,16 +53,17 @@ namespace mir
         mProjectToOpen.reset();
         mSwitchHookFired = false;
         mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
+        mAssetImport.Initialize(mProject);
 
         audio::Init(mProject.mSoundBankDir);
 
         EnsureDpiAware();
 
-        if (!mSplash.Show({ .mEngineName = desc.mAppName,
+        if (!mSplash.Show({.mEngineName = desc.mAppName,
                            .mVersion = kEngineVersion,
                            .mCopyright = kEngineCopyright,
                            .mStatus = "Creating window...",
-                           .mProgress = 0.0f }))
+                           .mProgress = 0.0f}))
         {
             MIR_LOG_WARN("Splash screen failed to show, continuing without it");
         }
@@ -72,7 +72,7 @@ namespace mir
         windowDesc.mWidth = desc.mWidth;
         windowDesc.mHeight = desc.mHeight;
         windowDesc.mTitle = mProject.mTitle.c_str();
-        windowDesc.mMaximized = true;
+        windowDesc.mMaximized = desc.mEnableEditorLayout;
         windowDesc.mCustomTitleBar = desc.mEnableEditorLayout;
         windowDesc.mStartHidden = true;
 
@@ -84,19 +84,28 @@ namespace mir
         }
 
         mSplash.SetProgress("Initializing renderer...", 0.2f);
-        if (!mRenderer.Initialize({ .window = mWindow.get(),
-                                   .appName = desc.mAppName,
-                                   .enableValidation = desc.mEnableValidation }))
+        if (!mRenderer.Initialize(
+                {.window = mWindow.get(), .appName = desc.mAppName, .enableValidation = desc.mEnableValidation}))
         {
             MIR_LOG_ERROR("Renderer initialization failed");
             mWindow.reset();
             return false;
         }
 
+        mSplash.SetProgress("Initializing UI...", 0.4f);
+        if (!mImGui.Initialize(*mWindow, mRenderer))
+        {
+            MIR_LOG_ERROR("ImGui initialization failed");
+            mRenderer.Shutdown();
+            mWindow.reset();
+            return false;
+        }
+
         mSplash.SetProgress("Initializing editor...", 0.5f);
-        if (!mEditor.Initialize(*mWindow, mRenderer, mProject.mProjectSettingsPath, mWorld))
+        if (!mEditor.Initialize(mImGui, *mWindow, mProject.mProjectSettingsPath, mWorld))
         {
             MIR_LOG_ERROR("Editor initialization failed");
+            mImGui.Shutdown(mRenderer);
             mRenderer.Shutdown();
             mWindow.reset();
             return false;
@@ -115,9 +124,13 @@ namespace mir
         RegisterPhysicsComponents();
         RegisterScriptComponents();
         RegisterAudioComponents();
+        RegisterModelPlayer();
+
+        mWorld.EmplaceResource<ModelDrawItems>();
+        mWorld.EmplaceResource<ModelMorphOverrides>();
 
         // defers structural change
-        mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
+        mWorld.EmplaceResource<FrameCommands>(FrameCommands{&mCommands});
 
         mWorld.EmplaceResource<InputMap>(InputMap::LoadFile(mProject.mProjectSettingsPath).value_or(InputMap{}));
         mWorld.EmplaceResource<RenderSettings>(RenderSettings::LoadFile(mProject.mProjectSettingsPath).value_or(RenderSettings{}));
@@ -137,6 +150,8 @@ namespace mir
 
         // should be before any other system in PostUpdate
         mScheduler.AddSystem<TransformPropagateSystem>(SystemPhase::PostUpdate);
+        mModelSystem =
+            &mScheduler.AddSystem<ModelSystem>(SystemPhase::PostUpdate, mRenderer, Assets(), mProject.mAssetIdRoot);
 
         // after TransformPropagateSystem: it reads the WorldTransform that system writes
         mScheduler.AddSystem<AudioEmitterSystem>(SystemPhase::PostUpdate);
@@ -247,6 +262,9 @@ namespace mir
         mScene = RestoreWorld(mWorld, mPlaySnapshot);
 
         // Play's entities are gone and the restored ones hold no handles yet
+        mModelSystem->Reset();
+        mWorld.Resource<ModelDrawItems>().items.clear();
+        mWorld.Resource<ModelMorphOverrides>().instances.clear();
         mRenderer.ReleaseSceneResources();
 
         ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
@@ -269,6 +287,12 @@ namespace mir
         UnloadScene(mWorld, mScene);
 
         // no scene entity holds a mesh or material handle now
+        if (mModelSystem)
+            mModelSystem->Reset();
+        if (auto *draws = mWorld.TryResource<ModelDrawItems>())
+            draws->items.clear();
+        if (auto *overrides = mWorld.TryResource<ModelMorphOverrides>())
+            overrides->instances.clear();
         mRenderer.ReleaseSceneResources();
     }
 
@@ -300,7 +324,8 @@ namespace mir
             return &*mAssetCache;
 
         if (mAssetLoadFailed)
-            return nullptr; // already tried and logged; do not re-stat the disk every call
+            return nullptr; // already tried and logged; do not re-stat the disk every
+                            // call
 
         const std::filesystem::path manifestPath = CookedAssetsDir() / kAssetManifestFileName;
         mAssetManifest = AssetManifest::LoadFile(manifestPath);
@@ -317,10 +342,7 @@ namespace mir
         return &*mAssetCache;
     }
 
-    SystemContext App::MakeContext(float dt)
-    {
-        return SystemContext{ mWorld, mCommands, dt, mElapsed, mFrame };
-    }
+    SystemContext App::MakeContext(float dt) { return SystemContext{mWorld, mCommands, dt, mElapsed, mFrame}; }
 
     void App::Run()
     {
@@ -339,18 +361,21 @@ namespace mir
             mWindow->PollEvents();
 
             const auto now = std::chrono::steady_clock::now();
-            const float dt = std::min(std::chrono::duration<float>(now - previous).count(),
-                mDesc.mMaxDeltaSeconds);
+            const float dt = std::min(std::chrono::duration<float>(now - previous).count(), mDesc.mMaxDeltaSeconds);
             previous = now;
             mElapsed += dt;
 
-            mEditor.BeginFrame();
+            mAssetImport.Update(IsEditing(mWorld));
+            if (mAssetImport.PendingApply() && IsEditing(mWorld))
+                ApplyImportedAssets();
+
+            mImGui.BeginFrame();
 
             if (mWindow->Width() != 0 && mWindow->Height() != 0)
             {
                 const EditorActions actions = mEditor.DrawLayout(
                     mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<RenderSettings>(),
-                    mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir, mWorld);
+                    mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir, mWorld, mAssetImport.View());
 
                 switch (actions.mScene)
                 {
@@ -376,6 +401,28 @@ namespace mir
                     break;
                 }
 
+                bool assetActionAccepted = true;
+                if (actions.mAssetImport.mKind == AssetImportActionKind::Remove)
+                {
+                    AssetId target = MakeAssetId(actions.mAssetImport.mModelPath);
+                    for (const auto &model : mAssetImport.View().mModels)
+                        if (model.mPath == actions.mAssetImport.mModelPath && model.mAssetId != 0)
+                            target = AssetId{model.mAssetId};
+                    mWorld.GetOrCreateQuery<const ModelPlayer>().ForEach([&](Entity, const ModelPlayer &player) {
+                        AssetId referenced = player.ModelAsset();
+                        if (referenced.IsNull() && !player.ModelName().empty())
+                            referenced = MakeAssetId((std::filesystem::path(mProject.mAssetIdRoot) / player.ModelName())
+                                                         .lexically_normal()
+                                                         .generic_string());
+                        assetActionAccepted &= referenced != target;
+                    });
+                    if (!assetActionAccepted)
+                        mAssetImport.Reject(actions.mAssetImport.mModelPath,
+                                            "cannot remove this asset while a scene entity references it");
+                }
+                if (assetActionAccepted)
+                    mAssetImport.Handle(actions.mAssetImport);
+
                 if (!actions.mOpenProject.empty())
                     RequestOpenProject(actions.mOpenProject);
 
@@ -386,12 +433,12 @@ namespace mir
                 }
             }
 
-            mRenderer.SetImGuiDrawData(mEditor.EndFrame());
+            mRenderer.SetImGuiDrawData(mImGui.EndFrame());
 
-            mRenderSystem->SetViewportRect(0, mEditor.SceneViewportRect());
+            mRenderSystem->SetViewportRect(0, mDesc.mEnableEditorLayout ? mEditor.SceneViewportRect() : VkRect2D{});
 
             // Only feed EditorCamera input in Edit.
-            if (IsEditing(mWorld))
+            if (IsEditing(mWorld) && mDesc.mEnableEditorLayout)
             {
                 mEditor.UpdateCamera(dt);
                 mRenderSystem->SetExternalCamera(0, mEditor.SceneCamera().Matrix(), mEditor.SceneCamera().mLens);
@@ -405,12 +452,14 @@ namespace mir
 
             mScriptReloadWatcher.Poll(Assets(), dt);
 
-            // advances in every mode; FixedUpdate systems check IsSimulating themselves, as ScriptSystem does
+            // advances in every mode; FixedUpdate systems check IsSimulating
+            // themselves, as ScriptSystem does
             const uint32_t fixedSteps = mFixedTimestep.Advance(dt);
 
             SystemContext context = MakeContext(dt);
+            if (!mDesc.mCapturePath.empty() && mFrame + 1 == mDesc.mMaxFrames)
+                mRenderer.CaptureNextFrame(mDesc.mCapturePath);
             mScheduler.Update(context, fixedSteps, mFixedTimestep.mStep);
-
 
             audio::Update();
 
@@ -424,6 +473,32 @@ namespace mir
         }
     }
 
+    void App::ApplyImportedAssets()
+    {
+        auto candidateManifest = AssetManifest::LoadFile(CookedAssetsDir() / kAssetManifestFileName);
+        if (!candidateManifest)
+        {
+            mAssetImport.MarkApplyFailed("the new asset manifest could not be loaded");
+            return;
+        }
+        AssetCache candidate(&*candidateManifest, CookedAssetsDir());
+        std::string error;
+        if (mModelSystem && !mModelSystem->PrepareReload(candidate, error))
+        {
+            mAssetImport.MarkApplyFailed("new model resources were rejected: " + error);
+            return;
+        }
+
+        mAssetCache.reset();
+        mAssetManifest = std::move(candidateManifest);
+        mAssetCache.emplace(&*mAssetManifest, CookedAssetsDir());
+        if (mModelSystem)
+            mModelSystem->CommitReload(&*mAssetCache);
+        mAssetLoadFailed = false;
+        mAssetImport.MarkApplied();
+        MIR_LOG_INFO("Applied imported assets at an Edit frame boundary");
+    }
+
     void App::Shutdown()
     {
         if (!mInitialized)
@@ -435,6 +510,7 @@ namespace mir
         SystemContext stopContext = MakeContext(0.0f);
         mScheduler.Stop(stopContext);
 
+        mAssetImport.Shutdown();
 
         audio::Terminate();
 
@@ -445,11 +521,12 @@ namespace mir
         mAssetManifest.reset();
         mAssetLoadFailed = false;
 
-        mEditor.Shutdown(mRenderer);
+        mEditor.Shutdown();
+        mImGui.Shutdown(mRenderer);
 
         mRenderer.Shutdown();
         mWindow.reset();
         mInitialized = false;
         MIR_LOG_INFO("App shut down");
     }
-}
+} // namespace mir

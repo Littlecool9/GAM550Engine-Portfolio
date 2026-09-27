@@ -24,9 +24,11 @@
 #include <vector>
 #include <cstring>
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <array>
 #include <chrono>
+#include <string_view>
 #include <format>
 
 namespace mir
@@ -66,6 +68,7 @@ namespace mir
             glm::vec4 tint;       // 16
         };
 
+        constexpr std::string_view kModelShaderName = "model";
         struct CameraData
         {
             glm::mat4 viewProj;
@@ -362,7 +365,8 @@ namespace mir
         void ImageBarrier(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspectMask,
             VkImageLayout oldLayout, VkImageLayout newLayout,
             VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess)
+            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess,
+            uint32_t levelCount = 1)
         {
             const VkImageMemoryBarrier2 barrier{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -377,7 +381,7 @@ namespace mir
                 .image = image,
                 .subresourceRange{
                     .aspectMask = aspectMask,
-                    .levelCount = 1,
+                    .levelCount = levelCount,
                     .layerCount = 1 } };
 
             const VkDependencyInfo dep{
@@ -386,6 +390,77 @@ namespace mir
                 .pImageMemoryBarriers = &barrier };
 
             vkCmdPipelineBarrier2(cmd, &dep);
+        }
+        // Level 0, then every smaller level if desc asks for them, packed back
+        // to back into one staging blob with a copy region each. Returns the
+        // level count. The box filter averages in linear light, so an sRGB
+        // image is decoded and re-encoded around the average; alpha is already
+        // linear and is averaged as is.
+        uint32_t BuildMipChain(const TextureDesc &desc, std::vector<std::byte> &bytes,
+            std::vector<VkBufferImageCopy> &regions)
+        {
+            const auto toLinear = [](float v)
+                { return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f); };
+            const auto toSrgb = [](float v)
+                { return v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f; };
+
+            bytes.assign(desc.pixels.begin(), desc.pixels.end());
+            std::vector<std::byte> level(desc.pixels.begin(), desc.pixels.end());
+
+            uint32_t width = desc.width;
+            uint32_t height = desc.height;
+            uint32_t mip = 0;
+            VkDeviceSize offset = 0;
+
+            for (;;)
+            {
+                regions.push_back(VkBufferImageCopy{
+                    .bufferOffset = offset,
+                    .imageSubresource{
+                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .mipLevel = mip,
+                        .baseArrayLayer = 0,
+                        .layerCount = 1 },
+                    .imageExtent{ width, height, 1 } });
+
+                if (!desc.generateMips || (width == 1 && height == 1))
+                    break;
+
+                const uint32_t nextWidth = std::max(width / 2, 1u);
+                const uint32_t nextHeight = std::max(height / 2, 1u);
+                std::vector<std::byte> next(static_cast<size_t>(nextWidth) * nextHeight * 4);
+
+                for (uint32_t y = 0; y < nextHeight; ++y)
+                    for (uint32_t x = 0; x < nextWidth; ++x)
+                        for (uint32_t c = 0; c < 4; ++c)
+                        {
+                            float sum = 0.0f;
+                            uint32_t samples = 0;
+                            for (uint32_t sy = y * height / nextHeight; sy < (y + 1) * height / nextHeight; ++sy)
+                                for (uint32_t sx = x * width / nextWidth; sx < (x + 1) * width / nextWidth; ++sx)
+                                {
+                                    const float v =
+                                        std::to_integer<uint8_t>(level[(static_cast<size_t>(sy) * width + sx) * 4 + c]) / 255.0f;
+                                    sum += (c < 3 && desc.srgb) ? toLinear(v) : v;
+                                    ++samples;
+                                }
+
+                            float v = sum / static_cast<float>(samples);
+                            if (c < 3 && desc.srgb)
+                                v = toSrgb(v);
+                            next[(static_cast<size_t>(y) * nextWidth + x) * 4 + c] =
+                                static_cast<std::byte>(std::clamp<long>(std::lround(v * 255.0f), 0, 255));
+                        }
+
+                offset = bytes.size();
+                bytes.insert(bytes.end(), next.begin(), next.end());
+                level = std::move(next);
+                width = nextWidth;
+                height = nextHeight;
+                ++mip;
+            }
+
+            return mip + 1;
         }
         std::optional<std::vector<uint32_t>> ReadSpirv(const std::filesystem::path &path)
         {
@@ -468,9 +543,6 @@ namespace mir
             return false;
 
         if (!CreateFrameResources())
-            return false;
-
-        if (!CreateTextureSampler())
             return false;
 
         if (!CreateDefaultTextures())
@@ -589,15 +661,12 @@ namespace mir
             DestroyMeshes();
             // before mMaterialDescriptorPool: frees each material's set
             DestroyMaterials();
+            DestroyModelResources(true);
             DestroyTextures();
             // before mAllocator: frees the camera UBO buffers
             DestroyCameraResources();
 
-            if (mTextureSampler != VK_NULL_HANDLE)
-            {
-                vkDestroySampler(mDevice, mTextureSampler, nullptr);
-                mTextureSampler = VK_NULL_HANDLE;
-            }
+            DestroySamplers();
 
             if (mMaterialDescriptorPool != VK_NULL_HANDLE)
             {
@@ -1013,6 +1082,7 @@ namespace mir
         const VkSurfaceFormatKHR surfaceFormat = ChooseSurfaceFormat(mPhysicalDevice, mSurface);
         const VkPresentModeKHR presentMode = ChoosePresentMode(mPhysicalDevice, mSurface);
         const VkExtent2D extent = ChooseExtent(caps, *mWindow);
+        mCanCapture = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
 
         uint32_t imageCount = caps.minImageCount + 1;
         if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount)
@@ -1028,7 +1098,8 @@ namespace mir
             .imageColorSpace = surfaceFormat.colorSpace,
             .imageExtent = extent,
             .imageArrayLayers = 1,
-            .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+            .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                (mCanCapture ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0u),
             // One family does graphics and present, so no ownership transfers.
             .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
             .preTransform = caps.currentTransform,
@@ -1282,6 +1353,10 @@ namespace mir
 
     bool VulkanRenderer::CreatePipelineLayout()
     {
+        // set 2 first: CreatePipelineLayout puts its layout in the pipeline.
+        if (!CreateModelDescriptors())
+            return false;
+
         // binding 0 = base color, binding 1 = normal map. Every material
         // uses this same layout, whether or not its shader samples them.
         const std::array<VkDescriptorSetLayoutBinding, 2> setBindings{ {
@@ -1305,8 +1380,9 @@ namespace mir
             return false;
         }
 
-        // One set per material.
-        constexpr uint32_t kMaxMaterials = 256;
+        // One set per material. A model primitive eats two (front and mirrored
+        // front face), so this is not as generous as it looks.
+        constexpr uint32_t kMaxMaterials = 1024;
         const VkDescriptorPoolSize poolSize{
             .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             .descriptorCount = kMaxMaterials * static_cast<uint32_t>(setBindings.size()) };
@@ -1329,9 +1405,10 @@ namespace mir
             .offset = 0,
             .size = sizeof(PushData) };
 
-        // set 0 = material (textures), set 1 = per-view camera UBO.
-        const std::array<VkDescriptorSetLayout, 2> setLayouts{
-            mMaterialSetLayout, mCameraSetLayout };
+        // set 0 = material (textures), set 1 = per-view camera UBO,
+        // set 2 = per-draw model data.
+        const std::array<VkDescriptorSetLayout, 3> setLayouts{
+            mMaterialSetLayout, mCameraSetLayout, mModelSetLayout };
 
         const VkPipelineLayoutCreateInfo layoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -1386,8 +1463,6 @@ namespace mir
              .module = fragModule,
              .pName = "fragmentMain" } };
 
-        // No vertex buffers: the vertex shader synthesizes a fullscreen
-        // triangle from SV_VertexID.
         const VkPipelineVertexInputStateCreateInfo vertexInput{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
 
@@ -1734,29 +1809,48 @@ namespace mir
         }
     }
 
-    bool VulkanRenderer::CreateTextureSampler()
+    VkSampler VulkanRenderer::AcquireSampler(const SamplerDesc &desc)
     {
+        const uint64_t key = (static_cast<uint64_t>(desc.magFilter) << 40) |
+                             (static_cast<uint64_t>(desc.minFilter) << 32) |
+                             (static_cast<uint64_t>(desc.mipmapMode) << 24) |
+                             (static_cast<uint64_t>(desc.addressModeU) << 16) |
+                             (static_cast<uint64_t>(desc.addressModeV) << 8) |
+                             (desc.useMips ? 1ull : 0ull);
+
+        if (const auto it = mSamplers.find(key); it != mSamplers.end())
+            return it->second;
+
         const VkSamplerCreateInfo info{
             .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-            .magFilter = VK_FILTER_LINEAR,
-            .minFilter = VK_FILTER_LINEAR,
-            .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-            .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-            .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .magFilter = desc.magFilter,
+            .minFilter = desc.minFilter,
+            .mipmapMode = desc.mipmapMode,
+            .addressModeU = desc.addressModeU,
+            .addressModeV = desc.addressModeV,
             .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
             .anisotropyEnable = VK_FALSE,
             .compareEnable = VK_FALSE,
             .minLod = 0.0f,
-            .maxLod = 0.0f,
+            .maxLod = desc.useMips ? VK_LOD_CLAMP_NONE : 0.0f,
             .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK };
 
-        if (vkCreateSampler(mDevice, &info, nullptr, &mTextureSampler) != VK_SUCCESS)
+        VkSampler sampler = VK_NULL_HANDLE;
+        if (vkCreateSampler(mDevice, &info, nullptr, &sampler) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("vkCreateSampler failed");
-            return false;
+            return VK_NULL_HANDLE;
         }
 
-        return true;
+        mSamplers.emplace(key, sampler);
+        return sampler;
+    }
+
+    void VulkanRenderer::DestroySamplers()
+    {
+        for (const auto &[key, sampler] : mSamplers)
+            vkDestroySampler(mDevice, sampler, nullptr);
+        mSamplers.clear();
     }
 
     bool VulkanRenderer::CreateDefaultTextures()
@@ -2141,20 +2235,27 @@ namespace mir
             .stride = sizeof(Vertex),
             .inputRate = VK_VERTEX_INPUT_RATE_VERTEX };
 
-        const std::array<VkVertexInputAttributeDescription, 3> vertexAttributes{ { { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, pos) },
+        const std::array<VkVertexInputAttributeDescription, 6> vertexAttributes{ { { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, pos) },
                                                                                  { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, color) },
-                                                                                 { .location = 2, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, normal) } } };
+                                                                                 { .location = 2, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, normal) },
+                                                                                 { .location = 3, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, uv) },
+                                                                                 { .location = 4, .binding = 0, .format = VK_FORMAT_R32_SFLOAT, .offset = offsetof(Vertex, alpha) },
+                                                                                 { .location = 5, .binding = 0, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = offsetof(Vertex, tangent) } } };
 
         const VkPipelineVertexInputStateCreateInfo vertexInput{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             .vertexBindingDescriptionCount = 1,
             .pVertexBindingDescriptions = &vertexBinding,
-            .vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexAttributes.size()),
+            // Only the model shader reads uv, alpha and tangent. Declaring
+            // them for the others is legal but makes the validation layer
+            // complain about attributes no shader consumes.
+            .vertexAttributeDescriptionCount =
+                desc.shaderName == kModelShaderName ? static_cast<uint32_t>(vertexAttributes.size()) : 3u,
             .pVertexAttributeDescriptions = vertexAttributes.data() };
 
         const VkPipelineInputAssemblyStateCreateInfo inputAssembly{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .topology = desc.topology,
             .primitiveRestartEnable = VK_FALSE };
 
         const VkPipelineViewportStateCreateInfo viewportState{
@@ -2170,7 +2271,7 @@ namespace mir
             .rasterizerDiscardEnable = VK_FALSE,
             .polygonMode = desc.polygonMode,
             .cullMode = desc.cullMode,
-            .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .frontFace = desc.frontFace,
             .depthBiasEnable = VK_FALSE,
             .lineWidth = 1.0f };
 
@@ -2180,14 +2281,20 @@ namespace mir
             .sampleShadingEnable = VK_FALSE };
 
         const VkPipelineColorBlendAttachmentState blendAttachment{
-            .blendEnable = VK_FALSE,
+            .blendEnable = desc.alphaMode == MaterialAlphaMode::Blend ? VK_TRUE : VK_FALSE,
+            .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .colorBlendOp = VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .alphaBlendOp = VK_BLEND_OP_ADD,
             .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT };
 
         const VkPipelineDepthStencilStateCreateInfo depthStencil{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .depthTestEnable = VK_TRUE,
-            .depthWriteEnable = VK_TRUE,
+            .depthWriteEnable = desc.alphaMode == MaterialAlphaMode::Blend ? VK_FALSE : VK_TRUE,
             .depthCompareOp = VK_COMPARE_OP_LESS,
             .depthBoundsTestEnable = VK_FALSE,
             .stencilTestEnable = VK_FALSE };
@@ -2267,6 +2374,15 @@ namespace mir
             return kNullMaterial;
         }
 
+        // Shared with every other material that asked for the same state, so
+        // this is not destroyed with the material.
+        const VkSampler sampler = AcquireSampler(desc.sampler);
+        if (sampler == VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(mDevice, pipeline, nullptr);
+            return kNullMaterial;
+        }
+
         VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
         const VkDescriptorSetAllocateInfo setAllocInfo{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -2282,11 +2398,11 @@ namespace mir
         }
 
         const VkDescriptorImageInfo baseColorInfo{
-            .sampler = mTextureSampler,
+            .sampler = sampler,
             .imageView = baseColor->mView,
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
         const VkDescriptorImageInfo normalInfo{
-            .sampler = mTextureSampler,
+            .sampler = sampler,
             .imageView = normal->mView,
             .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
@@ -2307,6 +2423,10 @@ namespace mir
         vkUpdateDescriptorSets(mDevice, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
         const bool unlit = desc.shaderName == "unlit";
+        // The model shader reads these out of set 2; see BindModelDescriptors.
+        const glm::vec4 parameters{ static_cast<float>(desc.alphaMode), desc.alphaCutoff,
+            desc.cullMode == VK_CULL_MODE_NONE ? 1.0f : 0.0f, 0.0f };
+        const bool modelShader = desc.shaderName == kModelShaderName;
 
         uint32_t index;
         uint32_t generation;
@@ -2315,13 +2435,13 @@ namespace mir
             index = mFreeMaterialIndices.back();
             mFreeMaterialIndices.pop_back();
             generation = mMaterials[index].mGeneration;
-            mMaterials[index] = GpuMaterial{ pipeline, descriptorSet, generation, unlit };
+            mMaterials[index] = GpuMaterial{ pipeline, descriptorSet, parameters, modelShader, generation, unlit };
         }
         else
         {
             index = static_cast<uint32_t>(mMaterials.size());
             generation = 1;
-            mMaterials.push_back(GpuMaterial{ pipeline, descriptorSet, generation, unlit });
+            mMaterials.push_back(GpuMaterial{ pipeline, descriptorSet, parameters, modelShader, generation, unlit });
         }
 
         MIR_LOG_INFO("Material created: {} (index {})", desc.shaderName, index);
@@ -2383,6 +2503,7 @@ namespace mir
 
         const std::size_t meshCount = mMeshes.size();
         DestroyMeshes();
+        DestroyModelResources(false);
 
         // keep the two default textures: CreateMaterial falls back to them
         const std::size_t keptTextures = std::min<std::size_t>(mTextures.size(), 2);
@@ -2426,6 +2547,66 @@ namespace mir
         mDefaultMaterial = MaterialHandle{ 0, defaultMaterial.mGeneration };
 
         MIR_LOG_INFO("Released {} meshes, {} materials and {} textures", meshCount, released, releasedTextures);
+    }
+
+    void VulkanRenderer::ReleaseModelResources(std::span<const MeshHandle> meshes,
+        std::span<const MaterialHandle> materials,
+        std::span<const TextureHandle> textures)
+    {
+        if (mDevice == VK_NULL_HANDLE)
+            return;
+
+        vkDeviceWaitIdle(mDevice);
+
+        for (const MeshHandle handle : meshes)
+        {
+            if (handle.IsNull() || handle.mIndex >= mMeshes.size())
+                continue;
+            GpuMesh &mesh = mMeshes[handle.mIndex];
+            if (mesh.mGeneration != handle.mGeneration)
+                continue;
+            if (mesh.mVertexBuffer != VK_NULL_HANDLE)
+                vmaDestroyBuffer(mAllocator, mesh.mVertexBuffer, mesh.mVertexAllocation);
+            if (mesh.mIndexBuffer != VK_NULL_HANDLE)
+                vmaDestroyBuffer(mAllocator, mesh.mIndexBuffer, mesh.mIndexAllocation);
+            mesh = {};
+            // Bumped so a handle to the old contents stops resolving.
+            mesh.mGeneration = handle.mGeneration + 1;
+            mFreeMeshIndices.push_back(handle.mIndex);
+        }
+
+        for (const MaterialHandle handle : materials)
+        {
+            if (handle.IsNull() || handle == mDefaultMaterial || handle.mIndex >= mMaterials.size())
+                continue;
+            GpuMaterial &material = mMaterials[handle.mIndex];
+            if (material.mGeneration != handle.mGeneration)
+                continue;
+            // The sampler belongs to the renderer's cache, not to the material.
+            if (material.mDescriptorSet != VK_NULL_HANDLE)
+                vkFreeDescriptorSets(mDevice, mMaterialDescriptorPool, 1, &material.mDescriptorSet);
+            if (material.mPipeline != VK_NULL_HANDLE)
+                vkDestroyPipeline(mDevice, material.mPipeline, nullptr);
+            material = {};
+            material.mGeneration = handle.mGeneration + 1;
+            mFreeMaterialIndices.push_back(handle.mIndex);
+        }
+
+        for (const TextureHandle handle : textures)
+        {
+            // Index 0 and 1 are the defaults every material falls back to.
+            if (handle.IsNull() || handle.mIndex < 2 || handle.mIndex >= mTextures.size())
+                continue;
+            GpuTexture &texture = mTextures[handle.mIndex];
+            if (texture.mGeneration != handle.mGeneration)
+                continue;
+            if (texture.mView != VK_NULL_HANDLE)
+                vkDestroyImageView(mDevice, texture.mView, nullptr);
+            if (texture.mImage != VK_NULL_HANDLE)
+                vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
+            texture = {};
+            texture.mGeneration = handle.mGeneration + 1;
+        }
     }
 
     const VulkanRenderer::GpuMaterial *VulkanRenderer::FindMaterial(MaterialHandle handle) const
@@ -2770,11 +2951,26 @@ namespace mir
             return kNullTexture;
         }
 
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(mPhysicalDevice, &properties);
+        if (desc.width > properties.limits.maxImageDimension2D ||
+            desc.height > properties.limits.maxImageDimension2D)
+        {
+            MIR_LOG_ERROR("CreateTexture: {}x{} is past this device's maxImageDimension2D of {}",
+                desc.width, desc.height, properties.limits.maxImageDimension2D);
+            return kNullTexture;
+        }
+
+        // One staging blob for every level, one copy region each.
+        std::vector<std::byte> pixels;
+        std::vector<VkBufferImageCopy> regions;
+        const uint32_t levelCount = BuildMipChain(desc, pixels, regions);
+
         VkBuffer staging = VK_NULL_HANDLE;
         VmaAllocation stagingAllocation = VK_NULL_HANDLE;
         VmaAllocationInfo stagingInfo{};
 
-        if (!CreateBuffer(mAllocator, expectedBytes,
+        if (!CreateBuffer(mAllocator, pixels.size(),
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
             VMA_ALLOCATION_CREATE_MAPPED_BIT,
@@ -2784,9 +2980,10 @@ namespace mir
             return kNullTexture;
         }
 
-        std::memcpy(stagingInfo.pMappedData, desc.pixels.data(), desc.pixels.size_bytes());
+        std::memcpy(stagingInfo.pMappedData, pixels.data(), pixels.size());
 
         GpuTexture texture{};
+        texture.mLevels = levelCount;
         texture.mGeneration = 1;
 
         const VkFormat format = desc.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
@@ -2795,7 +2992,7 @@ namespace mir
             .imageType = VK_IMAGE_TYPE_2D,
             .format = format,
             .extent{ desc.width, desc.height, 1 },
-            .mipLevels = 1,
+            .mipLevels = levelCount,
             .arrayLayers = 1,
             .samples = VK_SAMPLE_COUNT_1_BIT,
             .tiling = VK_IMAGE_TILING_OPTIMAL,
@@ -2842,26 +3039,16 @@ namespace mir
         ImageBarrier(uploadCmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, levelCount);
 
-        const VkBufferImageCopy region{
-            .bufferOffset = 0,
-            .bufferRowLength = 0,
-            .bufferImageHeight = 0,
-            .imageSubresource{
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel = 0,
-                .baseArrayLayer = 0,
-                .layerCount = 1 },
-            .imageOffset{ 0, 0, 0 },
-            .imageExtent{ desc.width, desc.height, 1 } };
         vkCmdCopyBufferToImage(uploadCmd, staging, texture.mImage,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            static_cast<uint32_t>(regions.size()), regions.data());
 
         ImageBarrier(uploadCmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT, levelCount);
 
         vkEndCommandBuffer(uploadCmd);
 
@@ -2884,7 +3071,7 @@ namespace mir
             .subresourceRange{
                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                 .baseMipLevel = 0,
-                .levelCount = 1,
+                .levelCount = levelCount,
                 .baseArrayLayer = 0,
                 .layerCount = 1 } };
 
@@ -2901,7 +3088,8 @@ namespace mir
         NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(texture.mImage),
             std::format("Texture {}", index).c_str());
 
-        MIR_LOG_INFO("Texture {} uploaded: {}x{}, {} bytes", index, desc.width, desc.height, expectedBytes);
+        MIR_LOG_INFO("Texture {} uploaded: {}x{}, {} level(s), {} bytes",
+            index, desc.width, desc.height, levelCount, pixels.size());
 
         return TextureHandle{ index, texture.mGeneration };
     }
@@ -3061,9 +3249,14 @@ namespace mir
                 continue;
 
             const GpuMaterial *material = FindMaterial(item.material);
-            if (material == nullptr)
+            // A slot emptied by ReleaseModelResources is still in range, so
+            // check the pipeline rather than the handle alone.
+            if (material == nullptr || material->mPipeline == VK_NULL_HANDLE)
                 material = FindMaterial(mDefaultMaterial);
-            if (material == nullptr)
+            if (material == nullptr || material->mPipeline == VK_NULL_HANDLE)
+                continue;
+
+            if (material->mModelShader && !BindModelDescriptors(cmd, *material, item))
                 continue;
 
             if (material->mPipeline != boundPipeline)
@@ -3314,12 +3507,14 @@ namespace mir
 
         vkCmdEndRendering(cmd);
 
+        const bool captured = RecordCapture(cmd, imageIndex);
+
         // give it back
         ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            captured ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+            captured ? VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            captured ? VK_ACCESS_2_TRANSFER_READ_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
             VK_PIPELINE_STAGE_2_NONE, 0);
     }
 
@@ -3346,6 +3541,7 @@ namespace mir
 
         // wait for next image to comeback from framesin flight
         vkWaitSemaphores(mDevice, &waitInfo, UINT64_MAX);
+        ResetModelFrame(mFrameIndex);
 
         // Whole-pool reset, not per-buffer.
         vkResetCommandPool(mDevice, mCmdPools[mFrameIndex], 0);
@@ -3418,6 +3614,7 @@ namespace mir
             MIR_LOG_ERROR("vkQueueSubmit2 failed");
             return;
         }
+        if (mCaptureBuffer != VK_NULL_HANDLE) FinishCapture();
         const VkPresentInfoKHR presentInfo{
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .waitSemaphoreCount = 1,

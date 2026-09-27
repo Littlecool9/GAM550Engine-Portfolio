@@ -91,6 +91,7 @@ namespace mir
         glfwSetWindowUserPointer(mHandle, this);
         glfwSetFramebufferSizeCallback(mHandle, &GLFWWindow::OnFramebufferSize);
         glfwSetScrollCallback(mHandle, &GLFWWindow::OnScroll);
+        glfwSetDropCallback(mHandle, &GLFWWindow::OnDrop);
 
         MIR_LOG_INFO("Window created: {}x{} \"{}\"", mWidth, mHeight, desc.mTitle);
     }
@@ -115,6 +116,7 @@ namespace mir
 
     void GLFWWindow::PollEvents()
     {
+        mDroppedFiles.clear();
         mRawInput.scrollX = 0.0;
         mRawInput.scrollY = 0.0;
 
@@ -204,5 +206,15 @@ namespace mir
 
         self->mRawInput.scrollX += xoffset;
         self->mRawInput.scrollY += yoffset;
+    }
+
+    void GLFWWindow::OnDrop(GLFWwindow *handle, int count, const char **paths)
+    {
+        auto *self = static_cast<GLFWWindow *>(glfwGetWindowUserPointer(handle));
+        MIR_ASSERT(self != nullptr, "drop callback without a user pointer");
+
+        // GLFW owns the strings only for the duration of this call.
+        for (int i = 0; i < count; ++i)
+            self->mDroppedFiles.emplace_back(paths[i]);
     }
 }

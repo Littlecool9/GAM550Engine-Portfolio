@@ -1,8 +1,8 @@
 /**
  * @file Editor.cpp
  * @author Sumin Park
- * @brief Owns the ImGui context, backend, and the Slate editor shell
- *        (dockspace, Hierarchy/Inspector/Output panels, Debug menu).
+ * @brief The Slate editor shell (dockspace, Hierarchy/Inspector/Output
+ *        panels, Debug menu), drawn into the context ImGuiRuntime owns.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -25,8 +25,6 @@
 
 #include <IconsFontAwesome6.h>
 #include <imgui.h>
-#include <imgui_impl_glfw.h>
-#include <imgui_impl_vulkan.h>
 #include <imgui_internal.h>
 #include <ImGuizmo.h>
 
@@ -58,28 +56,30 @@ namespace mir
         void DecomposeTRS(const glm::mat4 &matrix, glm::vec3 &position, glm::quat &rotation, glm::vec3 &scale)
         {
             position = glm::vec3(matrix[3]);
-            scale = { glm::length(glm::vec3(matrix[0])), glm::length(glm::vec3(matrix[1])),
-                      glm::length(glm::vec3(matrix[2])) };
+            scale = {glm::length(glm::vec3(matrix[0])), glm::length(glm::vec3(matrix[1])),
+                     glm::length(glm::vec3(matrix[2]))};
 
             const glm::mat3 rotationMatrix(glm::vec3(matrix[0]) / (scale.x != 0.0f ? scale.x : 1.0f),
                                            glm::vec3(matrix[1]) / (scale.y != 0.0f ? scale.y : 1.0f),
                                            glm::vec3(matrix[2]) / (scale.z != 0.0f ? scale.z : 1.0f));
             rotation = glm::quat_cast(rotationMatrix);
         }
-    }
+    } // namespace
 
-    // Shutdown needs a VulkanRenderer this doesn't have, so skipping it leaks
-    // the ImGui context rather than crashing into a dangling device.
     Editor::~Editor() {}
 
-    bool Editor::Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath,
+    bool Editor::Initialize(const ImGuiRuntime &imgui, Window &window, std::filesystem::path projectSettingsPath,
                             World &world)
     {
+        if (!imgui.IsInitialized())
+        {
+            MIR_LOG_ERROR("Editor needs an initialized ImGuiRuntime");
+            return false;
+        }
+
         mProjectSettingsPath = std::move(projectSettingsPath);
 
         world.EmplaceResource<Selection>();
-
-        ImGui::CreateContext();
 
         ImGuiIO &io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
@@ -87,72 +87,28 @@ namespace mir
         mImGuiIniPath = (ExecutableDir() / "imgui.ini").string();
         io.IniFilename = mImGuiIniPath.c_str();
 
-        ImFontConfig fontConfig;
-        fontConfig.OversampleH = 3;
-        const std::string fontPath = FontPath("Inter.ttf").string();
-        if (io.Fonts->AddFontFromFileTTF(fontPath.c_str(), 16.0f, &fontConfig) == nullptr)
-        {
-            MIR_LOG_ERROR("Failed to load font: {}", fontPath);
-            io.Fonts->AddFontDefault();
-        }
-
-        static const ImWchar iconRanges[] = { ICON_MIN_FA, ICON_MAX_FA, 0 };
-        ImFontConfig iconConfig;
-        iconConfig.MergeMode = true;
-        iconConfig.PixelSnapH = true;
-        iconConfig.GlyphMinAdvanceX = 16.0f;
-        const std::string iconFontPath = FontPath(FONT_ICON_FILE_NAME_FAS).string();
-        if (io.Fonts->AddFontFromFileTTF(iconFontPath.c_str(), 16.0f, &iconConfig, iconRanges) == nullptr)
-            MIR_LOG_ERROR("Failed to load icon font: {}", iconFontPath);
-
         EditorTheme::Apply();
         EditorTheme::ScaleForDpi(window.ContentScale());
-
-        void *nativeHandle = window.NativeHandleForImGui();
-        if (nativeHandle == nullptr)
-        {
-            MIR_LOG_ERROR("Window backend has no native handle for ImGui");
-            ImGui::DestroyContext();
-            return false;
-        }
-
-        if (!ImGui_ImplGlfw_InitForVulkan(static_cast<GLFWwindow *>(nativeHandle), true))
-        {
-            MIR_LOG_ERROR("ImGui_ImplGlfw_InitForVulkan failed");
-            ImGui::DestroyContext();
-            return false;
-        }
-
-        if (!renderer.InitImGuiVulkanBackend())
-        {
-            MIR_LOG_ERROR("ImGui Vulkan backend initialization failed");
-            ImGui_ImplGlfw_Shutdown();
-            ImGui::DestroyContext();
-            return false;
-        }
 
         mWindow = &window;
         mInitialized = true;
         return true;
     }
 
-    void Editor::Shutdown(VulkanRenderer &renderer)
+    void Editor::Shutdown()
     {
         if (!mInitialized)
             return;
 
-        renderer.ShutdownImGuiVulkanBackend();
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
+        
+        ImGuiIO &io = ImGui::GetIO();
+        if (io.IniFilename != nullptr && ImGui::GetCurrentContext()->SettingsLoaded)
+            ImGui::SaveIniSettingsToDisk(io.IniFilename);
+        
+        io.IniFilename = nullptr;
+
         mWindow = nullptr;
         mInitialized = false;
-    }
-
-    void Editor::BeginFrame()
-    {
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
     }
 
     void Editor::DrawTitleBar()
@@ -162,7 +118,7 @@ namespace mir
         const float barHeight = Window::kTitleBarHeightDip * scale;
 
         if (!ImGui::BeginViewportSideBar("##TitleBar", viewport, ImGuiDir_Up, barHeight,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
+                                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
         {
             ImGui::End();
             return;
@@ -182,20 +138,19 @@ namespace mir
 
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 
-        const auto controlButton = [&](const char *icon)
-            {
-                ImGui::PushID(icon);
-                ImGui::SetCursorPosY(buttonY);
-                const bool clicked = ImGui::Button(icon, ImVec2(buttonWidth, buttonHeight));
-                const ImVec2 rMin = ImGui::GetItemRectMin();
-                const ImVec2 rMax = ImGui::GetItemRectMax();
-                mTitleBarInteractiveRects.push_back(PixelRect{
-                    static_cast<int32_t>(rMin.x), static_cast<int32_t>(rMin.y),
-                    static_cast<uint32_t>(rMax.x - rMin.x), static_cast<uint32_t>(rMax.y - rMin.y) });
-                ImGui::PopID();
-                ImGui::SameLine();
-                return clicked;
-            };
+        const auto controlButton = [&](const char *icon) {
+            ImGui::PushID(icon);
+            ImGui::SetCursorPosY(buttonY);
+            const bool clicked = ImGui::Button(icon, ImVec2(buttonWidth, buttonHeight));
+            const ImVec2 rMin = ImGui::GetItemRectMin();
+            const ImVec2 rMax = ImGui::GetItemRectMax();
+            mTitleBarInteractiveRects.push_back(PixelRect{static_cast<int32_t>(rMin.x), static_cast<int32_t>(rMin.y),
+                                                          static_cast<uint32_t>(rMax.x - rMin.x),
+                                                          static_cast<uint32_t>(rMax.y - rMin.y)});
+            ImGui::PopID();
+            ImGui::SameLine();
+            return clicked;
+        };
 
         if (controlButton(ICON_FA_WINDOW_MINIMIZE))
             mWindow->Minimize();
@@ -220,7 +175,7 @@ namespace mir
         const float height = 28.0f * mWindow->ContentScale();
 
         if (!ImGui::BeginViewportSideBar("##PlayControls", viewport, ImGuiDir_Up, height,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
+                                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
         {
             ImGui::End();
             return action;
@@ -335,16 +290,15 @@ namespace mir
                              ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
                              ImGuiWindowFlags_NoFocusOnAppearing))
         {
-            const auto modeButton = [&](const char *label, GizmoOperation op)
-                {
-                    const bool active = mGizmoOperation == op;
-                    if (active)
-                        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-                    if (ImGui::Button(label))
-                        mGizmoOperation = op;
-                    if (active)
-                        ImGui::PopStyleColor();
-                };
+            const auto modeButton = [&](const char *label, GizmoOperation op) {
+                const bool active = mGizmoOperation == op;
+                if (active)
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                if (ImGui::Button(label))
+                    mGizmoOperation = op;
+                if (active)
+                    ImGui::PopStyleColor();
+            };
 
             modeButton("Translate", GizmoOperation::Translate);
             ImGui::SameLine();
@@ -537,9 +491,9 @@ namespace mir
         ImGui::Spacing();
 
         const std::string_view name(mNewProjectName);
-        const bool collides = std::any_of(projects.begin(), projects.end(),
-            [&](const ProjectMenuEntry &project)
-            { return project.mDir == "games/" + std::string(name); });
+        const bool collides = std::any_of(projects.begin(), projects.end(), [&](const ProjectMenuEntry &project) {
+            return project.mDir == "games/" + std::string(name);
+        });
         const bool canCreate = !name.empty() && !collides;
 
         ImGui::BeginDisabled(!canCreate);
@@ -558,7 +512,7 @@ namespace mir
         if (collides)
         {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "A project named \"%s\" already exists.",
-                                mNewProjectName);
+                               mNewProjectName);
         }
 
         ImGui::EndPopup();
@@ -566,7 +520,7 @@ namespace mir
 
     EditorActions Editor::DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                                      const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-                                     std::string_view currentProject, World &world)
+                                     std::string_view currentProject, World &world, const AssetImportView &assetImport)
     {
         EditorActions actions;
 
@@ -577,8 +531,8 @@ namespace mir
 
             actions.mScene = DrawPlayControls(mode);
 
-            const ImGuiID dockspaceId = ImGui::DockSpaceOverViewport(
-                0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
+            const ImGuiID dockspaceId =
+                ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
 
             ImGuiDockNode *dockspaceNode = ImGui::DockBuilderGetNode(dockspaceId);
             if (dockspaceNode != nullptr && dockspaceNode->IsEmpty())
@@ -602,7 +556,7 @@ namespace mir
             ImGui::End();
 
             if (ImGui::Begin("Inspector"))
-                mInspectorPanel.Draw(world);
+                mInspectorPanel.Draw(world, assetImport);
             ImGui::End();
 
             if (ImGui::Begin("Output"))
@@ -613,9 +567,9 @@ namespace mir
                 centralNode != nullptr)
             {
                 mSceneViewportRect = VkRect2D{
-                    .offset{ static_cast<int32_t>(centralNode->Pos.x), static_cast<int32_t>(centralNode->Pos.y) },
-                    .extent{ static_cast<uint32_t>(std::max(centralNode->Size.x, 0.0f)),
-                            static_cast<uint32_t>(std::max(centralNode->Size.y, 0.0f)) } };
+                    .offset{static_cast<int32_t>(centralNode->Pos.x), static_cast<int32_t>(centralNode->Pos.y)},
+                    .extent{static_cast<uint32_t>(std::max(centralNode->Size.x, 0.0f)),
+                            static_cast<uint32_t>(std::max(centralNode->Size.y, 0.0f))}};
             }
 
             UpdateViewportPicking(mode, world);
@@ -645,6 +599,7 @@ namespace mir
                 if (ImGui::BeginMenu("Project"))
                 {
                     ImGui::MenuItem("Project Settings", nullptr, &mShowProjectSettings);
+                    ImGui::MenuItem("Asset Import", nullptr, &mShowAssetImport);
                     ImGui::EndMenu();
                 }
                 if (ImGui::BeginMenu("Debug"))
@@ -677,6 +632,26 @@ namespace mir
             {
                 mProjectSettingsPanel.CancelListening();
             }
+
+            const std::span<const std::string> dropped =
+                mWindow != nullptr ? mWindow->DroppedFiles() : std::span<const std::string>{};
+            if (!dropped.empty())
+            {
+                // A drop is a one-frame event, so the panel has to be open,
+                // uncollapsed and drawn this frame or the files are lost.
+                mShowAssetImport = true;
+                ImGui::SetNextWindowCollapsed(false);
+                // SetNextWindowFocus also selects the tab when the panel is
+                // docked behind another one.
+                ImGui::SetNextWindowFocus();
+            }
+
+            if (mShowAssetImport)
+            {
+                if (ImGui::Begin("Asset Import", &mShowAssetImport))
+                    actions.mAssetImport = mAssetImportPanel.Draw(assetImport, dropped);
+                ImGui::End();
+            }
         }
         else
         {
@@ -684,12 +659,6 @@ namespace mir
         }
 
         return actions;
-    }
-
-    ImDrawData *Editor::EndFrame()
-    {
-        ImGui::Render();
-        return ImGui::GetDrawData();
     }
 
     bool Editor::WantsCaptureKeyboard() const { return ImGui::GetIO().WantCaptureKeyboard; }
@@ -700,4 +669,4 @@ namespace mir
         const bool lookHeld = !WantsCaptureMouse() && mWindow->RawInput().IsDown(MouseButton::Right);
         mCamera.Update(mWindow->RawInput(), lookHeld, dt);
     }
-}
+} // namespace mir

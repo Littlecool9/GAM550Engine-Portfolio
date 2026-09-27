@@ -62,14 +62,23 @@ the pieces depend on each other.
                MjolnirEngine (main.cpp)
                          |
                         app
-      +--------+---------+--------+--------+--------+
-      |        |         |        |        |        |
-   assets   window   renderer  editor    scene   script
-      |        |         |        |        |        |
-      +--------+---------+--------+--------+--------+
-                         |                 |
-                       core           editortheme
+      +--------+---------+--------+
+      |        |         |        |
+   assets    scene    script    editor ---- editortheme
+      |        |         |        |
+      |        |         |   imguiruntime
+      |        |         |     |      |
+      |        |         |  window  renderer
+      |        |         |     |      |
+      +--------+---------+-----+------+
+                         |
+                       core
 ```
+
+`app` also links `window`, `renderer` and `imguiruntime` directly, because it
+constructs them. `editor` links `window` and `renderer` too, for the title bar
+and the viewport rect. `gameui`, when it lands, sits beside `editor` on
+`imguiruntime`.
 
 `serial` is not shown: `renderer`, `scene`, `input` and `app` reach `core`
 through it for anything touching a JSON file.
@@ -80,11 +89,13 @@ through it for anything touching a JSON file.
 | `window` | An OS window and its event pump | [window.md](modules/window.md) |
 | `renderer` | The whole Vulkan path, and render-facing components | [renderer.md](modules/renderer.md) |
 | `assets` | Cooked blobs, manifest, cache | [assets.md](modules/assets.md) |
+| `animation` | Model pose sampling and per-instance playback data | [animation.md](modules/animation.md) |
 | `scene` | Scene save and load | [scene.md](modules/scene.md) |
 | `serial` | JSON documents on disk | [serial.md](modules/serial.md) |
 | `script` | Lua embedding and ECS bindings | [script.md](modules/script.md) |
 | `audio` | Wwise lifetime and the per-frame pump | [audio.md](modules/audio.md) |
-| `editor` | ImGui context, backends and the editor shell | [editor.md](modules/editor.md) |
+| `imguiruntime` | ImGui context lifetime, fonts, both backends, the frame bracket | [imguiruntime.md](modules/imguiruntime.md) |
+| `editor` | The editor shell, drawn into `imguiruntime`'s context | [editor.md](modules/editor.md) |
 | `editortheme` | Theme data only | [editortheme.md](modules/editortheme.md) |
 | `app` | Composition root and the frame loop | [app.md](modules/app.md) |
 
@@ -128,13 +139,26 @@ not render never pulls Vulkan in through a component header.
 
 A module adding its own render-facing component follows the same rule.
 
-**`editor` owns ImGui end to end.**
+**`imguiruntime` owns the ImGui context's lifetime, and nothing else does.**
 
-That covers the context, fonts, theme, both backends and the dockspace.
+It creates the context, loads the fonts, initialises the GLFW backend and,
+through `VulkanRenderer::InitImGuiVulkanBackend`, the Vulkan one, then tears all
+of it down in reverse. It also brackets the frame: `BeginFrame` is the
+`NewFrame` trio and `EndFrame` is `Render` plus `GetDrawData`. Every UI module,
+`editor` today and `gameui` next, draws between those two calls and owns no part
+of the lifetime.
 
-`app` drives it through `BeginFrame`, `DrawLayout`, `EndFrame` and
-`SceneViewportRect`. `App.cpp` contains no ImGui call and includes no ImGui
-header.
+It is its own module because neither obvious owner may hold it.
+`ImGui_ImplGlfw_InitForVulkan` needs a `GLFWwindow *`, which `renderer` may not
+see, and `App.cpp` may not call ImGui.
+
+`editor` keeps what only an editor wants: the theme and its DPI scale, docking,
+and `imgui.ini`. The runtime leaves `IniFilename` null, so a build without
+`editor` persists nothing.
+
+`app` drives a frame as `ImGuiRuntime::BeginFrame`, `Editor::DrawLayout`,
+`ImGuiRuntime::EndFrame`, then reads `Editor::SceneViewportRect`. `App.cpp`
+contains no ImGui call and includes no ImGui header.
 
 **`editortheme` depends on nothing engine-side, only `imgui`.**
 
@@ -162,7 +186,9 @@ type. The flow is in [A file](#a-file).
 ```
 PollEvents                       close flag and framebuffer size refresh here
 dt = min(elapsed, mMaxDeltaSeconds)
-Editor::BeginFrame / DrawLayout / EndFrame -> ImDrawData*, EditorActions (scene action, game to open)
+ImGuiRuntime::BeginFrame         the NewFrame trio
+Editor::DrawLayout               -> EditorActions (scene action, game to open)
+ImGuiRuntime::EndFrame           -> ImDrawData*
 renderer.SetImGuiDrawData(...), renderer.SetSceneViewport(...)
 ScriptReloadWatcher::Poll        mtime check, throttled
 FixedTimestep::Advance(dt)       substeps this frame, mFixedDeltaSeconds each, at most mMaxFixedSteps
@@ -338,6 +364,14 @@ table. See [script.md](modules/script.md).
 5. No CI. Tests are run by hand.
 
 ## Changed
+
+*2026-09-26* — **ImGui's lifetime moved out of `editor` into `imguiruntime`.**
+Was: `Editor::Initialize` created the context, loaded the fonts and initialised
+both backends, and `Editor::BeginFrame`/`EndFrame` bracketed the frame, so any
+other UI module would draw into a context the editor owned and there could be no
+editor-free build. Now: `imguiruntime` owns all of that, and `editor` draws
+between its `BeginFrame` and `EndFrame` as `gameui` will. See
+[imguiruntime.md](modules/imguiruntime.md).
 
 *2026-09-19* — **Descriptor sets and a per-frame camera UBO replaced the
 premultiplied view-projection push constant.** Was: `RenderSystem` baked

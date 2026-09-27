@@ -1,24 +1,25 @@
 # editor
 
-The ImGui context and backend lifecycle, and the Slate editor shell — dockspace,
-default panel layout, the File, Project and Debug menus. It is the only place in
-the engine that calls `ImGui::*` or `ImGui_Impl*`.
+The Slate editor shell — dockspace, default panel layout, the File, Project and
+Debug menus — drawn into the ImGui context `imguiruntime` owns. It owns no part
+of that context's lifetime: no `CreateContext`, no fonts, no backend. See
+[imguiruntime.md](imguiruntime.md).
 
-`mir::editor` · depends `mir::renderer`, `mir::window` (public); `mir::core`, `mir::editortheme`, `imgui`, `iconfontcppheaders` (private) · API `modules/editor/include/editor/` · maintainer Sumin Park · reviewed 2026-09-17
+`mir::editor` · depends `mir::imguiruntime`, `mir::renderer`, `mir::window` (public); `mir::core`, `mir::editortheme`, `imgui`, `imguizmo`, `iconfontcppheaders` (private) · API `modules/editor/include/editor/` · maintainer Sumin Park · reviewed 2026-09-17
 
 ## Model
 
 `App` drives `Editor` through several calls a frame and reads state back.
 
 ```cpp
-mEditor.BeginFrame();                                   // the ImGui NewFrame trio
+mImGui.BeginFrame();                                    // ImGuiRuntime: the NewFrame trio
 
 if (windowVisible)
     Act(mEditor.DrawLayout(mDesc.mEnableEditorLayout,   // EditorActions
                            world.Resource<InputMap>(), world.Resource<RenderSettings>(),
                            world.Resource<EngineModeState>(), projectMenu, currentProject, world));
 
-mRenderer.SetImGuiDrawData(mEditor.EndFrame());         // ImGui::Render, hand off draw data
+mRenderer.SetImGuiDrawData(mImGui.EndFrame());          // ImGuiRuntime: ImGui::Render, hand off draw data
 mRenderSystem.SetViewportRect(0, mEditor.SceneViewportRect());
 
 if (IsEditing(world))                                   // Play shows the World's own camera instead
@@ -67,19 +68,19 @@ itself is handling doesn't also move it.
 ## API
 
 ```cpp
-bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath);
-void Shutdown(VulkanRenderer &renderer);
+bool Initialize(const ImGuiRuntime &imgui, Window &window, std::filesystem::path projectSettingsPath,
+                World &world);    // false if imgui is not initialized
+void Shutdown();                  // before ImGuiRuntime::Shutdown
 
-void BeginFrame();
+// between ImGuiRuntime::BeginFrame and EndFrame
 EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                          const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
                          std::string_view currentProject, World &world);
-ImDrawData *EndFrame();
 
 VkRect2D SceneViewportRect() const;
 bool IsInitialized() const;
 
-void UpdateCamera(float dt);          // once per frame, after BeginFrame/DrawLayout
+void UpdateCamera(float dt);          // once per frame, after DrawLayout
 EditorCamera &SceneCamera();
 ```
 
@@ -163,12 +164,17 @@ source. There is no compiler or runtime check for it.
 item.** `OpenPopup` and `BeginPopupModal` have to run under the same ID stack.
 Called from inside the menu, `OpenPopup` opens a popup that nothing ever draws.
 
-**Destruction order is load-bearing.** `App` declares `Editor` right after
-`mRenderer` and before `mWorld`, so the ImGui Vulkan backend tears down before
-`VulkanRenderer::Shutdown()` and the GLFW backend before `mWindow` dies.
+**Initialize after `ImGuiRuntime`, shut down before it.** `Initialize` refuses an
+uninitialised runtime. It turns on docking, applies the theme and its DPI scale,
+and points `io.IniFilename` at `imgui.ini` next to the executable; ImGui reads
+that file lazily on the first `NewFrame`, so setting it after `CreateContext`
+still loads it.
 
-**`~Editor()` is a no-op if `Shutdown()` was skipped.** It leaks the ImGui context
-rather than reach into a `VulkanRenderer&` it was never given.
+**`Shutdown` saves `imgui.ini` and detaches it.** `DestroyContext` would otherwise
+save through `IniFilename`, a pointer into this `Editor`'s string, after the
+editor has shut down. It saves only if ImGui got as far as loading settings, the
+same guard `DestroyContext` uses, so a failed startup never overwrites the file
+with an empty one.
 
 **`Editor` is a class rather than free functions**, because it carries state
 across calls — the viewport rect, the Style Editor toggle, the game waiting on
@@ -176,7 +182,8 @@ the confirmation dialog, and whether it is initialised. As free functions those
 would be out-parameters threaded through every call.
 
 Fonts are Inter for body text and Font Awesome 6 for icons, merged into one atlas
-and rescaled for the window's `ContentScale()`.
+by `imguiruntime`; `EditorTheme::ScaleForDpi` rescales them here for the window's
+`ContentScale()`.
 
 **The Play/Pause/Stop toolbar is another `Up` viewport side bar**, drawn right
 after the title bar and before the dockspace, so it stacks the same way the
@@ -238,6 +245,14 @@ Open Project asks for, but not the menu or the dialog themselves.
    CPU-side mesh geometry after upload.
 
 ## Changed
+
+*2026-09-26* — **The ImGui context's lifetime moved to `imguiruntime`.** Was:
+`Initialize` created the context, loaded the fonts and initialised both
+backends, `Shutdown(VulkanRenderer&)` tore them down, and `BeginFrame`/`EndFrame`
+were the `NewFrame` trio and `Render`. Now: all of that is `ImGuiRuntime`'s,
+`Initialize` takes the runtime instead of the renderer, `Shutdown` takes nothing,
+and `BeginFrame`/`EndFrame` are gone. A game UI can draw into the same context
+without an editor in the build.
 
 *2026-09-21* — **Shift-click is now equivalent to ctrl-click, and every
 selected entity gets a viewport outline, not just the primary.** Was:

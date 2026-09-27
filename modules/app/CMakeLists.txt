@@ -6,9 +6,11 @@ target_link_libraries(engine_app
            mir::window
            mir::renderer
            mir::editor
+           mir::imguiruntime
            mir::scene
            mir::script
     PRIVATE mir::input
+            mir::animation
             mir::audio
             mir::physics
             mir::serial
@@ -16,6 +18,7 @@ target_link_libraries(engine_app
 
 target_sources(engine_app PRIVATE
     src/app/App.cpp
+    src/app/AssetImportManager.cpp
     src/app/GameProject.cpp
     src/app/SceneResolve.cpp
 )

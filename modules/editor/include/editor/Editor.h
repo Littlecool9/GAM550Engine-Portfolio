@@ -1,8 +1,8 @@
 /**
  * @file Editor.h
  * @author Sumin Park
- * @brief Owns the ImGui context, backend, and the Slate editor shell
- *        (dockspace, Hierarchy/Inspector/Output panels, Debug menu).
+ * @brief The Slate editor shell (dockspace, Hierarchy/Inspector/Output
+ *        panels, Debug menu), drawn into the context ImGuiRuntime owns.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -12,10 +12,12 @@
 #include <core/ecs/EngineMode.h>
 #include <core/platform/Surface.h>
 #include <editor/EditorCamera.h>
+#include <editor/panels/AssetImportPanel.h>
 #include <editor/panels/HierarchyPanel.h>
 #include <editor/panels/InspectorPanel.h>
 #include <editor/panels/LogPanel.h>
 #include <editor/panels/ProjectSettingsPanel.h>
+#include <imguiruntime/ImGuiRuntime.h>
 #include <renderer/RenderSettings.h>
 #include <renderer/VulkanRenderer.h>
 #include <window/Window.h>
@@ -25,8 +27,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-
-struct ImDrawData;
 
 namespace mir
 {
@@ -63,6 +63,7 @@ namespace mir
         // then the same open-into-new-directory path as mOpenProject
         std::string mCreateProjectName;
         bool mCreateProjectRayTracing = false;
+        AssetImportAction mAssetImport;
     };
 
     class Editor
@@ -76,17 +77,17 @@ namespace mir
         Editor(Editor &&) = delete;
         Editor &operator=(Editor &&) = delete;
 
-        bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath, World &world);
+        // imgui must already be initialized; the editor never owns the context
+        bool Initialize(const ImGuiRuntime &imgui, Window &window, std::filesystem::path projectSettingsPath,
+                        World &world);
 
-        void Shutdown(VulkanRenderer &renderer);
+        //before ImGuiRuntime::Shutdown
+        void Shutdown();
 
-        void BeginFrame();
-
+        //between ImGuiRuntime::BeginFrame and EndFrame
         EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                                  const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-                                 std::string_view currentProject, World &world);
-
-        ImDrawData *EndFrame();
+                                 std::string_view currentProject, World &world, const AssetImportView &assetImport);
 
         VkRect2D SceneViewportRect() const { return mSceneViewportRect; }
 
@@ -113,6 +114,7 @@ namespace mir
         bool mInitialized = false;
         bool mShowStyleEditor = false;
         bool mShowProjectSettings = false;
+        bool mShowAssetImport = false;
         std::string mImGuiIniPath;
         std::filesystem::path mProjectSettingsPath;
         VkRect2D mSceneViewportRect{};
@@ -120,6 +122,7 @@ namespace mir
         std::vector<PixelRect> mTitleBarInteractiveRects;
         LogPanel mLogPanel;
         HierarchyPanel mHierarchyPanel;
+        AssetImportPanel mAssetImportPanel;
         InspectorPanel mInspectorPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
         EditorCamera mCamera;
@@ -137,4 +140,4 @@ namespace mir
         char mNewProjectName[64] = {};
         bool mNewProjectRayTracing = false;
     };
-}
+} // namespace mir

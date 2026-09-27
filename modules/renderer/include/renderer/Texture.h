@@ -38,5 +38,10 @@ namespace mir
 
         // Base color textures are authored in sRGB.
         bool srgb = true;
+
+        // Build the whole mip chain on the CPU (box filter in linear light)
+        // instead of uploading level 0 alone. Off by default: a material only
+        // samples the chain when its SamplerDesc asks for mips.
+        bool generateMips = false;
     };
 }

@@ -34,6 +34,8 @@ namespace
 
         // 0: run until the window closes
         uint64_t mMaxFrames = 0;
+        std::string mCapturePath;
+        bool mNoEditor = false;
 
         // test hook: games to restart into, in order
         std::vector<std::string> mProjectSwitches;
@@ -61,13 +63,21 @@ namespace
                     return std::nullopt;
                 }
             }
+            else if (arg == "--capture" && i + 1 < argc)
+            {
+                options.mCapturePath = argv[++i];
+            }
+            else if (arg == "--no-editor")
+            {
+                options.mNoEditor = true;
+            }
             else if (arg == "--switch-to" && i + 1 < argc)
             {
                 options.mProjectSwitches.emplace_back(argv[++i]);
             }
             else
             {
-                MIR_LOG_ERROR("unrecognized argument '{}' (usage: [--game <dir>] [--frames <N>] [--switch-to <dir>]...)", arg);
+                MIR_LOG_ERROR("unrecognized argument '{}' (usage: [--game <dir>] [--frames <N>] [--capture <png>] [--no-editor] [--switch-to <dir>]...)", arg);
                 return std::nullopt;
             }
         }
@@ -79,6 +89,11 @@ namespace
             return std::nullopt;
         }
 
+        if (!options.mCapturePath.empty() && options.mMaxFrames == 0)
+        {
+            MIR_LOG_ERROR("--capture needs --frames");
+            return std::nullopt;
+        }
         return options;
     }
 
@@ -86,6 +101,13 @@ namespace
     std::vector<std::string> RelaunchArguments(const LaunchOptions &options, const mir::GameProject &next)
     {
         std::vector<std::string> args{"--game", next.mDir};
+        if (options.mNoEditor)
+            args.emplace_back("--no-editor");
+        if (!options.mCapturePath.empty())
+        {
+            args.emplace_back("--capture");
+            args.push_back(options.mCapturePath);
+        }
 
         if (options.mMaxFrames != 0)
         {
@@ -139,6 +161,8 @@ int main(int argc, char **argv)
     mir::AppDesc desc{};
     desc.mProject = *project;
     desc.mMaxFrames = options->mMaxFrames;
+    desc.mCapturePath = options->mCapturePath;
+    desc.mEnableEditorLayout = !options->mNoEditor;
     if (!options->mProjectSwitches.empty())
         desc.mSwitchProjectTo = options->mProjectSwitches.front();
 
