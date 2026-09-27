@@ -19,6 +19,42 @@ endif()
 
 message(STATUS "slangc: ${SLANGC_EXECUTABLE}")
 
+# Recursively collects the files a Slang source #include"s
+function(_engine_scan_shader_includes source_file out_var)
+    set(visited "")
+    set(pending "${source_file}")
+    set(result "")
+
+    while(pending)
+        list(GET pending 0 current)
+        list(REMOVE_AT pending 0)
+
+        if(current IN_LIST visited)
+            continue()
+        endif()
+        list(APPEND visited "${current}")
+
+        if(NOT EXISTS "${current}")
+            continue()
+        endif()
+
+        get_filename_component(current_dir "${current}" DIRECTORY)
+
+        file(STRINGS "${current}" include_lines
+            REGEX "^[ \t]*#include[ \t]+\"[^\"]+\"")
+
+        foreach(line IN LISTS include_lines)
+            string(REGEX REPLACE "^[ \t]*#include[ \t]+\"([^\"]+)\".*" "\\1"
+                included "${line}")
+            get_filename_component(included_abs "${current_dir}/${included}" ABSOLUTE)
+            list(APPEND result "${included_abs}")
+            list(APPEND pending "${included_abs}")
+        endforeach()
+    endwhile()
+
+    set(${out_var} "${result}" PARENT_SCOPE)
+endfunction()
+
 # engine_add_shaders(<target>
 #     SOURCE  <file.slang>
 #     ENTRIES <name>:<stage> [<name>:<stage> ...])
@@ -44,6 +80,8 @@ function(engine_add_shaders target)
 
     get_filename_component(source_abs "${ARG_SOURCE}" ABSOLUTE)
     get_filename_component(source_name "${ARG_SOURCE}" NAME_WE)
+
+    _engine_scan_shader_includes("${source_abs}" included_deps)
 
     # No generator expression in this path: add_custom_command(OUTPUT) paths
     # containing a genex cannot be matched against add_custom_target(DEPENDS),
@@ -80,8 +118,9 @@ function(engine_add_shaders target)
                     -matrix-layout-column-major
                     ${debug_flags}
                     -o "${spv}"
-            # DEPENDS on the source gives recompile-on-edit for free.
-            DEPENDS "${source_abs}"
+            # DEPENDS on the source (plus anything it #includes,
+            # transitively) gives recompile-on-edit for free.
+            DEPENDS "${source_abs}" ${included_deps}
             COMMENT "slangc ${source_name}.slang [${entry_name}/${entry_stage}]"
             VERBATIM
             COMMAND_EXPAND_LISTS)

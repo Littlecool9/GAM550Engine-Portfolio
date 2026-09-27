@@ -209,7 +209,20 @@ namespace mir
                 mWarnedNoCamera = true;
             }
 
-            mRenderer.DrawFrame(mRenderViews);
+            if (renderSettings.rayTracing && mRenderer.RayTracingSupported())
+            {
+                mRenderer.TraceFrame(mRenderViews);
+            }
+            else
+            {
+                if (renderSettings.rayTracing && !mWarnedNoRayTracing)
+                {
+                    MIR_LOG_WARN("RenderSystem: Ray Tracing is on in Project Settings but this device/driver "
+                        "doesn't support it; falling back to raster");
+                    mWarnedNoRayTracing = true;
+                }
+                mRenderer.DrawFrame(mRenderViews);
+            }
         }
 
     private:
@@ -224,5 +237,6 @@ namespace mir
         std::vector<RenderView> mRenderViews;
 
         bool mWarnedNoCamera = false;
+        bool mWarnedNoRayTracing = false;
     };
 }
