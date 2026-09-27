@@ -17,6 +17,7 @@
 #include <core/ecs/SystemScheduler.h>
 #include <core/ecs/World.h>
 #include <editor/Editor.h>
+#include <gameui/UIContext.h>
 #include <imguiruntime/ImGuiRuntime.h>
 #include <renderer/VulkanRenderer.h>
 #include <scene/PlaySnapshot.h>
@@ -151,6 +152,7 @@ namespace mir
         VulkanRenderer mRenderer;
         ImGuiRuntime mImGui;
         Editor mEditor;
+        UIContext mGameUI;
         AssetImportManager mAssetImport;
 
         // Before mWorld, so it is destroyed after it

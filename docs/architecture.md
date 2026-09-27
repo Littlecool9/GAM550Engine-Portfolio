@@ -62,23 +62,26 @@ the pieces depend on each other.
                MjolnirEngine (main.cpp)
                          |
                         app
-      +--------+---------+--------+
-      |        |         |        |
-   assets    scene    script    editor ---- editortheme
-      |        |         |        |
-      |        |         |   imguiruntime
-      |        |         |     |      |
-      |        |         |  window  renderer
-      |        |         |     |      |
-      +--------+---------+-----+------+
+      +--------+---------+--------+-------------+
+      |        |         |        |             |
+   assets    scene    script    editor        gameui
+      |        |         |      |    |        |     |
+      |        |         |      | editortheme |   input
+      |        |         |      |             |     |
+      |        |         |   imguiruntime     |     |
+      |        |         |     |      |       |     |
+      |        |         |  window  renderer <+     |
+      |        |         |     |      |             |
+      +--------+---------+-----+------+-------------+
                          |
                        core
 ```
 
 `app` also links `window`, `renderer` and `imguiruntime` directly, because it
 constructs them. `editor` links `window` and `renderer` too, for the title bar
-and the viewport rect. `gameui`, when it lands, sits beside `editor` on
-`imguiruntime`.
+and the viewport rect. `gameui` sits beside `editor` and draws into the same
+ImGui frame, but links `imgui` alone, privately, and neither `editor` nor
+`imguiruntime`: it never owns or brackets the frame.
 
 `serial` is not shown: `renderer`, `scene`, `input` and `app` reach `core`
 through it for anything touching a JSON file.
@@ -97,6 +100,7 @@ through it for anything touching a JSON file.
 | `imguiruntime` | ImGui context lifetime, fonts, both backends, the frame bracket | [imguiruntime.md](modules/imguiruntime.md) |
 | `editor` | The editor shell, drawn into `imguiruntime`'s context | [editor.md](modules/editor.md) |
 | `editortheme` | Theme data only | [editortheme.md](modules/editortheme.md) |
+| `gameui` | Game UI drawn over the scene, the same in the editor and a game build | [gameui.md](modules/gameui.md) |
 | `app` | Composition root and the frame loop | [app.md](modules/app.md) |
 
 Add your row when you start a document, and update it in the same commit as the
@@ -157,8 +161,17 @@ and `imgui.ini`. The runtime leaves `IniFilename` null, so a build without
 `editor` persists nothing.
 
 `app` drives a frame as `ImGuiRuntime::BeginFrame`, `Editor::DrawLayout`,
-`ImGuiRuntime::EndFrame`, then reads `Editor::SceneViewportRect`. `App.cpp`
-contains no ImGui call and includes no ImGui header.
+`UIContext::BeginFrame`/`EndFrame`, `ImGuiRuntime::EndFrame`, then reads
+`Editor::SceneViewportRect`. `App.cpp` contains no ImGui call and includes no
+ImGui header.
+
+**`gameui` draws into ImGui's background draw list and nowhere else.**
+
+That list renders before every window, and the renderer draws ImGui after the
+3D views, so the game UI lands over the scene and under the editor's panels. The
+same code is a HUD clipped to the scene viewport in the editor and fullscreen UI
+in a game build, with no renderer change. Only `UIBackendImGui.cpp` includes
+ImGui, and no public `gameui` header names an ImGui type.
 
 **`editortheme` depends on nothing engine-side, only `imgui`.**
 
@@ -188,6 +201,7 @@ PollEvents                       close flag and framebuffer size refresh here
 dt = min(elapsed, mMaxDeltaSeconds)
 ImGuiRuntime::BeginFrame         the NewFrame trio
 Editor::DrawLayout               -> EditorActions (scene action, game to open)
+UIContext::BeginFrame/EndFrame   game UI into the background list, scene viewport or whole window
 ImGuiRuntime::EndFrame           -> ImDrawData*
 renderer.SetImGuiDrawData(...), renderer.SetSceneViewport(...)
 ScriptReloadWatcher::Poll        mtime check, throttled
@@ -364,6 +378,12 @@ table. See [script.md](modules/script.md).
 5. No CI. Tests are run by hand.
 
 ## Changed
+
+*2026-09-27* — **`gameui` added.** Was: `editor` was the only thing drawing into
+the ImGui frame, so a game had no UI. Now: `gameui` records a draw list and
+replays it into ImGui's background draw list, over the scene and under the
+editor's panels, clipped to the scene viewport in the editor and fullscreen
+without it. See [gameui.md](modules/gameui.md).
 
 *2026-09-26* — **ImGui's lifetime moved out of `editor` into `imguiruntime`.**
 Was: `Editor::Initialize` created the context, loaded the fonts and initialised
