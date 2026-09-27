@@ -9,7 +9,9 @@
 
 #include <editor/panels/HierarchyPanel.h>
 
+#include <core/ecs/EntityTypeRegistry.h>
 #include <core/ecs/HierarchyIndex.h>
+#include <core/ecs/components/Name.h>
 #include <editor/Selection.h>
 
 #include <imgui.h>
@@ -21,7 +23,7 @@ namespace mir
 {
     namespace
     {
-        void DrawEntity(const HierarchyIndex *index, Selection &selection, Entity entity)
+        void DrawEntity(World &world, const HierarchyIndex *index, Selection &selection, Entity entity)
         {
             const std::span<const Entity> children =
                 index != nullptr ? index->ChildrenOf(entity) : std::span<const Entity>{};
@@ -35,7 +37,10 @@ namespace mir
 
             // unique across index/generation reuse, distinct from the label text
             void *id = reinterpret_cast<void *>(static_cast<uintptr_t>(PackEntity(entity)));
-            const bool open = ImGui::TreeNodeEx(id, flags, "Entity %u", entity.mIndex);
+            const Name *name = world.GetComponent<Name>(entity);
+            const bool open = name != nullptr
+                ? ImGui::TreeNodeEx(id, flags, "%s", name->mValue)
+                : ImGui::TreeNodeEx(id, flags, "Entity %u", entity.mIndex);
 
             if (ImGui::IsItemClicked())
                 ApplyClick(selection, entity, ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift);
@@ -43,7 +48,7 @@ namespace mir
             if (!children.empty() && open)
             {
                 for (const Entity child : children)
-                    DrawEntity(index, selection, child);
+                    DrawEntity(world, index, selection, child);
                 ImGui::TreePop();
             }
         }
@@ -54,13 +59,34 @@ namespace mir
         Selection &selection = world.Resource<Selection>();
         std::erase_if(selection.mSelected, [&](Entity e) { return !world.IsAlive(e); });
 
+        if (ImGui::BeginPopupContextWindow("HierarchyCreateEntity"))
+        {
+            if (ImGui::BeginMenu("Create"))
+            {
+                for (const EntityTypeDesc &type : EntityTypeRegistry::Instance().All())
+                {
+                    if (ImGui::MenuItem(type.mName.data()))
+                    {
+                        if (type.mCanCreate == nullptr || type.mCanCreate(world))
+                        {
+                            const Entity created = world.CreateEntity();
+                            type.mCreate(world, created);
+                            selection.mSelected = { created };
+                        }
+                    }
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::EndPopup();
+        }
+
         const HierarchyIndex *index = world.TryResource<HierarchyIndex>();
 
         world.ForEachAliveEntity(
             [&](Entity entity)
             {
                 if (index == nullptr || index->ParentOf(entity).IsNull())
-                    DrawEntity(index, selection, entity);
+                    DrawEntity(world, index, selection, entity);
             });
     }
 }

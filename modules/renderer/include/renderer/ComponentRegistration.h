@@ -11,4 +11,6 @@
 namespace mir
 {
     void RegisterRendererComponents();
+
+    void RegisterRendererEntityTypes();
 }

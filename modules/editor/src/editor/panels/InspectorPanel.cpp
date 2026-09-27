@@ -12,6 +12,7 @@
 
 #include <core/ecs/ComponentFields.h>
 #include <core/ecs/ComponentRegistry.h>
+#include <core/ecs/components/Name.h>
 #include <editor/Selection.h>
 
 #include <glm/gtc/quaternion.hpp>
@@ -191,7 +192,10 @@ namespace mir
             return;
         }
 
-        ImGui::Text("Entity %u", entity.mIndex);
+        if (const Name *name = world.GetComponent<Name>(entity))
+            ImGui::Text("%s", name->mValue);
+        else
+            ImGui::Text("Entity %u", entity.mIndex);
         ImGui::Separator();
 
         for (const ComponentOps *ops : ComponentRegistry::Instance().All())
