@@ -65,7 +65,7 @@ void SetFog(const glm::vec3 &color, float density);          // density <= 0 dis
 void SetImGuiDrawData(ImDrawData *drawData);
 VkExtent2D SwapchainExtent() const; 
 
-bool InitImGuiVulkanBackend();               // called by editor, not App or game code
+bool InitImGuiVulkanBackend();               // called by imguiruntime, not App or game code
 void ShutdownImGuiVulkanBackend();
 
 void Shutdown();
@@ -236,8 +236,8 @@ swapchain, so the editor's docked panels are never painted over and one
 viewport's geometry never bleeds into another's rect.
 
 ImGui's draw data composites on top afterwards, unclipped and after every
-`RenderView`, because ImGui manages its own per-window clip rects. `editor` is
-the only caller.
+`RenderView`, because ImGui manages its own per-window clip rects. The draw data
+comes from `ImGuiRuntime::EndFrame`, which `App` passes through.
 
 **A viewport's camera resolves in this order: external, then a specific
 `Entity`, then the first `Camera` found.** `SetExternalCamera` is for a camera

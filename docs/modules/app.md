@@ -5,7 +5,7 @@ other module exists. It contains no gameplay and no subsystem of its own, and it
 is not a framework — there is no registry, no service locator, and no virtual
 `Game` to subclass.
 
-`mir::app` · depends `mir::core`, `assets`, `window`, `renderer`, `editor`, `scene`, `script`, all public; `input`, `audio`, `physics`, `serial` private · API `modules/app/include/app/` · maintainer Sumin Park · reviewed 2026-09-18
+`mir::app` · depends `mir::core`, `assets`, `window`, `renderer`, `editor`, `imguiruntime`, `scene`, `script`, all public; `input`, `audio`, `physics`, `serial` private · API `modules/app/include/app/` · maintainer Sumin Park · reviewed 2026-09-18
 
 ## Model
 
@@ -24,9 +24,9 @@ Start(scheduler)                       systems cache their queries
 while not ShouldClose:
     PollEvents                         close flag and size refresh here
     dt = min(elapsed, mMaxDeltaSeconds)
-    Editor::BeginFrame
+    ImGuiRuntime::BeginFrame                 the NewFrame trio
     Editor::DrawLayout -> EditorActions      New/Save/Load/Play/TogglePause/Stop and Open Project acted on here
-    renderer.SetImGuiDrawData(Editor::EndFrame())
+    renderer.SetImGuiDrawData(ImGuiRuntime::EndFrame())
     renderSystem.SetViewportRect(0, Editor::SceneViewportRect())
     if IsEditing(world):                     viewport 0's camera, only in Edit
         Editor::UpdateCamera(dt)
@@ -41,8 +41,8 @@ while not ShouldClose:
     if mMaxFrames reached: RequestClose
 ```
 
-`App` contains no ImGui call and never builds a `DrawItem`. The editor produces a
-draw-data pointer and a rect, and `RenderSystem` does the drawing from the
+`App` contains no ImGui call and never builds a `DrawItem`. `ImGuiRuntime`
+produces a draw-data pointer and the editor a rect, and `RenderSystem` does the drawing from the
 `Render` phase.
 
 A `SystemContext` is rebuilt every tick rather than stored. It bundles references

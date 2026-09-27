@@ -1,8 +1,8 @@
 /**
  * @file Editor.h
  * @author Sumin Park
- * @brief Owns the ImGui context, backend, and the Slate editor shell
- *        (dockspace, Hierarchy/Inspector/Output panels, Debug menu).
+ * @brief The Slate editor shell (dockspace, Hierarchy/Inspector/Output
+ *        panels, Debug menu), drawn into the context ImGuiRuntime owns.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -17,6 +17,7 @@
 #include <editor/panels/InspectorPanel.h>
 #include <editor/panels/LogPanel.h>
 #include <editor/panels/ProjectSettingsPanel.h>
+#include <imguiruntime/ImGuiRuntime.h>
 #include <renderer/RenderSettings.h>
 #include <renderer/VulkanRenderer.h>
 #include <window/Window.h>
@@ -26,8 +27,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-
-struct ImDrawData;
 
 namespace mir
 {
@@ -78,18 +77,17 @@ namespace mir
         Editor(Editor &&) = delete;
         Editor &operator=(Editor &&) = delete;
 
-        bool Initialize(Window &window, VulkanRenderer &renderer, std::filesystem::path projectSettingsPath,
+        // imgui must already be initialized; the editor never owns the context
+        bool Initialize(const ImGuiRuntime &imgui, Window &window, std::filesystem::path projectSettingsPath,
                         World &world);
 
-        void Shutdown(VulkanRenderer &renderer);
+        //before ImGuiRuntime::Shutdown
+        void Shutdown();
 
-        void BeginFrame();
-
+        //between ImGuiRuntime::BeginFrame and EndFrame
         EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                                  const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
                                  std::string_view currentProject, World &world, const AssetImportView &assetImport);
-
-        ImDrawData *EndFrame();
 
         VkRect2D SceneViewportRect() const { return mSceneViewportRect; }
 
