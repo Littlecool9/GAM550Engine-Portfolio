@@ -49,7 +49,8 @@ struct RayPayload
 static const float3 kAlbedo = float3(0.5, 0.5, 0.5);
 static const float kSpecularStrength = 0.04;
 static const float kShininess = 32.0;
-static const uint kVertexStrideFloats = 9;
+// pos(3) + color(3) + normal(3) + uv(2) + alpha(1) + tangent(4); keep in sync with mir::Vertex.
+static const uint kVertexStrideFloats = 16;
 
 [shader("raygeneration")]
 void rayGenMain()
