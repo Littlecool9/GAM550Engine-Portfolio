@@ -1,3 +1,5 @@
+#include "AtmosphereCommon.slang"
+
 [[vk::binding(0, 0)]]
 RaytracingAccelerationStructure gTlas;
 
@@ -81,8 +83,9 @@ void rayGenMain()
 [shader("miss")]
 void missMain(inout RayPayload payload)
 {
-    const float t = clamp(WorldRayDirection().y * 0.5 + 0.5, 0.0, 1.0);
-    payload.color = lerp(float3(0.05, 0.05, 0.08), float3(0.3, 0.45, 0.7), t);
+    const float3 rayOrigin = float3(cameraPosWS.x, kPlanetRadius + cameraPosWS.y, cameraPosWS.z);
+    float3 color = Atmosphere(WorldRayDirection(), rayOrigin, normalize(lightDirWS.xyz));
+    payload.color = TonemapReinhard(color);
 }
 
 [shader("closesthit")]

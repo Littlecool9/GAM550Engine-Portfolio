@@ -400,9 +400,13 @@ namespace mir
             std::vector<VkBufferImageCopy> &regions)
         {
             const auto toLinear = [](float v)
-                { return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f); };
+                {
+                    return v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f);
+                };
             const auto toSrgb = [](float v)
-                { return v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f; };
+                {
+                    return v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+                };
 
             bytes.assign(desc.pixels.begin(), desc.pixels.end());
             std::vector<std::byte> level(desc.pixels.begin(), desc.pixels.end());
@@ -1812,11 +1816,11 @@ namespace mir
     VkSampler VulkanRenderer::AcquireSampler(const SamplerDesc &desc)
     {
         const uint64_t key = (static_cast<uint64_t>(desc.magFilter) << 40) |
-                             (static_cast<uint64_t>(desc.minFilter) << 32) |
-                             (static_cast<uint64_t>(desc.mipmapMode) << 24) |
-                             (static_cast<uint64_t>(desc.addressModeU) << 16) |
-                             (static_cast<uint64_t>(desc.addressModeV) << 8) |
-                             (desc.useMips ? 1ull : 0ull);
+            (static_cast<uint64_t>(desc.minFilter) << 32) |
+            (static_cast<uint64_t>(desc.mipmapMode) << 24) |
+            (static_cast<uint64_t>(desc.addressModeU) << 16) |
+            (static_cast<uint64_t>(desc.addressModeV) << 8) |
+            (desc.useMips ? 1ull : 0ull);
 
         if (const auto it = mSamplers.find(key); it != mSamplers.end())
             return it->second;
@@ -1886,7 +1890,8 @@ namespace mir
 
         VkShaderStageFlags cameraStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         if (mRayTracingSupported)
-            cameraStages |= VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+            cameraStages |= VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
+            VK_SHADER_STAGE_MISS_BIT_KHR;
 
         const VkDescriptorSetLayoutBinding binding{
             .binding = 0,
@@ -2660,9 +2665,9 @@ namespace mir
         VkBufferUsageFlags extraUsage = 0;
         if (mRayTracingSupported)
             extraUsage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 
-        // No host-access flags on either: that is what puts them in VRAM.
+    // No host-access flags on either: that is what puts them in VRAM.
         const bool buffersCreated =
             CreateBuffer(mAllocator, vertexBytes,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | extraUsage,
@@ -3383,9 +3388,9 @@ namespace mir
             const int32_t bottom = top + static_cast<int32_t>(rect.extent.height);
             const VkImageBlit blitRegion{
                 .srcSubresource{ .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1 },
-                .srcOffsets{ { left, top, 0 }, { right, bottom, 1 } },
+                .srcOffsets{ { left, top, 0 },{ right, bottom, 1 } },
                 .dstSubresource{ .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1 },
-                .dstOffsets{ { left, top, 0 }, { right, bottom, 1 } } };
+                .dstOffsets{ { left, top, 0 },{ right, bottom, 1 } } };
 
             vkCmdBlitImage(cmd,
                 mRtOutputImages[mFrameIndex], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,

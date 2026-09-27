@@ -228,7 +228,7 @@ discarded. `RecordTlasBuild` resolves each item's material the same way
 `mDefaultMaterial` on a miss) rather than inventing a second fallback
 rule. `closestHitMain` fetches the hit triangle's 3 indices, then either
 its 3 vertex colors (unlit - `Vertex::color`, `renderer/Mesh.h`, offset 3
-floats into its 9-float stride) or its 3 normals (lit, offset 6),
+floats into its 16-float stride) or its 3 normals (lit, offset 6),
 barycentric-interpolates, and runs the exact same math its raster
 counterpart does:
 `vertexColor * tint` for unlit, `default.slang`'s
@@ -239,13 +239,21 @@ exponential-fog blend both raster shaders already apply -
 `length(cameraPosWS - worldPos)`, since the ray origin already *is* the
 camera and its direction is already normalized.
 
-**`missMain` is a flat vertical-gradient placeholder, not `sky.slang`'s
-Nishita atmosphere.** Porting the real thing means either duplicating
-`Atmosphere()` and its constants into `raytrace.slang`, or introducing a
-shared `#include`d file that `cmake/Shaders.cmake`'s dependency tracking
-doesn't know to watch (`engine_add_shaders`'s `DEPENDS` only names the one
-source file passed to it) - real scope, deliberately left for later (see
-Backlog) rather than folded into this pass.
+**`missMain` renders `sky.slang`'s real Nishita atmosphere, not a flat
+vertical-gradient placeholder — issue #80.** `Atmosphere()`/`AtmosphereHeight()`/
+`RaySphere()`, their constants, and a shared `TonemapReinhard()` moved into
+`AtmosphereCommon.slang`, `#include`d by both `sky.slang` and `raytrace.slang`
+rather than duplicated between them. `missMain` computes the same
+planet-relative ray origin `sky.slang`'s `fragmentMain` does from the same
+`cameraPosWS`, calls `Atmosphere()` with `WorldRayDirection()` in place of
+raster's screen-space `rayDir`, and applies the same tonemap - same sky,
+either path. This needed `cmake/Shaders.cmake`'s dependency tracking to
+learn about `#include`, since `engine_add_shaders`'s `DEPENDS` previously
+only named the one source file passed to it: `_engine_scan_shader_includes`
+now greps each source (and transitively, each file it includes) for
+`#include "..."` lines at configure time and adds every hit as an extra
+`DEPENDS`, so Ninja rebuilds every shader that includes a shared file the
+moment that file's mtime changes, with no reconfigure needed.
 
 **`RenderSettings` owns only `project_settings.json`'s `"rendering"` key**,
 the same way `InputMap` (see the `input` module) owns only `"input"`. Each
@@ -454,21 +462,45 @@ No tests. Everything here needs a device, and the module is verified by running.
    since sky and lit shading already read the same UBO fields — see the
    set-1 rules above). There's also no moon/stars, so full night is flat
    black rather than lit by anything but `SetAmbientColor`.
-8. **RT still isn't full parity with raster — issue #55 closed the
-   material-shading gap, not the rest.** `kMaxRtInstances` (256) is a fixed
-   cap with no overflow handling beyond silently dropping the rest; the
-   TLAS rebuilds fully every `TraceFrame` call with no dirty-tracking (see
-   the Rules section above - correct, just not efficient); `missMain` is a
-   flat gradient, not `sky.slang`'s real atmosphere (porting it needs a
-   shared-include story `cmake/Shaders.cmake` doesn't have yet - see
-   Rules); only the two shaders that exist (`default`/`unlit`) get RT
-   parity, so a third custom material shader would trace with whichever of
-   those two `GpuMaterial::mUnlit` happens to pick, not its own look; and
+8. **RT still isn't full parity with raster — issues #55 and #80 closed the
+   material-shading and sky gaps, not the rest.** `kMaxRtInstances` (256) is
+   a fixed cap with no overflow handling beyond silently dropping the rest;
+   the TLAS rebuilds fully every `TraceFrame` call with no dirty-tracking
+   (see the Rules section above - correct, just not efficient); only the
+   two shaders that exist (`default`/`unlit`) get RT parity, so a third
+   custom material shader would trace with whichever of those two
+   `GpuMaterial::mUnlit` happens to pick, not its own look; and
    `TraceFrame` only ever traces `views[0]` - a second viewport on screen
    at once is backlog item 6 regardless of raster/RT, and RT inherits that
    gap rather than fixing it.
 
 ## Changed
+
+*2026-09-27* — **RT's `missMain` renders the real sky, and vertex-stride
+drift between raster and RT got fixed along the way — issues #55 and #80.**
+`mir::Vertex` grew from 9 floats (pos/color/normal) to 16 (uv/alpha/tangent
+added for texturing and skinned models) without `raytrace.slang`'s
+`closestHitMain` noticing - its hardcoded `kVertexStrideFloats` was still 9,
+so it read color/normal off the wrong byte offsets for any mesh with more
+than one vertex; now 16, matching `mir::Vertex` (`BuildBLAS`'s own
+`vertexStride = sizeof(Vertex)` had already tracked the change correctly, so
+only the shader-side constant was stale). Separately: `Atmosphere()`,
+`AtmosphereHeight()`, `RaySphere()`, their constants, and a new shared
+`TonemapReinhard()` moved out of `sky.slang` into `AtmosphereCommon.slang`,
+which both `sky.slang` and `raytrace.slang` now `#include`; `missMain`
+computes the same planet-relative ray origin `sky.slang`'s `fragmentMain`
+does and calls the same `Atmosphere()`, so RT and raster render the same sky
+from the same light direction instead of RT falling back to a flat
+vertical-gradient placeholder. Getting there needed
+`cmake/Shaders.cmake` to understand `#include` at all:
+`_engine_scan_shader_includes` greps a shader source (and, transitively,
+anything it includes) for `#include "..."` lines at configure time and adds
+every hit to the custom command's `DEPENDS`, so editing a shared include now
+rebuilds every `.spv` that includes it, not just the file passed as
+`SOURCE` - verified by touching only `AtmosphereCommon.slang` and watching
+both `sky`'s and `raytrace`'s shader targets rebuild with no `cmake`
+reconfigure. `default`/`unlit`/`model`'s shader build path is untouched.
+Issues #55, #80.
 
 *2026-09-22* — **RT closest-hit shading reads real material data — issue
 #55.** Was: `closestHitMain` wrote a flat barycentric tint regardless of
