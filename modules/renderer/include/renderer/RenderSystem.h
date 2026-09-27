@@ -17,6 +17,7 @@
 #include <renderer/RenderSettings.h>
 #include <renderer/components/Camera.h>
 #include <renderer/components/MeshRenderer.h>
+#include <renderer/components/Sky.h>
 
 #include <glm/gtc/matrix_inverse.hpp>
 
@@ -54,6 +55,7 @@ namespace mir
         {
             mMeshQuery = &context.world.GetOrCreateQuery<const WorldTransform, const MeshRenderer>();
             mCameraQuery = &context.world.GetOrCreateQuery<const WorldTransform, const Camera>();
+            mSkyQuery = &context.world.GetOrCreateQuery<const WorldTransform, const Sky>();
         }
 
         ViewportId AddViewport(VkRect2D rect)
@@ -101,6 +103,21 @@ namespace mir
 
             const RenderSettings &renderSettings = context.world.Resource<RenderSettings>();
             mRenderer.SetFog(kDefaultFogColor, renderSettings.fog ? kDefaultFogDensity : 0.0f);
+
+            static const glm::vec3 kSunReferenceLocal = glm::normalize(glm::vec3(0.4f, 0.7f, 0.5f));
+
+            bool haveSky = false;
+            mSkyQuery->ForEach([&](Entity, const WorldTransform &world, const Sky &sky)
+                {
+                    if (haveSky)
+                        return;
+                    const glm::vec3 sunDirWS =
+                        glm::vec3(world.Matrix() * glm::vec4(kSunReferenceLocal, 0.0f));
+                    mRenderer.SetSunDirection(sunDirWS);
+                    mRenderer.SetAtmosphere(sky);
+                    haveSky = true;
+                });
+            mRenderer.SetSkyVisible(haveSky);
 
             bool haveDefaultCamera = false;
             glm::mat4 defaultCameraWorld{ 1.0f };
@@ -196,7 +213,7 @@ namespace mir
                         const glm::vec4 pa = viewProj * a.model * glm::vec4(0, 0, 0, 1);
                         const glm::vec4 pb = viewProj * b.model * glm::vec4(0, 0, 0, 1);
                         return pa.z / (std::abs(pa.w) > 1e-8f ? pa.w : 1e-8f) >
-                               pb.z / (std::abs(pb.w) > 1e-8f ? pb.w : 1e-8f);
+                            pb.z / (std::abs(pb.w) > 1e-8f ? pb.w : 1e-8f);
                     });
 
                 mRenderViews.push_back(
@@ -229,6 +246,7 @@ namespace mir
         VulkanRenderer &mRenderer;
         Query<const WorldTransform, const MeshRenderer> *mMeshQuery = nullptr;
         Query<const WorldTransform, const Camera> *mCameraQuery = nullptr;
+        Query<const WorldTransform, const Sky> *mSkyQuery = nullptr;
 
         std::vector<Viewport> mViewports;
 

@@ -3,7 +3,7 @@
 struct VSOutput
 {
     float4 position : SV_Position;
-    float2 ndc      : TEXCOORD0;
+    float2 ndc : TEXCOORD0;
 };
 
 [[vk::binding(0, 0)]]
@@ -15,10 +15,14 @@ cbuffer CameraData
     float4 ambientColor;
     float4x4 invViewProj;
     float4 cameraPosWS;
+    float4 fogColor;
+    float4 atmosphereScattering;
+    float4 atmosphereRadii;
+    float4 atmosphereMisc;
 };
 
 [shader("vertex")]
-VSOutput vertexMain(uint vertexId : SV_VertexID)
+VSOutput vertexMain(uint vertexId: SV_VertexID)
 {
     float2 positions[3] = {
         float2(-1.0, -1.0),
@@ -37,14 +41,24 @@ VSOutput vertexMain(uint vertexId : SV_VertexID)
 [shader("fragment")]
 float4 fragmentMain(VSOutput input) : SV_Target
 {
+    AtmosphereParams params;
+    params.rayleighCoeff = atmosphereScattering.xyz;
+    params.mieCoeff = atmosphereScattering.w;
+    params.planetRadius = atmosphereRadii.x;
+    params.atmosphereRadius = atmosphereRadii.y;
+    params.rayleighScaleHeight = atmosphereRadii.z;
+    params.mieScaleHeight = atmosphereRadii.w;
+    params.mieG = atmosphereMisc.x;
+    params.sunIntensity = atmosphereMisc.y;
+
     float4 worldFar = mul(invViewProj, float4(input.ndc, 1.0, 1.0));
     float3 worldPos = worldFar.xyz / worldFar.w;
     float3 rayDir = normalize(worldPos - cameraPosWS.xyz);
 
     // Camera position relative to the planet's center
-    float3 rayOrigin = float3(cameraPosWS.x, kPlanetRadius + cameraPosWS.y, cameraPosWS.z);
+    float3 rayOrigin = float3(cameraPosWS.x, params.planetRadius + cameraPosWS.y, cameraPosWS.z);
 
-    float3 color = Atmosphere(rayDir, rayOrigin, normalize(lightDirWS.xyz));
+    float3 color = Atmosphere(rayDir, rayOrigin, normalize(lightDirWS.xyz), params);
     color = TonemapReinhard(color);
     return float4(color, 1.0);
 }

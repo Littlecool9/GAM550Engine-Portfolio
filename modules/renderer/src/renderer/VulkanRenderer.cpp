@@ -78,6 +78,9 @@ namespace mir
             glm::mat4 invViewProj;
             glm::vec4 cameraPosWS;  // xyz = camera world position
             glm::vec4 fogColor;     // rgb = fog color, a = density (0 = disabled)
+            glm::vec4 atmosphereScattering; // xyz = Rayleigh coeff (m^-1), w = Mie coeff (m^-1)
+            glm::vec4 atmosphereRadii;      // x = planet radius, y = atmosphere radius, z = Rayleigh scale height, w = Mie scale height (m)
+            glm::vec4 atmosphereMisc;       // x = Mie anisotropy g, y = sun intensity
         };
 
         struct RtInstanceInfo
@@ -2015,7 +2018,15 @@ namespace mir
             .ambientColor = glm::vec4(mAmbientColor, 0.0f),
             .invViewProj = glm::inverse(viewProj),
             .cameraPosWS = glm::vec4(cameraPosWS, 1.0f),
-            .fogColor = glm::vec4(mFogColor, mFogDensity) };
+            .fogColor = glm::vec4(mFogColor, mFogDensity),
+            // mAtmosphere stores display units (see Sky.h); 1e-6 for the
+            // scattering coefficients, kilometres for the radii/scale
+            // heights - converted to the physical (SI) units Atmosphere()
+            // in AtmosphereCommon.slang actually integrates over.
+            .atmosphereScattering = glm::vec4(mAtmosphere.mRayleighCoeff * 1e-6f, mAtmosphere.mMieCoeff * 1e-6f),
+            .atmosphereRadii = glm::vec4(mAtmosphere.mPlanetRadiusKm * 1e3f, mAtmosphere.mAtmosphereRadiusKm * 1e3f,
+                mAtmosphere.mRayleighScaleHeightKm * 1e3f, mAtmosphere.mMieScaleHeightKm * 1e3f),
+            .atmosphereMisc = glm::vec4(mAtmosphere.mMieG, mAtmosphere.mSunIntensity, 0.0f, 0.0f) };
         const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
 
         std::byte *const dst = mCameraMapped[mFrameIndex] + offset;
@@ -3299,10 +3310,15 @@ namespace mir
         // only runs where nothing above wrote depth, i.e. still at the far
         // clear value - a fullscreen ray-marched shader paying its cost only
         // on actual background pixels, with early-z doing the rejection.
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipelineLayout,
-            0, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
-        vkCmdDraw(cmd, 3, 1, 0, 0);
+        // Gated on a Sky entity existing (#97): with none, the clear color
+        // shows through instead, same as before any Sky entity existed.
+        if (mSkyVisible)
+        {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipelineLayout,
+                0, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+        }
     }
 
     void VulkanRenderer::RecordRtFrame(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views)

@@ -12,6 +12,7 @@
 #include <renderer/Material.h>
 #include <renderer/Mesh.h>
 #include <renderer/Texture.h>
+#include <renderer/components/Sky.h>
 
 #include <volk.h>
 
@@ -108,8 +109,8 @@ namespace mir
         // Releases a selected model generation after a replacement has been
         // prepared. Handles not present in these spans remain valid.
         void ReleaseModelResources(std::span<const MeshHandle> meshes,
-                                   std::span<const MaterialHandle> materials,
-                                   std::span<const TextureHandle> textures);
+            std::span<const MaterialHandle> materials,
+            std::span<const TextureHandle> textures);
 
         VkExtent2D SwapchainExtent() const { return mSwapchainExtent; }
 
@@ -134,6 +135,12 @@ namespace mir
             mFogColor = color;
             mFogDensity = density;
         }
+
+        void SetSunDirection(const glm::vec3 &direction) { mLightDirection = glm::normalize(direction); }
+
+        void SetAtmosphere(const Sky &sky) { mAtmosphere = sky; }
+
+        void SetSkyVisible(bool visible) { mSkyVisible = visible; }
 
         void Shutdown();
 
@@ -213,6 +220,9 @@ namespace mir
 
         glm::vec3 mFogColor{ 0.02f, 0.02f, 0.02f };
         float mFogDensity = 0.0f;
+
+        Sky mAtmosphere{};
+        bool mSkyVisible = false;
 
         const ISurfaceProvider *mWindow;
         VkInstance mVulkanInstance = VK_NULL_HANDLE;

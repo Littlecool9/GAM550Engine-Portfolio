@@ -8,8 +8,8 @@ RWTexture2D<float4> gOutput;
 
 struct RtInstanceInfo
 {
-    float* vertexAddress;
-    uint* indexAddress;
+    float *vertexAddress;
+    uint *indexAddress;
     float4 tint;
     float4 normalCol0;
     float4 normalCol1;
@@ -33,6 +33,9 @@ cbuffer CameraData
     float4x4 invViewProj;
     float4 cameraPosWS;
     float4 fogColor;
+    float4 atmosphereScattering;
+    float4 atmosphereRadii;
+    float4 atmosphereMisc;
 };
 
 struct RtPushData
@@ -83,8 +86,18 @@ void rayGenMain()
 [shader("miss")]
 void missMain(inout RayPayload payload)
 {
-    const float3 rayOrigin = float3(cameraPosWS.x, kPlanetRadius + cameraPosWS.y, cameraPosWS.z);
-    float3 color = Atmosphere(WorldRayDirection(), rayOrigin, normalize(lightDirWS.xyz));
+    AtmosphereParams params;
+    params.rayleighCoeff = atmosphereScattering.xyz;
+    params.mieCoeff = atmosphereScattering.w;
+    params.planetRadius = atmosphereRadii.x;
+    params.atmosphereRadius = atmosphereRadii.y;
+    params.rayleighScaleHeight = atmosphereRadii.z;
+    params.mieScaleHeight = atmosphereRadii.w;
+    params.mieG = atmosphereMisc.x;
+    params.sunIntensity = atmosphereMisc.y;
+
+    const float3 rayOrigin = float3(cameraPosWS.x, params.planetRadius + cameraPosWS.y, cameraPosWS.z);
+    float3 color = Atmosphere(WorldRayDirection(), rayOrigin, normalize(lightDirWS.xyz), params);
     payload.color = TonemapReinhard(color);
 }
 

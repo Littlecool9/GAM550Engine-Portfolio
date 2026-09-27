@@ -51,7 +51,7 @@ namespace mir
         ComponentRegistry::Instance().Register<MeshRenderer>(kMeshRendererFields);
         ComponentRegistry::Instance().Register<Camera>(kCameraFields);
         ComponentRegistry::Instance().Register<Light>();
-        ComponentRegistry::Instance().Register<Sky>();
+        ComponentRegistry::Instance().Register<Sky>(kSkyFields);
     }
 
     void RegisterRendererEntityTypes()
@@ -66,7 +66,7 @@ namespace mir
         EntityTypeRegistry::Instance().Register("Sky", [](World &world, Entity entity)
             {
                 world.AddComponent<Transform>(entity, Transform{});
-                world.AddTag<Sky>(entity);
+                world.AddComponent<Sky>(entity, Sky{});
                 world.AddComponent<Name>(entity, MakeName(std::format("Sky_Entity{}", entity.mIndex)));
             }, &CanCreateSky);
     }
