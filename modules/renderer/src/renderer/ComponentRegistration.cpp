@@ -16,6 +16,7 @@
 
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/EntityTypeRegistry.h>
+#include <core/ecs/TransformHierarchy.h>
 #include <core/ecs/components/Name.h>
 #include <core/ecs/components/Transform.h>
 #include <core/log/Log.h>
@@ -44,28 +45,66 @@ namespace mir
                 MIR_LOG_ERROR("Create Sky: a Sky entity already exists in this scene - only one is supported");
             return !exists;
         }
+
+        bool CanCreateSunLight(const World &world)
+        {
+            const bool exists = AnyEntityHas(world, [](const World &w, Entity e)
+                {
+                    const Light *light = w.GetComponent<Light>(e);
+                    return light != nullptr && light->mType == LightType::Sun;
+                });
+            if (exists)
+                MIR_LOG_ERROR("Create Sun Light: a Sun-type Light already exists in this scene - only the first "
+                    "one found drives the sun, so a second would silently do nothing; only one is supported");
+            return !exists;
+        }
+
+        const char *LightTypeEntityPrefix(LightType type)
+        {
+            switch (type)
+            {
+            case LightType::Sun:
+                return "Sun";
+            case LightType::Point:
+                return "Point";
+            case LightType::Spot:
+                return "Spot";
+            case LightType::Area:
+                return "Area";
+            }
+            return "Light";
+        }
+
+        template <LightType Type>
+        void CreateLightEntity(World &world, Entity entity)
+        {
+            AddTransform(world, entity);
+            Light light{};
+            light.mType = Type;
+            world.AddComponent<Light>(entity, light);
+            world.AddComponent<Name>(entity,
+                MakeName(std::format("{}_Entity{}", LightTypeEntityPrefix(Type), entity.mIndex)));
+        }
     }
 
     void RegisterRendererComponents()
     {
         ComponentRegistry::Instance().Register<MeshRenderer>(kMeshRendererFields);
         ComponentRegistry::Instance().Register<Camera>(kCameraFields);
-        ComponentRegistry::Instance().Register<Light>();
+        ComponentRegistry::Instance().Register<Light>(kLightFields);
         ComponentRegistry::Instance().Register<Sky>(kSkyFields);
     }
 
     void RegisterRendererEntityTypes()
     {
-        EntityTypeRegistry::Instance().Register("Light", [](World &world, Entity entity)
-            {
-                world.AddComponent<Transform>(entity, Transform{});
-                world.AddTag<Light>(entity);
-                world.AddComponent<Name>(entity, MakeName(std::format("Light_Entity{}", entity.mIndex)));
-            });
+        EntityTypeRegistry::Instance().Register("Light/Sun", &CreateLightEntity<LightType::Sun>, &CanCreateSunLight);
+        EntityTypeRegistry::Instance().Register("Light/Point", &CreateLightEntity<LightType::Point>);
+        EntityTypeRegistry::Instance().Register("Light/Spot", &CreateLightEntity<LightType::Spot>);
+        EntityTypeRegistry::Instance().Register("Light/Area", &CreateLightEntity<LightType::Area>);
 
         EntityTypeRegistry::Instance().Register("Sky", [](World &world, Entity entity)
             {
-                world.AddComponent<Transform>(entity, Transform{});
+                AddTransform(world, entity);
                 world.AddComponent<Sky>(entity, Sky{});
                 world.AddComponent<Name>(entity, MakeName(std::format("Sky_Entity{}", entity.mIndex)));
             }, &CanCreateSky);

@@ -81,6 +81,7 @@ namespace mir
             glm::vec4 atmosphereScattering; // xyz = Rayleigh coeff (m^-1), w = Mie coeff (m^-1)
             glm::vec4 atmosphereRadii;      // x = planet radius, y = atmosphere radius, z = Rayleigh scale height, w = Mie scale height (m)
             glm::vec4 atmosphereMisc;       // x = Mie anisotropy g, y = sun intensity
+            glm::vec4 lightingMeta;         // x = active Point/Spot/Area count in gLights
         };
 
         struct RtInstanceInfo
@@ -1892,22 +1893,28 @@ namespace mir
         mCameraAlignedSize = AlignUp(sizeof(CameraData), props.limits.minUniformBufferOffsetAlignment);
 
         VkShaderStageFlags cameraStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkShaderStageFlags lightListStages = VK_SHADER_STAGE_FRAGMENT_BIT;
         if (mRayTracingSupported)
+        {
             cameraStages |= VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR |
-            VK_SHADER_STAGE_MISS_BIT_KHR;
+                VK_SHADER_STAGE_MISS_BIT_KHR;
+            lightListStages |= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+        }
 
-        const VkDescriptorSetLayoutBinding binding{
-            .binding = 0,
-            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-            .descriptorCount = 1,
-            // Fragment stage added alongside vertex: lit shaders read the
-            // light fields per-pixel now (see default.slang).
-            .stageFlags = cameraStages };
+        const std::array<VkDescriptorSetLayoutBinding, 2> bindings{ {
+            { .binding = 0,
+             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+             .descriptorCount = 1,
+             .stageFlags = cameraStages },
+            { .binding = 1,
+             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+             .descriptorCount = 1,
+             .stageFlags = lightListStages } } };
 
         const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .bindingCount = 1,
-            .pBindings = &binding };
+            .bindingCount = static_cast<uint32_t>(bindings.size()),
+            .pBindings = bindings.data() };
 
         if (vkCreateDescriptorSetLayout(mDevice, &setLayoutInfo, nullptr, &mCameraSetLayout) != VK_SUCCESS)
         {
@@ -1915,15 +1922,15 @@ namespace mir
             return false;
         }
 
-        const VkDescriptorPoolSize poolSize{
-            .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-            .descriptorCount = kFramesInFlight };
+        const std::array<VkDescriptorPoolSize, 2> poolSizes{ {
+            { .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount = kFramesInFlight },
+            { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = kFramesInFlight } } };
 
         const VkDescriptorPoolCreateInfo poolInfo{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
             .maxSets = kFramesInFlight,
-            .poolSizeCount = 1,
-            .pPoolSizes = &poolSize };
+            .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+            .pPoolSizes = poolSizes.data() };
 
         if (vkCreateDescriptorPool(mDevice, &poolInfo, nullptr, &mCameraDescriptorPool) != VK_SUCCESS)
         {
@@ -1932,6 +1939,7 @@ namespace mir
         }
 
         const VkDeviceSize bufferSize = mCameraAlignedSize * kMaxViewsPerFrame;
+        const VkDeviceSize lightBufferSize = sizeof(LightItem) * kMaxLights;
 
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
@@ -1946,6 +1954,18 @@ namespace mir
                 return false;
             }
             mCameraMapped[i] = static_cast<std::byte *>(allocInfo.pMappedData);
+
+            VmaAllocationInfo lightAllocInfo{};
+            if (!CreateBuffer(mAllocator, lightBufferSize,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                mLightBuffers[i], mLightAllocations[i], &lightAllocInfo))
+            {
+                MIR_LOG_CRITICAL("CreateCameraResources: light buffer allocation failed for frame {}", i);
+                return false;
+            }
+            mLightMapped[i] = static_cast<std::byte *>(lightAllocInfo.pMappedData);
 
             const VkDescriptorSetAllocateInfo setAllocInfo{
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -1965,18 +1985,31 @@ namespace mir
                 .offset = 0,
                 .range = sizeof(CameraData) };
 
-            const VkWriteDescriptorSet write{
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = mCameraDescriptorSets[i],
-                .dstBinding = 0,
-                .descriptorCount = 1,
-                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-                .pBufferInfo = &bufferInfo };
+            const VkDescriptorBufferInfo lightBufferInfo{
+                .buffer = mLightBuffers[i],
+                .offset = 0,
+                .range = lightBufferSize };
 
-            vkUpdateDescriptorSets(mDevice, 1, &write, 0, nullptr);
+            const std::array<VkWriteDescriptorSet, 2> writes{ {
+                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                 .dstSet = mCameraDescriptorSets[i],
+                 .dstBinding = 0,
+                 .descriptorCount = 1,
+                 .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+                 .pBufferInfo = &bufferInfo },
+                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                 .dstSet = mCameraDescriptorSets[i],
+                 .dstBinding = 1,
+                 .descriptorCount = 1,
+                 .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                 .pBufferInfo = &lightBufferInfo } } };
+
+            vkUpdateDescriptorSets(mDevice, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
             NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mCameraBuffers[i]),
                 std::format("Camera UBO {}", i).c_str());
+            NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mLightBuffers[i]),
+                std::format("Light list {}", i).c_str());
         }
 
         return true;
@@ -1992,6 +2025,14 @@ namespace mir
                 mCameraBuffers[i] = VK_NULL_HANDLE;
                 mCameraAllocations[i] = VK_NULL_HANDLE;
                 mCameraMapped[i] = nullptr;
+            }
+
+            if (mLightBuffers[i] != VK_NULL_HANDLE)
+            {
+                vmaDestroyBuffer(mAllocator, mLightBuffers[i], mLightAllocations[i]);
+                mLightBuffers[i] = VK_NULL_HANDLE;
+                mLightAllocations[i] = VK_NULL_HANDLE;
+                mLightMapped[i] = nullptr;
             }
         }
 
@@ -2019,14 +2060,11 @@ namespace mir
             .invViewProj = glm::inverse(viewProj),
             .cameraPosWS = glm::vec4(cameraPosWS, 1.0f),
             .fogColor = glm::vec4(mFogColor, mFogDensity),
-            // mAtmosphere stores display units (see Sky.h); 1e-6 for the
-            // scattering coefficients, kilometres for the radii/scale
-            // heights - converted to the physical (SI) units Atmosphere()
-            // in AtmosphereCommon.slang actually integrates over.
             .atmosphereScattering = glm::vec4(mAtmosphere.mRayleighCoeff * 1e-6f, mAtmosphere.mMieCoeff * 1e-6f),
             .atmosphereRadii = glm::vec4(mAtmosphere.mPlanetRadiusKm * 1e3f, mAtmosphere.mAtmosphereRadiusKm * 1e3f,
                 mAtmosphere.mRayleighScaleHeightKm * 1e3f, mAtmosphere.mMieScaleHeightKm * 1e3f),
-            .atmosphereMisc = glm::vec4(mAtmosphere.mMieG, mAtmosphere.mSunIntensity, 0.0f, 0.0f) };
+            .atmosphereMisc = glm::vec4(mAtmosphere.mMieG, mAtmosphere.mSunIntensity, 0.0f, 0.0f),
+            .lightingMeta = glm::vec4(static_cast<float>(mActiveLightCount), 0.0f, 0.0f, 0.0f) };
         const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
 
         std::byte *const dst = mCameraMapped[mFrameIndex] + offset;
@@ -2036,6 +2074,26 @@ namespace mir
         // otherwise, since nothing else guarantees this write is flushed
         // before the render commands using it are submitted.
         vmaFlushAllocation(mAllocator, mCameraAllocations[mFrameIndex], offset, sizeof(CameraData));
+    }
+
+    void VulkanRenderer::SetLights(std::span<const LightItem> lights)
+    {
+        const uint32_t count = std::min(static_cast<uint32_t>(lights.size()), kMaxLights);
+
+        if (count != mActiveLightCount)
+            MIR_LOG_INFO("Point/Spot/Area lights active: {}", count);
+        mActiveLightCount = count;
+        mPendingLights.assign(lights.begin(), lights.begin() + count);
+    }
+
+    void VulkanRenderer::UploadLights()
+    {
+        if (mActiveLightCount == 0)
+            return;
+
+        const VkDeviceSize bytes = sizeof(LightItem) * mActiveLightCount;
+        std::memcpy(mLightMapped[mFrameIndex], mPendingLights.data(), bytes);
+        vmaFlushAllocation(mAllocator, mLightAllocations[mFrameIndex], 0, bytes);
     }
 
     bool VulkanRenderer::CreateRtScene()
@@ -3323,6 +3381,10 @@ namespace mir
 
     void VulkanRenderer::RecordRtFrame(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views)
     {
+        // After TraceFrame's vkWaitSemaphores - safe to overwrite this frame-
+        // in-flight slot's light buffer now (see SetLights()/UploadLights()).
+        UploadLights();
+
         const RenderView &view = views[0];
 
         const VkRect2D rect = ResolveViewRect(view.rect, mSwapchainExtent);
@@ -3459,6 +3521,8 @@ namespace mir
 
     void VulkanRenderer::RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views)
     {
+        UploadLights();
+
         // get image ready
         ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED,

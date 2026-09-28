@@ -16,6 +16,7 @@
 #include <core/log/Log.h>
 #include <renderer/RenderSettings.h>
 #include <renderer/components/Camera.h>
+#include <renderer/components/Light.h>
 #include <renderer/components/MeshRenderer.h>
 #include <renderer/components/Sky.h>
 
@@ -28,6 +29,8 @@
 namespace mir
 {
     using ViewportId = size_t;
+
+    constexpr glm::vec3 kDefaultLightColor{ 0.85f, 0.85f, 0.85f };
 
     struct Viewport
     {
@@ -56,6 +59,7 @@ namespace mir
             mMeshQuery = &context.world.GetOrCreateQuery<const WorldTransform, const MeshRenderer>();
             mCameraQuery = &context.world.GetOrCreateQuery<const WorldTransform, const Camera>();
             mSkyQuery = &context.world.GetOrCreateQuery<const WorldTransform, const Sky>();
+            mLightQuery = &context.world.GetOrCreateQuery<const WorldTransform, const Light>();
         }
 
         ViewportId AddViewport(VkRect2D rect)
@@ -104,16 +108,45 @@ namespace mir
             const RenderSettings &renderSettings = context.world.Resource<RenderSettings>();
             mRenderer.SetFog(kDefaultFogColor, renderSettings.fog ? kDefaultFogDensity : 0.0f);
 
-            static const glm::vec3 kSunReferenceLocal = glm::normalize(glm::vec3(0.4f, 0.7f, 0.5f));
+            bool haveSunLight = false;
+            mLightItems.clear();
+            mLightQuery->ForEach([&](Entity, const WorldTransform &world, const Light &light)
+                {
+                    if (light.mType == LightType::Sun)
+                    {
+                        if (haveSunLight)
+                            return;
+                        const glm::vec3 sunDirWS =
+                            glm::vec3(world.Matrix() * glm::vec4(kSunReferenceLocalDirection, 0.0f));
+                        mRenderer.SetDirectionalLight(sunDirWS, light.mColor * light.mIntensity);
+                        haveSunLight = true;
+                        return;
+                    }
+
+                    LightItem item{};
+                    item.positionAndRange = glm::vec4(glm::vec3(world.Matrix()[3]), light.mRange);
+                    const glm::vec3 dirWS =
+                        glm::normalize(glm::vec3(world.Matrix() * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
+                    const float cosSpot = light.mType == LightType::Spot
+                        ? std::cos(glm::radians(light.mSpotAngleDegrees * 0.5f))
+                        : -1.0f;
+                    item.directionAndSpotCos = glm::vec4(dirWS, cosSpot);
+                    item.color = glm::vec4(light.mColor * light.mIntensity, 0.0f);
+                    mLightItems.push_back(item);
+                });
+            mRenderer.SetLights(mLightItems);
 
             bool haveSky = false;
             mSkyQuery->ForEach([&](Entity, const WorldTransform &world, const Sky &sky)
                 {
                     if (haveSky)
                         return;
-                    const glm::vec3 sunDirWS =
-                        glm::vec3(world.Matrix() * glm::vec4(kSunReferenceLocal, 0.0f));
-                    mRenderer.SetSunDirection(sunDirWS);
+                    if (!haveSunLight)
+                    {
+                        const glm::vec3 sunDirWS =
+                            glm::vec3(world.Matrix() * glm::vec4(kSunReferenceLocalDirection, 0.0f));
+                        mRenderer.SetDirectionalLight(sunDirWS, kDefaultLightColor);
+                    }
                     mRenderer.SetAtmosphere(sky);
                     haveSky = true;
                 });
@@ -247,9 +280,11 @@ namespace mir
         Query<const WorldTransform, const MeshRenderer> *mMeshQuery = nullptr;
         Query<const WorldTransform, const Camera> *mCameraQuery = nullptr;
         Query<const WorldTransform, const Sky> *mSkyQuery = nullptr;
+        Query<const WorldTransform, const Light> *mLightQuery = nullptr;
 
         std::vector<Viewport> mViewports;
 
+        std::vector<LightItem> mLightItems;
         std::vector<DrawItem> mDrawItems;
         std::vector<std::vector<DrawItem>> mDrawItemsPerViewport;
         std::vector<RenderView> mRenderViews;

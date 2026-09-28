@@ -17,6 +17,9 @@
 #include <imgui.h>
 
 #include <span>
+#include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace mir
@@ -52,6 +55,46 @@ namespace mir
                 ImGui::TreePop();
             }
         }
+
+        void CreateFromMenu(World &world, Selection &selection, const EntityTypeDesc &type)
+        {
+            if (type.mCanCreate != nullptr && !type.mCanCreate(world))
+                return;
+
+            const Entity created = world.CreateEntity();
+            type.mCreate(world, created);
+            selection.mSelected = { created };
+        }
+
+        struct MenuTop
+        {
+            std::string_view mName; // group name, or the flat item's full name
+            const EntityTypeDesc *mFlat = nullptr; // set only when this is a flat (non-grouped) entry
+            std::vector<const EntityTypeDesc *> mItems; // children, only when mFlat == nullptr
+        };
+
+        std::vector<MenuTop> BuildCreateMenu(std::span<const EntityTypeDesc> types)
+        {
+            std::vector<MenuTop> tops;
+            std::unordered_map<std::string_view, size_t> groupIndex;
+
+            for (const EntityTypeDesc &type : types)
+            {
+                const std::size_t slash = type.mName.find('/');
+                if (slash == std::string_view::npos)
+                {
+                    tops.push_back(MenuTop{ type.mName, &type,{} });
+                    continue;
+                }
+
+                const std::string_view group = type.mName.substr(0, slash);
+                const auto [it, inserted] = groupIndex.try_emplace(group, tops.size());
+                if (inserted)
+                    tops.push_back(MenuTop{ group, nullptr,{} });
+                tops[it->second].mItems.push_back(&type);
+            }
+            return tops;
+        }
     }
 
     void HierarchyPanel::Draw(World &world)
@@ -63,18 +106,27 @@ namespace mir
         {
             if (ImGui::BeginMenu("Create"))
             {
-                for (const EntityTypeDesc &type : EntityTypeRegistry::Instance().All())
+                for (const MenuTop &top : BuildCreateMenu(EntityTypeRegistry::Instance().All()))
                 {
-                    if (ImGui::MenuItem(type.mName.data()))
+                    if (top.mFlat != nullptr)
                     {
-                        if (type.mCanCreate == nullptr || type.mCanCreate(world))
+                        if (ImGui::MenuItem(top.mName.data()))
+                            CreateFromMenu(world, selection, *top.mFlat);
+                        continue;
+                    }
+
+                    if (ImGui::BeginMenu(std::string(top.mName).c_str()))
+                    {
+                        for (const EntityTypeDesc *child : top.mItems)
                         {
-                            const Entity created = world.CreateEntity();
-                            type.mCreate(world, created);
-                            selection.mSelected = { created };
+                            const std::string_view item = child->mName.substr(child->mName.find('/') + 1);
+                            if (ImGui::MenuItem(std::string(item).c_str()))
+                                CreateFromMenu(world, selection, *child);
                         }
+                        ImGui::EndMenu();
                     }
                 }
+
                 ImGui::EndMenu();
             }
             ImGui::EndPopup();

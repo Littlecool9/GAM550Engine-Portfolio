@@ -1,4 +1,5 @@
 #include "AtmosphereCommon.slang"
+#include "LightingCommon.slang"
 
 [[vk::binding(0, 0)]]
 RaytracingAccelerationStructure gTlas;
@@ -36,6 +37,7 @@ cbuffer CameraData
     float4 atmosphereScattering;
     float4 atmosphereRadii;
     float4 atmosphereMisc;
+    float4 lightingMeta; // x = active count in gLights
 };
 
 struct RtPushData
@@ -155,6 +157,8 @@ void closestHitMain(inout RayPayload payload, in BuiltInTriangleIntersectionAttr
         const float3 albedo = kAlbedo * info.tint.rgb;
         color = albedo * (ambientColor.rgb + lightColor.rgb * diffuse) +
                 lightColor.rgb * kSpecularStrength * specular;
+
+        color += AccumulatePunctualLights(hitWorldPos, N, albedo, int(lightingMeta.x));
     }
 
     const float fogFactor = clamp(1.0 - exp(-fogColor.a * RayTCurrent()), 0.0, 1.0);
