@@ -44,6 +44,26 @@
 
 namespace mir
 {
+    //placer holder, to be removed. content proving the gameui path end to end, replaced once
+    //a game can author its own UI
+    namespace
+    {
+
+        UIRect ToUIRect(const VkRect2D &rect)
+        {
+            return UIRect{static_cast<float>(rect.offset.x), static_cast<float>(rect.offset.y),
+                          static_cast<float>(rect.extent.width), static_cast<float>(rect.extent.height)};
+        }
+
+        void DrawPlaceholderHud(UIContext &ui)
+        {
+            const UIStyle &style = ui.Style();
+            UIDrawList &draw = ui.DrawList();
+            draw.Rect(UIRect{16.0f, 16.0f, 220.0f, 40.0f}, style.mPanelColor, style.mPanelRounding);
+            draw.Text(28.0f, 28.0f, "this is test for game ui", style.mTextColor, style.mFontSize);
+        }
+    }
+
     App::~App() { Shutdown(); }
 
     bool App::Initialize(const AppDesc &desc)
@@ -376,6 +396,15 @@ namespace mir
                 const EditorActions actions = mEditor.DrawLayout(
                     mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<RenderSettings>(),
                     mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir, mWorld, mAssetImport.View());
+
+                //temp code to prove game ui functionality
+                const UIRect uiArea = mDesc.mEnableEditorLayout
+                    ? ToUIRect(mEditor.SceneViewportRect())
+                    : UIRect{0.0f, 0.0f, static_cast<float>(mWindow->Width()), static_cast<float>(mWindow->Height())};
+                mGameUI.BeginFrame(uiArea, mWorld.Resource<InputState>());
+                DrawPlaceholderHud(mGameUI);
+                mGameUI.EndFrame();
+
 
                 switch (actions.mScene)
                 {
