@@ -12,7 +12,7 @@
 
 namespace mir
 {
-    // Pixels, top-left origin, y down
+    // pos goes top left origin, y down
     struct UIRect
     {
         float x = 0.0f;
@@ -26,7 +26,6 @@ namespace mir
         constexpr bool operator==(const UIRect &) const = default;
     };
 
-    // The overlap of a and b; zero-sized rather than negative when they miss
     constexpr UIRect Intersect(const UIRect &a, const UIRect &b)
     {
         const float left = std::max(a.x, b.x);
@@ -36,7 +35,10 @@ namespace mir
         return UIRect{left, top, std::max(right - left, 0.0f), std::max(bottom - top, 0.0f)};
     }
 
-    // 0..1 per channel, straight (not premultiplied) alpha
+    constexpr bool Contains(const UIRect &rect, float x, float y)
+    {
+        return x >= rect.x && x < rect.Right() && y >= rect.y && y < rect.Bottom();
+    }
     struct UIColor
     {
         float r = 1.0f;
@@ -55,7 +57,6 @@ namespace mir
         UIColor mPanelColor{0.0f, 0.0f, 0.0f, 0.6f};
         float mPanelRounding = 4.0f;
 
-        // 0: the shared font's own size
         float mFontSize = 0.0f;
     };
 } // namespace mir
