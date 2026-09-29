@@ -1,8 +1,9 @@
 /**
  * @file UIContext.cpp
  * @author Quy Dong Ta
- * @brief The game UI's frame: the area it draws into, the input it reads, and
- *        the draw list that is submitted when the frame ends.
+ * @brief The game UI's frame: the area it draws into, the input it reads, the
+ *        widgets' hot and active state, and the draw list that is submitted
+ *        when the frame ends.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -14,13 +15,14 @@
 
 namespace mir
 {
-    void UIContext::BeginFrame(const UIRect &area, InputState &input)
+    void UIContext::BeginFrame(const UIRect &area, InputState &input, const UIPointer &pointer)
     {
         MIR_ASSERT(!mInFrame, "UIContext::BeginFrame twice without EndFrame");
 
         mArea = area;
         mInput = &input;
         mDrawList.Reset(area.width, area.height);
+        mState.BeginFrame(area, pointer);
         mInFrame = true;
     }
 
@@ -33,7 +35,17 @@ namespace mir
         if (mInFrame && !mArea.IsEmpty())
             detail::SubmitToBackground(mArea, mDrawList);
 
+        if (mInFrame)
+            mState.EndFrame();
+
         mInput = nullptr;
         mInFrame = false;
+    }
+
+    UIInteraction UIContext::Interact(UIId id, const UIRect &rect)
+    {
+        MIR_ASSERT(mInFrame, "UIContext::Interact outside BeginFrame/EndFrame");
+
+        return mState.Interact(id, rect, mDrawList.CurrentClip());
     }
 } // namespace mir

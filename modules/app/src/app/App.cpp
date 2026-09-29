@@ -55,11 +55,29 @@ namespace mir
                           static_cast<float>(rect.extent.width), static_cast<float>(rect.extent.height)};
         }
 
+        UIPointer ToUIPointer(const RawInputSnapshot &input)
+        {
+            return UIPointer{static_cast<float>(input.mouseX), static_cast<float>(input.mouseY),
+                             input.IsDown(MouseButton::Left)};
+        }
+
         void DrawPlaceholderHud(UIContext &ui)
         {
             const UIStyle &style = ui.Style();
             UIDrawList &draw = ui.DrawList();
-            draw.Rect(UIRect{16.0f, 16.0f, 220.0f, 40.0f}, style.mPanelColor, style.mPanelRounding);
+
+            const UIRect panel{16.0f, 16.0f, 220.0f, 40.0f};
+            const UIInteraction interaction = ui.Interact(UIId("placeholder_hud"), panel);
+            if (interaction.mClicked)
+                MIR_LOG_INFO("gameui: placeholder panel clicked");
+
+            UIColor color = style.mPanelColor;
+            if (interaction.mHeld && interaction.mHovered)
+                color.a = 0.95f;
+            else if (interaction.mHovered)
+                color.a = 0.8f;
+
+            draw.Rect(panel, color, style.mPanelRounding);
             draw.Text(28.0f, 28.0f, "this is test for game ui", style.mTextColor, style.mFontSize);
         }
     }
@@ -401,7 +419,7 @@ namespace mir
                 const UIRect uiArea = mDesc.mEnableEditorLayout
                     ? ToUIRect(mEditor.SceneViewportRect())
                     : UIRect{0.0f, 0.0f, static_cast<float>(mWindow->Width()), static_cast<float>(mWindow->Height())};
-                mGameUI.BeginFrame(uiArea, mWorld.Resource<InputState>());
+                mGameUI.BeginFrame(uiArea, mWorld.Resource<InputState>(), ToUIPointer(mWindow->RawInput()));
                 DrawPlaceholderHud(mGameUI);
                 mGameUI.EndFrame();
 

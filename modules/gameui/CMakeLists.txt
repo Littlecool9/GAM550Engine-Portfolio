@@ -1,4 +1,4 @@
-engine_add_module(gameui)
+﻿engine_add_module(gameui)
 
 # PUBLIC: TextureHandle (renderer) and InputState (input) appear in
 # include/gameui/. imgui is PRIVATE and reaches only UIBackendImGui.cpp; no
@@ -14,6 +14,7 @@ target_sources(engine_gameui PRIVATE
     src/gameui/UIBackendImGui.cpp
     src/gameui/UIContext.cpp
     src/gameui/UIDrawList.cpp
+    src/gameui/UIState.cpp
 )
 
 if(BUILD_TESTING)
