@@ -104,6 +104,11 @@ namespace mir
         std::span<const DrawItem> items;
         glm::mat4 viewProj{ 1.0f };
         WorldPosition cameraPosition;
+
+        // The planes viewProj was built with; farZ 0 = no far plane. Ray
+        // tracing has no depth buffer, so it clips its rays to these.
+        float nearZ = 0.1f;
+        float farZ = 0.0f;
     };
 
     class VulkanRenderer
@@ -223,7 +228,7 @@ namespace mir
         void NameObject(VkObjectType type, uint64_t handle, const char *name);
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
         void RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex);
-        void WriteCameraData(const glm::mat4 &viewProj, WorldPosition cameraPosition, uint32_t viewIndex);
+        void WriteCameraData(const RenderView &view, uint32_t viewIndex);
 
     private:
         constexpr static uint32_t VulkanVersion{ VK_API_VERSION_1_4 };

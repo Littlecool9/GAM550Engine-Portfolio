@@ -79,6 +79,7 @@ namespace mir
             glm::vec4 cameraPos;      // xyz = camera in render space: always the origin
             glm::vec4 fogColor;       // rgb = fog color, a = density (0 = disabled)
             glm::vec4 cameraWorldPos; // xyz = absolute camera, narrowed from the Scene origin; atmosphere only
+            glm::vec4 clipPlanes;     // x = near, y = far, or 0 for no far plane; ray tracing only
         };
 
         struct RtInstanceInfo
@@ -1507,7 +1508,7 @@ namespace mir
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .depthTestEnable = VK_TRUE,
             .depthWriteEnable = VK_FALSE,
-            .depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+            .depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL,
             .depthBoundsTestEnable = VK_FALSE,
             .stencilTestEnable = VK_FALSE };
 
@@ -2007,22 +2008,23 @@ namespace mir
         }
     }
 
-    void VulkanRenderer::WriteCameraData(const glm::mat4 &viewProj, WorldPosition cameraPosition, uint32_t viewIndex)
+    void VulkanRenderer::WriteCameraData(const RenderView &view, uint32_t viewIndex)
     {
         // The atmosphere needs the camera's altitude over its planet, where
         // float's 1/64 m at the map edge is invisible; no geometry reads it.
         const glm::vec3 cameraWorld =
-            TryCameraRelativeFloat(cameraPosition, WorldPosition{}).value_or(glm::vec3(0.0f));
+            TryCameraRelativeFloat(view.cameraPosition, WorldPosition{}).value_or(glm::vec3(0.0f));
 
         const CameraData data{
-            .viewProj = viewProj,
+            .viewProj = view.viewProj,
             .lightDirWS = glm::vec4(mLightDirection, 0.0f),
             .lightColor = glm::vec4(mLightColor, 0.0f),
             .ambientColor = glm::vec4(mAmbientColor, 0.0f),
-            .invViewProj = glm::inverse(viewProj),
+            .invViewProj = glm::inverse(view.viewProj),
             .cameraPos = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f),
             .fogColor = glm::vec4(mFogColor, mFogDensity),
-            .cameraWorldPos = glm::vec4(cameraWorld, 1.0f) };
+            .cameraWorldPos = glm::vec4(cameraWorld, 1.0f),
+            .clipPlanes = glm::vec4(view.nearZ, view.farZ, 0.0f, 0.0f) };
         const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
 
         std::byte *const dst = mCameraMapped[mFrameIndex] + offset;
@@ -2314,7 +2316,7 @@ namespace mir
             .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .depthTestEnable = VK_TRUE,
             .depthWriteEnable = desc.alphaMode == MaterialAlphaMode::Blend ? VK_FALSE : VK_TRUE,
-            .depthCompareOp = VK_COMPARE_OP_LESS,
+            .depthCompareOp = VK_COMPARE_OP_GREATER, // reverse-Z: nearer is larger
             .depthBoundsTestEnable = VK_FALSE,
             .stencilTestEnable = VK_FALSE };
 
@@ -3252,7 +3254,7 @@ namespace mir
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &rect);
 
-        WriteCameraData(view.viewProj, view.cameraPosition, viewIndex);
+        WriteCameraData(view, viewIndex);
         const uint32_t cameraOffset = static_cast<uint32_t>(viewIndex * mCameraAlignedSize);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
             1, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
@@ -3309,10 +3311,10 @@ namespace mir
             vkCmdDrawIndexed(cmd, mesh->mIndexCount, 1, 0, 0, 0);
         }
 
-        // Sky last: depth test (LEQUAL, no write) means the fragment shader
-        // only runs where nothing above wrote depth, i.e. still at the far
-        // clear value - a fullscreen ray-marched shader paying its cost only
-        // on actual background pixels, with early-z doing the rejection.
+        // Sky last, at the far depth 0: the test (GEQUAL, no write) passes only
+        // where nothing above wrote depth, i.e. still at the clear value - a
+        // fullscreen ray-marched shader paying its cost only on actual
+        // background pixels, with early-z doing the rejection.
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipeline);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipelineLayout,
             0, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
@@ -3325,7 +3327,7 @@ namespace mir
 
         const VkRect2D rect = ResolveViewRect(view.rect, mSwapchainExtent);
 
-        WriteCameraData(view.viewProj, view.cameraPosition, 0);
+        WriteCameraData(view, 0);
         const uint32_t cameraOffset = 0;
 
         if (mValidationEnabled)
@@ -3486,7 +3488,7 @@ namespace mir
             .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .clearValue{ .depthStencil{ .depth = 1.0f } } };
+            .clearValue{ .depthStencil{ .depth = 0.0f } } }; // reverse-Z: 0 is the far end
 
         const VkRenderingInfo renderingInfo{
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,

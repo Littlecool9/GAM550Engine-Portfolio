@@ -186,7 +186,8 @@ namespace mir
                 std::vector<DrawItem> &items = mDrawItemsPerViewport[i];
                 skippedItems += BuildViewDrawItems(mDrawItems, cameraPose.position, viewProj, items);
 
-                mRenderViews.push_back(RenderView{ viewport.mRect, items, viewProj, cameraPose.position });
+                mRenderViews.push_back(RenderView{ viewport.mRect, items, viewProj, cameraPose.position,
+                    camera.mNearZ, camera.HasFarPlane() ? camera.mFarZ : 0.0f });
             }
 
             if (warnNoCamera && !mWarnedNoCamera)

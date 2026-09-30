@@ -126,7 +126,6 @@ TEST_CASE("Far transparent draws sort back to front after the opaque ones", "[re
     // camera at A looking down -Z; two transparent draws 1 cm apart in depth,
     // well inside float's 1/64 m spacing at this X
     const WorldPose camera{At(kEdgeA)};
-    const glm::mat4 viewProj = mir::MakeCameraRelativeViewProjection(camera, kLens, 1.0f);
 
     std::vector<WorldDrawItem> world{
         ItemAt(kEdgeA + glm::dvec3(0.0, 0.0, -5.00), true),
@@ -136,12 +135,18 @@ TEST_CASE("Far transparent draws sort back to front after the opaque ones", "[re
     world[0].tint.r = 0.0f; // nearer
     world[2].tint.r = 2.0f; // farther
 
-    std::vector<DrawItem> view;
-    mir::BuildViewDrawItems(world, camera.position, viewProj, view);
-    REQUIRE(view.size() == 3);
-    CHECK_FALSE(view[0].transparent);
-    CHECK(view[1].tint.r == 2.0f);
-    CHECK(view[2].tint.r == 0.0f);
+    // the order is by view depth, so it holds with or without a far plane
+    for (const mir::Camera &lens : {kLens, mir::Camera{60.0f, 0.1f, 0.0f}})
+    {
+        const glm::mat4 viewProj = mir::MakeCameraRelativeViewProjection(camera, lens, 1.0f);
+
+        std::vector<DrawItem> view;
+        mir::BuildViewDrawItems(world, camera.position, viewProj, view);
+        REQUIRE(view.size() == 3);
+        CHECK_FALSE(view[0].transparent);
+        CHECK(view[1].tint.r == 2.0f);
+        CHECK(view[2].tint.r == 0.0f);
+    }
 }
 
 TEST_CASE("A draw beyond float range of the camera is left out", "[renderer][lwc]")

@@ -13,14 +13,13 @@
 #include <glm/vec4.hpp>
 
 #include <algorithm>
-#include <cmath>
 #include <optional>
 
 namespace mir
 {
     glm::mat4 MakeCameraRelativeViewProjection(const WorldPose &camera, const Camera &lens, float aspectRatio)
     {
-        return MakeViewProjection(glm::mat4(camera.linear), lens.mFovYDegrees, lens.mNearZ, lens.mFarZ, aspectRatio);
+        return MakeViewProjection(glm::mat4(camera.linear), lens, aspectRatio);
     }
 
     size_t BuildViewDrawItems(std::span<const WorldDrawItem> items, WorldPosition viewportCamera,
@@ -49,10 +48,11 @@ namespace mir
                     return !a.transparent;
                 if (!a.transparent)
                     return false;
+                // Clip w is the view depth: farther first, whatever the depth
+                // mapping does with z.
                 const glm::vec4 pa = viewProj * a.model * glm::vec4(0, 0, 0, 1);
                 const glm::vec4 pb = viewProj * b.model * glm::vec4(0, 0, 0, 1);
-                return pa.z / (std::abs(pa.w) > 1e-8f ? pa.w : 1e-8f) >
-                       pb.z / (std::abs(pb.w) > 1e-8f ? pb.w : 1e-8f);
+                return pa.w > pb.w;
             });
 
         return skipped;

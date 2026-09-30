@@ -29,7 +29,8 @@ namespace mir
 
         float mLookSensitivity = 0.15f;
 
-        Camera mLens{};
+        // No far plane: the scene view is never clipped by distance.
+        Camera mLens{ .mFarZ = 0.0f };
 
         void Update(const RawInputSnapshot &input, bool lookHeld, float dt);
 

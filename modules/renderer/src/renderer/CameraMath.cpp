@@ -20,21 +20,34 @@
 
 namespace mir
 {
-    glm::mat4 MakeViewProjection(const glm::mat4 &cameraWorld,
-                                 float fovYDegrees, float nearZ, float farZ,
-                                 float aspectRatio)
+    glm::mat4 MakeViewProjection(const glm::mat4 &cameraWorld, const Camera &lens, float aspectRatio)
     {
         const glm::mat4 view = glm::inverse(cameraWorld);
 
-        // Vulkan clip depth is 0..1. Named outright: glm::perspective picks
-        // its convention from a per-TU macro, and another TU without the
-        // macro made the linker hand this one the -1..1 version.
-        glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(fovYDegrees), aspectRatio, nearZ, farZ);
+        // Written out rather than taken from glm::perspective, which picks its
+        // depth convention from a per-TU macro: a TU without the macro once
+        // made the linker hand the renderer the -1..1 version.
+        const float focal = 1.0f / std::tan(glm::radians(lens.mFovYDegrees) * 0.5f);
+        const float n = lens.mNearZ;
 
-        // glm = Y up
-        // vulkan = Y down
-        // flip accordingly
-        proj[1][1] *= -1.0f;
+        glm::mat4 proj{ 0.0f };
+        proj[0][0] = focal / aspectRatio;
+        proj[1][1] = -focal; // glm is Y up, Vulkan clip space is Y down
+        proj[2][3] = -1.0f;  // clip w is the view depth
+
+        // Float depth is densest near 0, and 1 / distance is steepest near the
+        // camera: putting the far end at 0 spreads the precision evenly over
+        // distance instead of spending it all next to the near plane.
+        if (lens.HasFarPlane())
+        {
+            const float f = lens.mFarZ;
+            proj[2][2] = n / (f - n);
+            proj[3][2] = f * n / (f - n);
+        }
+        else
+        {
+            proj[3][2] = n; // the limit of the above as far goes to infinity
+        }
 
         return proj * view;
     }
@@ -76,13 +89,14 @@ namespace mir
     {
         // Rotation only: the camera is the origin of this space, so the
         // unprojected point is already the direction.
-        const glm::mat4 viewProj = MakeViewProjection(glm::mat4(camera.linear), lens.mFovYDegrees,
-                                                      lens.mNearZ, lens.mFarZ, aspectRatio);
+        const glm::mat4 viewProj = MakeViewProjection(glm::mat4(camera.linear), lens, aspectRatio);
 
-        const glm::vec4 farH = glm::inverse(viewProj) * glm::vec4(ndc, 1.0f, 1.0f);
-        const glm::vec3 farPoint = glm::vec3(farH) / farH.w;
+        // Depth 1 is the near plane: a finite point even with no far plane,
+        // where depth 0 would be at infinity.
+        const glm::vec4 nearH = glm::inverse(viewProj) * glm::vec4(ndc, 1.0f, 1.0f);
+        const glm::vec3 nearPoint = glm::vec3(nearH) / nearH.w;
 
-        return WorldRay{ camera.position, glm::normalize(farPoint) };
+        return WorldRay{ camera.position, glm::normalize(nearPoint) };
     }
 
     std::optional<float> RayIntersectsBox(const WorldRay &ray, const WorldPose &box,

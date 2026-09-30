@@ -34,6 +34,7 @@ cbuffer CameraData
     float4 cameraPos; // the origin: the TLAS is built relative to this view's camera
     float4 fogColor;
     float4 cameraWorldPos; // absolute camera position, for the atmosphere only
+    float4 clipPlanes; // x = near, y = far, or 0 for no far plane
 };
 
 struct RtPushData
@@ -63,15 +64,21 @@ void rayGenMain()
 
     const float2 ndc = (float2(pixel) + 0.5) / float2(dims) * 2.0 - 1.0;
 
-    const float4 worldFar = mul(invViewProj, float4(ndc, 1.0, 1.0));
-    const float3 worldPos = worldFar.xyz / worldFar.w;
-    const float3 rayDir = normalize(worldPos - cameraPos.xyz);
+    // Depth 1 is the near plane, a finite point even with no far plane.
+    const float4 onNearPlane = mul(invViewProj, float4(ndc, 1.0, 1.0));
+    const float3 toNearPlane = onNearPlane.xyz / onNearPlane.w - cameraPos.xyz;
+    const float3 rayDir = normalize(toNearPlane);
+
+    // Stop where the raster path's far plane would clip. The plane is a view
+    // depth, so an off-axis ray travels farther to reach it, by the same
+    // factor it travels to reach the near plane.
+    const float toFarPlane = clipPlanes.y * length(toNearPlane) / clipPlanes.x;
 
     RayDesc ray;
     ray.Origin = cameraPos.xyz;
     ray.Direction = rayDir;
     ray.TMin = 0.001;
-    ray.TMax = 10000.0;
+    ray.TMax = clipPlanes.y > 0.0 ? toFarPlane : 1.0e30;
 
     RayPayload payload;
     payload.color = float3(0.0, 0.0, 0.0);

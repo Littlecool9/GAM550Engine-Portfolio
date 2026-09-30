@@ -327,14 +327,22 @@ namespace mir
         // the entity is from the Scene origin.
         const WorldPose camera = mCamera.Pose();
         const glm::mat4 view = glm::inverse(glm::mat4(camera.linear));
-        // ImGuizmo takes the OpenGL clip convention, not the renderer's.
-        const glm::mat4 proj = glm::perspectiveRH_NO(glm::radians(mCamera.mLens.mFovYDegrees), width / height,
-                                                     mCamera.mLens.mNearZ, mCamera.mLens.mFarZ);
 
         const std::optional<glm::mat4> resolved = ResolveWorld(world, entity).TryMatrixRelativeTo(camera.position);
         if (!resolved)
             return;
         glm::mat4 gizmoMatrix = *resolved;
+
+        // ImGuizmo takes the OpenGL clip convention, not the renderer's, and a
+        // finite far plane, which the scene lens may not have. It only projects
+        // and unprojects around the entity, so a plane a few times farther
+        // than the entity stands in.
+        const Camera &lens = mCamera.mLens;
+        const float gizmoFar = lens.HasFarPlane()
+            ? lens.mFarZ
+            : std::max(4.0f * glm::length(glm::vec3(gizmoMatrix[3])), 1000.0f * lens.mNearZ);
+        const glm::mat4 proj =
+            glm::perspectiveRH_NO(glm::radians(lens.mFovYDegrees), width / height, lens.mNearZ, gizmoFar);
 
         ImGuizmo::SetOrthographic(false);
         ImGuizmo::BeginFrame();

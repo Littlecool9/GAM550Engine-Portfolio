@@ -23,9 +23,11 @@
 
 namespace mir
 {
-    glm::mat4 MakeViewProjection(const glm::mat4 &cameraWorld,
-                                 float fovYDegrees, float nearZ, float farZ,
-                                 float aspectRatio);
+    // Reverse-Z for Vulkan: the near plane maps to depth 1 and the far plane to
+    // 0, so the depth buffer clears to 0 and tests GREATER. A lens with no far
+    // plane (Camera::HasFarPlane) gets depth = near / distance, which reaches 0
+    // only at infinity.
+    glm::mat4 MakeViewProjection(const glm::mat4 &cameraWorld, const Camera &lens, float aspectRatio);
 
     // A ray in a bounded float space, such as a mesh's local space.
     struct Ray

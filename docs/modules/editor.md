@@ -246,6 +246,12 @@ Open Project asks for, but not the menu or the dialog themselves.
 
 ## Changed
 
+*2026-09-30* — **The scene camera has no far plane.** Was: `EditorCamera::mLens`
+kept the default `farZ` of 100 m, so the scene view clipped everything beyond
+it. Now: its `farZ` is 0, which the reverse-Z projection reads as no far plane
+(see [renderer.md](renderer.md)). ImGuizmo still needs a finite one, so
+`DrawViewportGizmo` gives it a plane a few times farther than the entity.
+
 *2026-09-29* — **The scene camera, picking, highlights and gizmo became
 large-world safe; F frames the selection.** Was: `EditorCamera::mPosition` was a
 `glm::vec3` and `Matrix()` a float world matrix; picking, the selection

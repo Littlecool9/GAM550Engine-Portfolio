@@ -14,6 +14,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <cmath>
+#include <limits>
 #include <optional>
 
 namespace
@@ -48,19 +49,87 @@ namespace
     }
 }
 
-TEST_CASE("The projection maps near to far onto Vulkan's 0 to 1 depth", "[renderer]")
+namespace
 {
-    const glm::mat4 viewProj =
-        mir::MakeViewProjection(glm::mat4(1.0f), kLens.mFovYDegrees, kLens.mNearZ, kLens.mFarZ, 1.0f);
+    const mir::Camera kNoFarLens{60.0f, 0.1f, 0.0f};
+    const mir::Camera kTerrainLens{60.0f, 0.1f, 120000.0f};
 
-    const glm::vec4 nearClip = viewProj * glm::vec4(0.0f, 0.0f, -kLens.mNearZ, 1.0f);
-    const glm::vec4 farClip = viewProj * glm::vec4(0.0f, 0.0f, -kLens.mFarZ, 1.0f);
-    CHECK(std::abs(nearClip.z / nearClip.w) <= 1e-6f);
-    CHECK(std::abs(farClip.z / farClip.w - 1.0f) <= 1e-6f);
+    float DepthAt(const mir::Camera &lens, float distance)
+    {
+        const glm::vec4 clip = mir::MakeViewProjection(glm::mat4(1.0f), lens, 1.0f) * glm::vec4(0.0f, 0.0f, -distance, 1.0f);
+        return clip.z / clip.w;
+    }
+}
 
-    // +y up in the world is -y in Vulkan NDC
-    const glm::vec4 above = viewProj * glm::vec4(0.0f, 1.0f, -5.0f, 1.0f);
-    CHECK(above.y / above.w < 0.0f);
+TEST_CASE("The projection is reverse-Z: near maps to depth 1 and far to 0", "[renderer]")
+{
+    CHECK(std::abs(DepthAt(kLens, kLens.mNearZ) - 1.0f) <= 1e-6f);
+    CHECK(std::abs(DepthAt(kLens, kLens.mFarZ)) <= 1e-6f);
+    CHECK(DepthAt(kLens, 1.0f) > DepthAt(kLens, 2.0f));
+
+    const glm::mat4 viewProj = mir::MakeViewProjection(glm::mat4(1.0f), kLens, 2.0f);
+
+    // clip w is the view depth, which the transparent sort relies on
+    const glm::vec4 ahead = viewProj * glm::vec4(0.0f, 0.0f, -5.0f, 1.0f);
+    CHECK(ahead.w == 5.0f);
+
+    // +y up in the world is -y in Vulkan NDC; the top of a 60 degree field is -1
+    const float top = 5.0f * std::tan(glm::radians(30.0f));
+    const glm::vec4 above = viewProj * glm::vec4(0.0f, top, -5.0f, 1.0f);
+    CHECK(std::abs(above.y / above.w + 1.0f) <= 1e-6f);
+
+    // aspect 2 puts the same offset halfway to the right edge
+    const glm::vec4 right = viewProj * glm::vec4(top, 0.0f, -5.0f, 1.0f);
+    CHECK(std::abs(right.x / right.w - 0.5f) <= 1e-6f);
+}
+
+TEST_CASE("A lens with no far plane never clips by distance", "[renderer]")
+{
+    CHECK(kLens.HasFarPlane());
+    CHECK_FALSE(kNoFarLens.HasFarPlane());
+    // anything that is not a plane beyond the near one also means "none"
+    CHECK_FALSE(mir::Camera{60.0f, 0.1f, -5.0f}.HasFarPlane());
+    CHECK_FALSE(mir::Camera{60.0f, 0.1f, 0.1f}.HasFarPlane());
+    CHECK_FALSE(mir::Camera{60.0f, 0.1f, std::numeric_limits<float>::infinity()}.HasFarPlane());
+    CHECK_FALSE(mir::Camera{60.0f, 0.1f, std::nanf("")}.HasFarPlane());
+
+    CHECK(std::abs(DepthAt(kNoFarLens, kNoFarLens.mNearZ) - 1.0f) <= 1e-6f);
+
+    // depth falls toward 0 and never reaches the clip boundary
+    float previous = 1.0f;
+    for (const float distance : {1.0f, 100.0f, 1e4f, 1e6f, 1e9f})
+    {
+        const float depth = DepthAt(kNoFarLens, distance);
+        CHECK(depth > 0.0f);
+        CHECK(depth < previous);
+        previous = depth;
+    }
+
+    // a degenerate lens still projects instead of dividing by zero
+    const float degenerate = DepthAt(mir::Camera{60.0f, 0.1f, 0.1f}, 50.0f);
+    CHECK(std::isfinite(degenerate));
+    CHECK(degenerate == DepthAt(kNoFarLens, 50.0f));
+}
+
+TEST_CASE("Reverse-Z depth tells far surfaces apart where the usual mapping cannot", "[renderer]")
+{
+    for (const mir::Camera &lens : {kTerrainLens, kNoFarLens})
+    {
+        for (const float distance : {100.0f, 1e3f, 1e4f, 5e4f})
+        {
+            // a gap of one part in ten thousand: 1 m at 10 km
+            CHECK(DepthAt(lens, distance) > DepthAt(lens, distance * 1.0001f));
+        }
+    }
+
+    // the near-to-0, far-to-1 mapping this replaced, in the same float
+    const auto conventional = [](float distance)
+    {
+        const float n = kTerrainLens.mNearZ;
+        const float f = kTerrainLens.mFarZ;
+        return f / (f - n) * (1.0f - n / distance);
+    };
+    CHECK(conventional(1e4f) == conventional(1e4f * 1.0001f));
 }
 
 TEST_CASE("A camera ray starts at the camera's double position", "[renderer][lwc]")
@@ -174,4 +243,23 @@ TEST_CASE("A box beyond float range of the ray is not hit", "[renderer][lwc]")
     const WorldPose unreachable{At(glm::dvec3(0.0, 0.0, -1e300))};
 
     CHECK_FALSE(mir::RayIntersectsBox(ray, unreachable, glm::vec3(-0.5f), glm::vec3(0.5f)));
+}
+
+TEST_CASE("A camera ray does not depend on the lens's clip planes", "[renderer]")
+{
+    const WorldPose camera{At(kEdgeB)};
+    const float aspect = 16.0f / 9.0f;
+    const double tanHalf = std::tan(glm::radians(30.0));
+
+    for (const glm::vec2 &ndc : {glm::vec2(0.0f, 0.0f), glm::vec2(0.5f, -0.3f), glm::vec2(-1.0f, 1.0f), glm::vec2(0.99f, 0.99f)})
+    {
+        const glm::dvec3 expected = glm::normalize(glm::dvec3(ndc.x * tanHalf * aspect, -ndc.y * tanHalf, -1.0));
+
+        for (const mir::Camera &lens : {kLens, kTerrainLens, kNoFarLens, mir::Camera{60.0f, 0.01f, 0.0f}})
+        {
+            const WorldRay ray = mir::MakeCameraRay(camera, lens, aspect, ndc);
+            // the sine of the angle between the two directions
+            CHECK(glm::length(glm::cross(glm::dvec3(ray.direction), expected)) <= 1e-6);
+        }
+    }
 }

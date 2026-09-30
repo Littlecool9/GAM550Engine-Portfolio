@@ -90,7 +90,7 @@ void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera
 | `DrawItem` | `renderer/Renderer.h` | `{mesh, model, normalMatrix, tint, material}` — `model` is the world transform, not premultiplied by any camera |
 | `RenderView` | `renderer/VulkanRenderer.h` | `{rect, items, viewProj, cameraPos}` — one camera's `DrawItem`s, clipped to a screen rect; `cameraPos` only the sky pass reads |
 | `Viewport`, `ViewportId` | `renderer/RenderSystem.h` | `RenderSystem`'s per-viewport state: rect plus a World `Entity`, an external camera, or neither (fallback) |
-| `MeshRenderer`, `Camera` | `renderer/components/` | Handles, and `fovY`/`near`/`far`, declared here rather than in `core` |
+| `MeshRenderer`, `Camera` | `renderer/components/` | Handles, and `fovY`/`near`/`far` (`far` 0 = no far plane), declared here rather than in `core` |
 | `MeshBounds` | `renderer/components/MeshBounds.h` | `{mLocalMin, mLocalMax}`, a mesh's own local-space AABB; attached by `ResolveSceneMeshes` (see [app.md](app.md)), read by the editor's viewport click-picking (see [editor.md](editor.md)) — not used for rendering at all |
 | `Ray`, `RayIntersectsAABB`, `WorldRay`, `MakeCameraRay`, `RayIntersectsBox` | `renderer/CameraMath.h` | `WorldRay` is a camera ray with a double `WorldPosition` origin and a float direction; `RayIntersectsBox` places a `WorldPose` box relative to that origin in double, then runs the local ray/AABB slab test — the same file `MakeViewProjection` lives in, so both stay in the same Vulkan-convention math |
 | `RenderSystem` | `renderer/RenderSystem.h` | The ECS-to-renderer bridge, `SystemPhase::Render` |
@@ -475,6 +475,20 @@ No tests. Everything here needs a device, and the module is verified by running.
    gap rather than fixing it.
 
 ## Changed
+
+*2026-09-30* — **Depth is reverse-Z, and a lens can have no far plane.** Was:
+`MakeViewProjection(cameraWorld, fov, near, far, aspect)` mapped near to depth 0
+and far to 1, the depth buffer cleared to 1 and tested `LESS` (sky `LEQUAL` at
+depth 1), transparent draws sorted by `z / w`, and ray tracing stopped at a
+hard-coded `TMax` of 10 km whatever the camera said. With a far plane of 120 km
+that mapping could not separate surfaces a meter apart beyond about 1 km. Now:
+`MakeViewProjection(cameraWorld, lens, aspect)` maps near to 1 and far to 0 on
+the same D32F buffer, which clears to 0 and tests `GREATER` (sky `GEQUAL` at
+depth 0). `Camera::mFarZ == 0` (`HasFarPlane()` false) means no far plane:
+depth is `near / distance`. The transparent sort uses clip w, the view depth.
+`RenderView` carries `nearZ`/`farZ` into a new `CameraData::clipPlanes`, and
+`raytrace.slang` ends its rays at the far plane, or not at all without one.
+The sky and ray-generation shaders unproject at depth 1, now the near plane.
 
 *2026-09-29* — **Camera rays keep a double origin, and the projection names
 its clip convention.** Was: `MakeCameraRay(cameraWorld, viewProj, ndc)` returned
