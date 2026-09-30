@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <utility>
 
 namespace mir
@@ -312,7 +313,12 @@ namespace mir
         const glm::mat4 proj = glm::perspective(glm::radians(mCamera.mLens.mFovYDegrees), width / height,
                                                 mCamera.mLens.mNearZ, mCamera.mLens.mFarZ);
 
-        glm::mat4 worldMatrix = ResolveWorld(world, entity);
+        // Relative to the Scene origin, so the gizmo rounds far from it; #107
+        // moves it next to the camera.
+        const std::optional<glm::mat4> resolved = ResolveWorld(world, entity).TryMatrixRelativeTo(WorldPosition{});
+        if (!resolved)
+            return;
+        glm::mat4 worldMatrix = *resolved;
 
         ImGuizmo::SetOrthographic(false);
         ImGuizmo::BeginFrame();
@@ -323,15 +329,22 @@ namespace mir
                                  ImGuizmo::LOCAL, glm::value_ptr(worldMatrix)))
         {
             const Entity parent = ParentOf(world, entity);
-            const glm::mat4 localMatrix =
-                parent.IsNull() ? worldMatrix : glm::inverse(ResolveWorld(world, parent)) * worldMatrix;
+            glm::mat4 localMatrix = worldMatrix;
+            if (!parent.IsNull())
+            {
+                const std::optional<glm::mat4> parentMatrix =
+                    ResolveWorld(world, parent).TryMatrixRelativeTo(WorldPosition{});
+                if (!parentMatrix)
+                    return;
+                localMatrix = glm::inverse(*parentMatrix) * worldMatrix;
+            }
 
             glm::vec3 position{};
             glm::vec3 scale{};
             glm::quat rotation{};
             DecomposeTRS(localMatrix, position, rotation, scale);
 
-            transform->SetPosition(position);
+            transform->SetPosition(glm::dvec3(position));
             transform->SetRotation(rotation);
             transform->SetScale(scale);
         }
@@ -377,7 +390,11 @@ namespace mir
         world.GetOrCreateQuery<const WorldTransform, const MeshRenderer, const MeshBounds>().ForEach(
             [&](Entity entity, const WorldTransform &transform, const MeshRenderer &, const MeshBounds &bounds)
             {
-                const glm::mat4 worldMatrix = transform.Matrix();
+                // Scene-origin relative until #107 starts the ray at a double origin.
+                const std::optional<glm::mat4> resolved = transform.Pose().TryMatrixRelativeTo(WorldPosition{});
+                if (!resolved)
+                    return;
+                const glm::mat4 worldMatrix = *resolved;
                 const glm::mat4 invWorld = glm::inverse(worldMatrix);
                 const glm::vec3 localOrigin = glm::vec3(invWorld * glm::vec4(ray.origin, 1.0f));
                 const glm::vec3 localDir = glm::vec3(invWorld * glm::vec4(ray.direction, 0.0f));
@@ -433,7 +450,11 @@ namespace mir
             if (bounds == nullptr)
                 continue;
 
-            const glm::mat4 worldMatrix = ResolveWorld(world, entity);
+            // Scene-origin relative, as the camera is, until #107.
+            const std::optional<glm::mat4> resolved = ResolveWorld(world, entity).TryMatrixRelativeTo(WorldPosition{});
+            if (!resolved)
+                continue;
+            const glm::mat4 worldMatrix = *resolved;
             const glm::vec3 mn = bounds->mLocalMin;
             const glm::vec3 mx = bounds->mLocalMax;
             const glm::vec3 corners[8] = {

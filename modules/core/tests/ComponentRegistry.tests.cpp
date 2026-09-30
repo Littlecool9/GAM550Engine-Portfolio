@@ -168,7 +168,7 @@ TEST_CASE("A field write on Transform goes through the setter, not the bytes")
     const glm::vec3 target{1.0f, 2.0f, 3.0f};
     REQUIRE(position->Write(transform, &target));
 
-    CHECK(transform->Position() == target);
+    CHECK(transform->Position() == glm::dvec3(target));
     CHECK(transform->Version() != before);
 
     glm::vec3 readBack{};
@@ -187,7 +187,8 @@ TEST_CASE("A field with no setter refuses the write")
     mir::WorldTransform value{};
     const glm::mat4 attempt{2.0f};
     CHECK_FALSE(matrix->Write(&value, &attempt));
-    CHECK(value.Matrix() == glm::mat4{1.0f});
+    CHECK(value.Linear() == glm::mat3{1.0f});
+    CHECK(value.Position().Meters() == glm::dvec3(0.0));
 }
 
 TEST_CASE("A registered tag reports size 0 and works through the erased ops")

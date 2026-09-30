@@ -17,9 +17,13 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <glm/common.hpp>
 #include <glm/gtc/constants.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
+#include <optional>
 #include <vector>
 
 namespace
@@ -37,7 +41,8 @@ namespace
         CHECK(actual.z == Approx(expected.z).margin(1e-4));
     }
 
-    glm::vec3 OriginOf(const glm::mat4 &m) { return glm::vec3(m[3]); }
+    // Narrowed for the near-origin checks; far-world tests compare in double.
+    glm::vec3 OriginOf(const mir::WorldPose &pose) { return glm::vec3(pose.position.Meters()); }
 
     Entity MakeAt(World &world, const glm::vec3 &position)
     {
@@ -70,8 +75,8 @@ TEST_CASE("Transform bumps its version only on mutation", "[ecs][transform]")
     Transform t;
     const uint32_t start = t.Version();
 
-    CHECK(t.Matrix() == t.Matrix());
-    CHECK(t.Version() == start); // Matrix() is a read
+    CHECK(t.LinearMatrix() == t.LinearMatrix());
+    CHECK(t.Version() == start); // LinearMatrix() is a read
 
     t.SetPosition(glm::vec3(1.0f));
     CHECK(t.Version() != start);
@@ -632,7 +637,7 @@ TEST_CASE("AddTransform is idempotent", "[ecs][transform][hierarchy]")
 
     const Entity bystander = MakeAt(world, glm::vec3(9.0f, 9.0f, 9.0f));
 
-    RequireNear(world.GetComponent<Transform>(entity)->Position(), glm::vec3(0.0f, 2.0f, 0.0f));
+    RequireNear(glm::vec3(world.GetComponent<Transform>(entity)->Position()), glm::vec3(0.0f, 2.0f, 0.0f));
     RequireNear(OriginOf(mir::ResolveWorld(world, entity)), glm::vec3(0.0f, 2.0f, 0.0f));
     RequireNear(OriginOf(mir::ResolveWorld(world, bystander)), glm::vec3(9.0f, 9.0f, 9.0f));
 }
@@ -846,10 +851,166 @@ TEST_CASE("TransformPropagateSystem refreshes every cache", "[ecs][transform][hi
 
     // read the cache directly, with no resolve call - what a downstream
     // read-only system is allowed to do once the pass has run
-    RequireNear(OriginOf(world.GetComponent<WorldTransform>(child)->Matrix()), glm::vec3(10.0f, 1.0f, 0.0f));
+    RequireNear(OriginOf(world.GetComponent<WorldTransform>(child)->Pose()), glm::vec3(10.0f, 1.0f, 0.0f));
 
     world.GetComponent<Transform>(parent)->SetPosition(glm::vec3(0.0f, 0.0f, 7.0f));
     scheduler.Update(context);
 
-    RequireNear(OriginOf(world.GetComponent<WorldTransform>(child)->Matrix()), glm::vec3(0.0f, 1.0f, 7.0f));
+    RequireNear(OriginOf(world.GetComponent<WorldTransform>(child)->Pose()), glm::vec3(0.0f, 1.0f, 7.0f));
+}
+
+namespace
+{
+    // Map-edge points from the terrain plan's ~150 km map, both signs on X/Z.
+    constexpr glm::dvec3 kEdgeA{-150000.125, 350.5, 75000.5};
+    constexpr glm::dvec3 kEdgeB{150000.625, -20.0, -75000.25};
+    constexpr glm::dvec3 kStep{0.001, -0.002, 0.003};
+
+    // Largest per-axis absolute error, in meters; Catch prints it with -s.
+    double MaxError(const glm::dvec3 &actual, const glm::dvec3 &expected)
+    {
+        const glm::dvec3 d = glm::abs(actual - expected);
+        return std::max(d.x, std::max(d.y, d.z));
+    }
+
+    glm::dvec3 WorldOf(World &world, Entity entity) { return mir::ResolveWorld(world, entity).position.Meters(); }
+
+    Entity MakeAtD(World &world, const glm::dvec3 &position, Entity parent = mir::kNullEntity)
+    {
+        const Entity entity = world.CreateEntity();
+        mir::AddTransform(world, entity, Transform{position}, parent);
+        return entity;
+    }
+}
+
+TEST_CASE("A far root keeps a millimeter move", "[ecs][transform][hierarchy][lwc]")
+{
+    for (const glm::dvec3 &at : {kEdgeA, kEdgeB, glm::dvec3(3.0, 0.0, 0.0)})
+    {
+        World world;
+        const Entity root = MakeAtD(world, at);
+        const glm::dvec3 before = WorldOf(world, root);
+        CHECK(before == at); // a root composes under the identity, exactly
+
+        REQUIRE(world.GetComponent<Transform>(root)->Translate(kStep));
+        CHECK(MaxError(WorldOf(world, root) - before, kStep) <= 1e-9);
+    }
+
+    // the float path this replaces loses the whole X step at either edge
+    CHECK(static_cast<float>(kEdgeA.x + kStep.x) == static_cast<float>(kEdgeA.x));
+    CHECK(static_cast<float>(kEdgeB.x + kStep.x) == static_cast<float>(kEdgeB.x));
+}
+
+TEST_CASE("A far parent carries a child's millimeter move", "[ecs][transform][hierarchy][lwc]")
+{
+    World world;
+    const Entity parent = MakeAtD(world, kEdgeB);
+    const Entity child = MakeAtD(world, glm::dvec3(0.5, 0.0, -0.25), parent);
+
+    CHECK(MaxError(WorldOf(world, child), kEdgeB + glm::dvec3(0.5, 0.0, -0.25)) <= 1e-9);
+
+    const glm::dvec3 before = WorldOf(world, child);
+    REQUIRE(world.GetComponent<Transform>(child)->Translate(kStep));
+    CHECK(MaxError(WorldOf(world, child) - before, kStep) <= 1e-9);
+
+    // moving the far parent moves the child by the same amount
+    REQUIRE(world.GetComponent<Transform>(parent)->Translate(kStep));
+    CHECK(MaxError(WorldOf(world, child) - before, 2.0 * kStep) <= 1e-9);
+}
+
+TEST_CASE("A far parent's rotation and scale carry its child", "[ecs][transform][hierarchy][lwc]")
+{
+    World world;
+    const Entity parent = MakeAtD(world, kEdgeA);
+    world.GetComponent<Transform>(parent)->SetRotation(QuarterTurnZ());
+    world.GetComponent<Transform>(parent)->SetScale(glm::vec3(2.0f));
+    const Entity child = MakeAtD(world, glm::dvec3(1.0005, 0.0, 0.0), parent);
+
+    // +X scaled by 2 then turned +90 degrees about Z lands on +Y; the float
+    // rotation leaves ~1e-7 m on X, so this bound is the float linear part's
+    CHECK(MaxError(WorldOf(world, child), kEdgeA + glm::dvec3(0.0, 2.001, 0.0)) <= 1e-6);
+}
+
+TEST_CASE("A nested chain resolves at the map edge", "[ecs][transform][hierarchy][lwc]")
+{
+    World world;
+    const Entity a = MakeAtD(world, kEdgeA);
+    const Entity b = MakeAtD(world, glm::dvec3(1.0, 0.0, 0.0), a);
+    const Entity c = MakeAtD(world, glm::dvec3(1.0, 0.0, 0.0), b);
+    world.GetComponent<Transform>(b)->SetRotation(QuarterTurnZ());
+
+    CHECK(MaxError(WorldOf(world, c), kEdgeA + glm::dvec3(1.0, 1.0, 0.0)) <= 1e-6);
+
+    // c's local +X is world +Y under b's turn
+    const glm::dvec3 before = WorldOf(world, c);
+    REQUIRE(world.GetComponent<Transform>(c)->Translate(glm::dvec3(0.001, 0.0, 0.0)));
+    CHECK(MaxError(WorldOf(world, c) - before, glm::dvec3(0.0, 0.001, 0.0)) <= 1e-9);
+}
+
+TEST_CASE("Reparenting at the map edge rebases the child", "[ecs][transform][hierarchy][lwc]")
+{
+    World world;
+    const Entity first = MakeAtD(world, kEdgeA);
+    const Entity second = MakeAtD(world, kEdgeB);
+    const Entity child = MakeAtD(world, glm::dvec3(0.0, 1.001, 0.0), first);
+
+    CHECK(MaxError(WorldOf(world, child), kEdgeA + glm::dvec3(0.0, 1.001, 0.0)) <= 1e-9);
+
+    REQUIRE(mir::SetParent(world, child, second));
+    CHECK(MaxError(WorldOf(world, child), kEdgeB + glm::dvec3(0.0, 1.001, 0.0)) <= 1e-9);
+
+    REQUIRE(mir::SetParent(world, child, mir::kNullEntity));
+    CHECK(WorldOf(world, child) == glm::dvec3(0.0, 1.001, 0.0));
+}
+
+TEST_CASE("A setter write invalidates a far cached pose", "[ecs][transform][hierarchy][lwc]")
+{
+    World world;
+    const Entity root = MakeAtD(world, kEdgeB);
+    mir::ResolveWorld(world, root);
+    const WorldTransform &cache = *world.GetComponent<WorldTransform>(root);
+    const uint32_t settled = cache.Version();
+
+    // a refused write changes nothing, so the cache stays clean
+    CHECK_FALSE(world.GetComponent<Transform>(root)->SetPosition(glm::dvec3(std::nan(""), 0.0, 0.0)));
+    mir::ResolveWorld(world, root);
+    CHECK(cache.Version() == settled);
+
+    REQUIRE(world.GetComponent<Transform>(root)->SetPosition(kEdgeB + kStep));
+    mir::ResolveWorld(world, root);
+    CHECK(cache.Version() != settled);
+    CHECK(cache.Position().Meters() == kEdgeB + kStep);
+}
+
+TEST_CASE("A child that would leave the finite world stays at its parent", "[ecs][transform][hierarchy][lwc]")
+{
+    constexpr double kMax = std::numeric_limits<double>::max();
+    World world;
+    const Entity parent = MakeAtD(world, glm::dvec3(kMax, 0.0, 0.0));
+    const Entity child = MakeAtD(world, glm::dvec3(kMax, 1.0, 0.0), parent);
+
+    CHECK(WorldOf(world, child) == glm::dvec3(kMax, 0.0, 0.0));
+}
+
+TEST_CASE("A pose narrows to float only after subtracting the origin", "[ecs][transform][hierarchy][lwc]")
+{
+    World world;
+    const Entity root = MakeAtD(world, kEdgeA + kStep);
+    const mir::WorldPose pose = mir::ResolveWorld(world, root);
+
+    const std::optional<mir::WorldPosition> camera = mir::WorldPosition::FromMeters(kEdgeA);
+    REQUIRE(camera);
+    const std::optional<glm::mat4> local = pose.TryMatrixRelativeTo(*camera);
+    REQUIRE(local);
+    CHECK(MaxError(glm::dvec3(glm::vec3((*local)[3])), kStep) <= 1e-9);
+
+    // relative to the Scene origin the same step rounds away in float
+    const std::optional<glm::mat4> fromOrigin = pose.TryMatrixRelativeTo(mir::WorldPosition{});
+    REQUIRE(fromOrigin);
+    CHECK((*fromOrigin)[3].x == static_cast<float>(kEdgeA.x));
+
+    // an offset beyond float range is refused rather than made infinite
+    const std::optional<mir::WorldPosition> far = mir::WorldPosition::FromMeters(glm::dvec3(1e300, 0.0, 0.0));
+    REQUIRE(far);
+    CHECK_FALSE(pose.TryMatrixRelativeTo(*far));
 }

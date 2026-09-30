@@ -1,7 +1,7 @@
 /**
  * @file WorldTransform.h
  * @author Sumin Park
- * @brief Derived world-space matrix plus the stamps that detect staleness.
+ * @brief Derived world pose plus the stamps that detect staleness.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -10,9 +10,12 @@
 #pragma once
 #include "core/ecs/ComponentAsserts.h"
 #include "core/ecs/ComponentFields.h"
+#include "core/math/WorldCoordinates.h"
 
 #include <cstdint>
+#include <glm/mat3x3.hpp>
 #include <glm/mat4x4.hpp>
+#include <optional>
 
 namespace mir
 {
@@ -21,24 +24,47 @@ namespace mir
         struct TransformResolver;
     }
 
+    // An entity's resolved placement in the fixed Scene world: the double
+    // position a float world matrix would round away, plus the bounded
+    // rotation * scale part that float holds fine.
+    struct WorldPose
+    {
+        WorldPosition position;
+        glm::mat3 linear{1.0f};
+
+        // The only way to a float 4x4: the translation is position - origin,
+        // subtracted in double. nullopt if that offset does not fit a float.
+        [[nodiscard]] std::optional<glm::mat4> TryMatrixRelativeTo(WorldPosition origin) const
+        {
+            const std::optional<glm::vec3> translation = TryCameraRelativeFloat(position, origin);
+            if (!translation)
+                return std::nullopt;
+
+            glm::mat4 m(linear);
+            m[3] = glm::vec4(*translation, 1.0f);
+            return m;
+        }
+    };
+
     // Read it through ResolveWorld (core/ecs/TransformHierarchy.h)
     class WorldTransform
     {
     public:
         WorldTransform() = default;
 
-        // Last computed world matrix. Current only after a resolve.
-        const glm::mat4 &Matrix() const { return mMatrix; }
+        // Last computed pose. Current only after a resolve.
+        const WorldPose &Pose() const { return mPose; }
+        WorldPosition Position() const { return mPose.position; }
+        const glm::mat3 &Linear() const { return mPose.linear; }
 
-        // Bumped whenever mMatrix changes; this is what children stamp against.
+        // Bumped whenever the pose changes; this is what children stamp against.
         uint32_t Version() const { return mVersion; }
 
     private:
         friend struct detail::TransformResolver;
 
-        glm::mat4 mMatrix{1.0f};
+        WorldPose mPose;
 
-        // Transform::Version() this matrix was built from.
         uint32_t mLocalVersion = 0;
 
         // Parent's WorldTransform::Version() at build time. 0 = was a root.
@@ -56,9 +82,16 @@ namespace mir
 
     // only getter, set is only to be done by Hierarchy System
     inline constexpr FieldDesc kWorldTransformFields[] = {
+        // Relative to the Scene origin, so it rounds far from it until #105
+        // replaces this view. Identity only if the offset does not fit a float.
         {"matrix", FieldKind::Mat4, 0,
          [](const void *component, void *out)
-         { *static_cast<glm::mat4 *>(out) = static_cast<const WorldTransform *>(component)->Matrix(); },
+         {
+             *static_cast<glm::mat4 *>(out) = static_cast<const WorldTransform *>(component)
+                                                  ->Pose()
+                                                  .TryMatrixRelativeTo(WorldPosition{})
+                                                  .value_or(glm::mat4(1.0f));
+         },
          nullptr},
     };
 }

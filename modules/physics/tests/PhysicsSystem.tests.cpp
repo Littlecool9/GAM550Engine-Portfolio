@@ -106,7 +106,7 @@ TEST_CASE("A static RigidBody never moves", "[physics]")
 
     fixture.Run(60);
 
-    REQUIRE(fixture.TransformOf(entity).Position() == glm::vec3(0.0f));
+    REQUIRE(fixture.TransformOf(entity).Position() == glm::dvec3(0.0));
     REQUIRE(fixture.Physics().BodyCount() == 1);
 }
 
@@ -117,7 +117,7 @@ TEST_CASE("Edit mode creates no bodies and moves nothing", "[physics]")
 
     fixture.Run(60);
 
-    REQUIRE(fixture.TransformOf(entity).Position() == glm::vec3(0.0f, 5.0f, 0.0f));
+    REQUIRE(fixture.TransformOf(entity).Position() == glm::dvec3(0.0, 5.0, 0.0));
     REQUIRE(fixture.Physics().BodyCount() == 0);
 }
 
@@ -127,7 +127,7 @@ TEST_CASE("Pausing Play stops the simulation", "[physics]")
     const mir::Entity entity = fixture.Add(glm::vec3(0.0f, 5.0f, 0.0f), kDynamicSphere);
 
     fixture.Run(30);
-    const float fell = fixture.TransformOf(entity).Position().y;
+    const double fell = fixture.TransformOf(entity).Position().y;
 
     mir::SetPlayState(fixture.world, mir::PlayState::Paused);
     fixture.Run(60);
@@ -144,7 +144,7 @@ TEST_CASE("A dynamic body lands on a static one", "[physics]")
     fixture.Run(180);
 
     // Floor top is y = 0.5, so a resting sphere sits one radius above it.
-    const float restY = fixture.TransformOf(sphere).Position().y;
+    const double restY = fixture.TransformOf(sphere).Position().y;
     REQUIRE(restY > 0.5f);
     REQUIRE(restY < 1.25f);
 }
@@ -174,7 +174,7 @@ TEST_CASE("Writing the Transform teleports the body", "[physics]")
     fixture.world.GetComponent<mir::Transform>(entity)->SetPosition(glm::vec3(3.0f, 10.0f, 0.0f));
     fixture.Run(1);
 
-    const glm::vec3 position = fixture.TransformOf(entity).Position();
-    REQUIRE(std::abs(position.x - 3.0f) < 0.01f);
+    const glm::dvec3 position = fixture.TransformOf(entity).Position();
+    REQUIRE(std::abs(position.x - 3.0) < 0.01);
     REQUIRE(position.y > 9.9f);
 }

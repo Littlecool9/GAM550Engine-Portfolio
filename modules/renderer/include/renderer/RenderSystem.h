@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <vector>
 
 namespace mir
@@ -110,7 +111,10 @@ namespace mir
                 {
                     if (haveDefaultCamera)
                         return;
-                    defaultCameraWorld = world.Matrix();
+                    const std::optional<glm::mat4> matrix = SceneOriginMatrix(world);
+                    if (!matrix)
+                        return;
+                    defaultCameraWorld = *matrix;
                     defaultCamera = camera;
                     haveDefaultCamera = true;
                 });
@@ -120,8 +124,11 @@ namespace mir
             mDrawItems.clear();
             mMeshQuery->ForEach([this](Entity, const WorldTransform &world, const MeshRenderer &renderer)
                 {
-                    const glm::mat3 normalMatrix = glm::inverseTranspose(glm::mat3(world.Matrix()));
-                    mDrawItems.push_back(DrawItem{ renderer.mesh, world.Matrix(), normalMatrix, renderer.tint, renderer.material });
+                    const std::optional<glm::mat4> model = SceneOriginMatrix(world);
+                    if (!model)
+                        return;
+                    const glm::mat3 normalMatrix = glm::inverseTranspose(world.Linear());
+                    mDrawItems.push_back(DrawItem{ renderer.mesh, *model, normalMatrix, renderer.tint, renderer.material });
                 });
 
             // ModelSystem builds its own items (meshes that came from a model
@@ -152,9 +159,11 @@ namespace mir
                 {
                     mCameraQuery->ForEach([&](Entity e, const WorldTransform &world, const Camera &cam)
                         {
-                            if (e == viewport.mCameraEntity)
+                            if (e != viewport.mCameraEntity)
+                                return;
+                            if (const std::optional<glm::mat4> matrix = SceneOriginMatrix(world))
                             {
-                                cameraWorld = world.Matrix();
+                                cameraWorld = *matrix;
                                 camera = cam;
                                 haveCamera = true;
                             }
@@ -226,6 +235,13 @@ namespace mir
         }
 
     private:
+        // Relative to the Scene origin, so far positions still round in float;
+        // #106 subtracts each viewport's camera instead.
+        static std::optional<glm::mat4> SceneOriginMatrix(const WorldTransform &world)
+        {
+            return world.Pose().TryMatrixRelativeTo(WorldPosition{});
+        }
+
         VulkanRenderer &mRenderer;
         Query<const WorldTransform, const MeshRenderer> *mMeshQuery = nullptr;
         Query<const WorldTransform, const Camera> *mCameraQuery = nullptr;

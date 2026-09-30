@@ -55,7 +55,7 @@ TEST_CASE("RestoreWorld reverts a Transform mutated after CaptureWorld", "[scene
 
     const Transform *restoredTransform = world.GetComponent<Transform>(restoredEntity);
     REQUIRE(restoredTransform != nullptr);
-    CHECK(restoredTransform->Position() == glm::vec3(1.0f, 2.0f, 3.0f));
+    CHECK(restoredTransform->Position() == glm::dvec3(1.0, 2.0, 3.0));
 }
 
 TEST_CASE("RestoreWorld destroys an entity Play spawned that CaptureWorld never saw", "[scene]")

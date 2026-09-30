@@ -19,6 +19,9 @@ namespace mir
 {
     namespace
     {
+        // Jolt still takes float world positions; #108 hands it the double one.
+        glm::vec3 JoltPosition(const Transform &transform) { return glm::vec3(transform.Position()); }
+
         BodyHandle CreateBodyFor(PhysicsWorld &physics, const RigidBody &rigidBody, const Transform &transform)
         {
             const bool dynamic = rigidBody.motion == PhysicsMotion::Dynamic;
@@ -26,13 +29,13 @@ namespace mir
             if (rigidBody.shape == PhysicsShape::Sphere)
             {
                 return dynamic
-                    ? physics.CreateDynamicSphere(transform.Position(), rigidBody.radius, transform.Rotation())
-                    : physics.CreateStaticSphere(transform.Position(), rigidBody.radius, transform.Rotation());
+                    ? physics.CreateDynamicSphere(JoltPosition(transform), rigidBody.radius, transform.Rotation())
+                    : physics.CreateStaticSphere(JoltPosition(transform), rigidBody.radius, transform.Rotation());
             }
 
             return dynamic
-                ? physics.CreateDynamicBox(transform.Position(), rigidBody.halfExtent, transform.Rotation())
-                : physics.CreateStaticBox(transform.Position(), rigidBody.halfExtent, transform.Rotation());
+                ? physics.CreateDynamicBox(JoltPosition(transform), rigidBody.halfExtent, transform.Rotation())
+                : physics.CreateStaticBox(JoltPosition(transform), rigidBody.halfExtent, transform.Rotation());
         }
     }
 
@@ -71,7 +74,7 @@ namespace mir
                 }
                 else if (transform.Version() != rigidBody.transformVersion)
                 {
-                    physics->SetBodyTransform(rigidBody.body, transform.Position(), transform.Rotation());
+                    physics->SetBodyTransform(rigidBody.body, JoltPosition(transform), transform.Rotation());
                 }
 
                 rigidBody.transformVersion = transform.Version();
@@ -85,7 +88,7 @@ namespace mir
                 if (!rigidBody.body.IsValid() || rigidBody.motion != PhysicsMotion::Dynamic)
                     return;
 
-                const glm::vec3 position = physics->BodyPosition(rigidBody.body);
+                const glm::dvec3 position(physics->BodyPosition(rigidBody.body));
                 if (position != transform.Position())
                     transform.SetPosition(position);
 

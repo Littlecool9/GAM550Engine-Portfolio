@@ -87,7 +87,7 @@ TEST_CASE("SaveScene then LoadScene round-trips a Transform", "[scene]")
 
     const Transform *transform = loadedWorld.GetComponent<Transform>(loadedEntity);
     REQUIRE(transform != nullptr);
-    CHECK(transform->Position() == glm::vec3(1.0f, 2.0f, 3.0f));
+    CHECK(transform->Position() == glm::dvec3(1.0, 2.0, 3.0));
     CHECK(transform->Rotation() == glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
     CHECK(transform->Scale() == glm::vec3(1.0f));
 }
@@ -219,7 +219,7 @@ TEST_CASE("LoadScene skips a component name it does not recognise", "[scene]")
     Entity loadedEntity = loaded.mEntities.at(1);
     const Transform *transform = loadedWorld.GetComponent<Transform>(loadedEntity);
     REQUIRE(transform != nullptr);
-    CHECK(transform->Position() == glm::vec3(4.0f, 5.0f, 6.0f));
+    CHECK(transform->Position() == glm::dvec3(4.0, 5.0, 6.0));
 }
 
 // A malformed scene.json used to reach nlohmann's operator>> with no try/catch,
@@ -269,7 +269,7 @@ TEST_CASE("LoadScene skips a malformed entity file instead of throwing", "[scene
     REQUIRE(loaded.mEntities.size() == 1);
     const Transform *transform = loadedWorld.GetComponent<Transform>(loaded.mEntities.at(2));
     REQUIRE(transform != nullptr);
-    CHECK(transform->Position() == glm::vec3(1.0f, 2.0f, 3.0f));
+    CHECK(transform->Position() == glm::dvec3(1.0, 2.0, 3.0));
 }
 
 TEST_CASE("UnloadScene destroys exactly the entities it loaded", "[scene]")

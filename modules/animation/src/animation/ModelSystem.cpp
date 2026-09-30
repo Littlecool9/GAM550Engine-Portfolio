@@ -277,13 +277,18 @@ namespace mir
                                             throw std::runtime_error("non-finite morph override");
                                     pose[i].weights = w->second;
                                 }
+                    // Relative to the Scene origin, so far positions still round
+                    // in float; #106 subtracts the viewport camera instead.
+                    const auto entityMatrix = transform.Pose().TryMatrixRelativeTo(WorldPosition{});
+                    if (!entityMatrix)
+                        return;
                     auto visible = VisibleModelNodes(data.resources.model, uint32_t(player.Scene()));
                     for (size_t i = 0; i < pose.size(); ++i)
                     {
                         const auto &node = data.resources.model.nodes[i];
                         if (!visible[i] || node.mesh.IsNull())
                             continue;
-                        const auto world = transform.Matrix() * pose[i].world;
+                        const auto world = *entityMatrix * pose[i].world;
                         const auto det = glm::determinant(glm::mat3(world));
                         if (std::abs(det) < 1e-10f)
                             continue;
