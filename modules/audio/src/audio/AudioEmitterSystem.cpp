@@ -16,8 +16,6 @@
 #include <glm/mat3x3.hpp>
 #include <glm/vec3.hpp>
 
-#include <optional>
-
 namespace mir
 {
     namespace
@@ -62,20 +60,13 @@ namespace mir
 
                 if (worldTransform.Version() != emitter.mWorldVersion)
                 {
-                    // Relative to the Scene origin, so far positions still round in
-                    // float; no P0 issue owns audio yet (see terrain ADR 0002).
-                    const std::optional<glm::vec3> position =
-                        TryCameraRelativeFloat(worldTransform.Position(), WorldPosition{});
-                    if (position)
-                    {
-                        const glm::mat3 &linear = worldTransform.Linear();
-                        audio::SetEmitterPosition(emitter.mGameObject,
-                            *position,
-                            -linear[2],  // -Z is forward
-                            linear[1]);  // +Y is up
+                    const glm::mat3 &linear = worldTransform.Linear();
+                    audio::SetEmitterPosition(emitter.mGameObject,
+                        worldTransform.Position(),
+                        -linear[2],  // -Z is forward
+                        linear[1]);  // +Y is up
 
-                        emitter.mWorldVersion = worldTransform.Version();
-                    }
+                    emitter.mWorldVersion = worldTransform.Version();
                 }
 
                 if (sessionOver)
