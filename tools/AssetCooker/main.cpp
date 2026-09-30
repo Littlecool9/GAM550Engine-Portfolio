@@ -14,6 +14,7 @@
 #include <core/fs/FileIO.h>
 #include <assets/AssetId.h>
 #include <assets/AssetManifest.h>
+#include <assets/AssetPath.h>
 #include <assets/ModelAsset.h>
 #include <cctype>
 #include <chrono>
@@ -153,6 +154,13 @@ namespace
         bool mHeld = false;
     };
 
+    std::string RequireAssetPath(const mir::AssetPathResult &result, std::string_view what)
+    {
+        if (!result.Ok())
+            throw std::runtime_error(std::string(what) + ": " + std::string(mir::Describe(result.error)));
+        return result.path;
+    }
+
     Options ParseOptions(int argc, char **argv)
     {
         Options options;
@@ -168,8 +176,9 @@ namespace
             };
             if (arg == "--source")
             {
+                // The path doubles as the id root, so it must be relative like any id root
                 const auto path = std::filesystem::path(value());
-                options.roots.push_back({path, path.lexically_normal().generic_string()});
+                options.roots.push_back({path, RequireAssetPath(mir::NormalizeAssetPath(path.generic_string()), arg)});
             }
             else if (arg == "--source-dir")
             {
@@ -181,8 +190,7 @@ namespace
             {
                 if (!pendingRoot)
                     throw std::runtime_error("--id-root must follow --source-dir");
-                options.roots.push_back(
-                    {*pendingRoot, std::filesystem::path(value()).lexically_normal().generic_string()});
+                options.roots.push_back({*pendingRoot, RequireAssetPath(mir::NormalizeAssetPath(value()), arg)});
                 pendingRoot.reset();
             }
             else if (arg == "--out")
@@ -190,14 +198,14 @@ namespace
             else if (arg == "--result")
                 options.result = value();
             else if (arg == "--model")
-                options.models.push_back(std::filesystem::path(value()).lexically_normal().generic_string());
+                options.models.push_back(RequireAssetPath(mir::NormalizeAssetPath(value()), arg));
             else if (arg == "--remove-model")
-                options.removals.push_back(std::filesystem::path(value()).lexically_normal().generic_string());
+                options.removals.push_back(RequireAssetPath(mir::NormalizeAssetPath(value()), arg));
             else if (arg == "--move-model")
             {
                 if (pendingMove)
                     throw std::runtime_error("--move-model requires a following --move-to");
-                pendingMove = std::filesystem::path(value()).lexically_normal().generic_string();
+                pendingMove = RequireAssetPath(mir::NormalizeAssetPath(value()), arg);
             }
             else if (arg == "--move-to")
             {
@@ -229,14 +237,16 @@ namespace
     }
     std::string LogicalPath(const SourceRoot &root, const std::filesystem::path &path)
     {
-        return (std::filesystem::path(root.logical) / std::filesystem::relative(path, root.physical))
-            .lexically_normal()
-            .generic_string();
+        const auto relative = std::filesystem::relative(path, root.physical);
+        return RequireAssetPath(mir::MakeLogicalAssetPath(root.logical, relative.generic_string()), path.string());
     }
     std::optional<std::pair<const SourceRoot *, std::filesystem::path>> ResolveModel(const Options &options,
                                                                                      const std::string &requested)
     {
-        const auto normalized = std::filesystem::path(requested).lexically_normal();
+        const mir::AssetPathResult logical = mir::NormalizeAssetPath(requested);
+        if (!logical.Ok())
+            return std::nullopt;
+        const auto normalized = std::filesystem::path(logical.path);
         for (const auto &root : options.roots)
         {
             const auto relative = normalized.lexically_relative(std::filesystem::path(root.logical));

@@ -8,12 +8,12 @@
  */
 #include "animation/ModelSystem.h"
 #include <animation/ModelPlayer.h>
+#include <assets/AssetPath.h>
 #include <cmath>
 #include <core/ecs/EngineMode.h>
 #include <core/ecs/World.h>
 #include <core/ecs/components/WorldTransform.h>
 #include <core/log/Log.h>
-#include <filesystem>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <span>
 #include <stdexcept>
@@ -220,11 +220,20 @@ namespace mir
                 alive.insert(packed);
                 if (player.ModelName().empty() && player.ModelAsset().IsNull())
                     return;
-                const auto path =
-                    (std::filesystem::path(mRoot) / player.ModelName()).lexically_normal().generic_string();
+                const AssetPathResult logical = MakeLogicalAssetPath(mRoot, player.ModelName());
+                const std::string path = logical.Ok() ? logical.path : std::string(player.ModelName());
                 AssetId id = player.ModelAsset();
                 if (id.IsNull())
+                {
+                    if (!logical.Ok())
+                    {
+                        if (mFailed.insert(packed).second)
+                            MIR_LOG_ERROR("Model '{}': {}", player.ModelName(), Describe(logical.error));
+                        mRequestedModels[packed] = 0;
+                        return;
+                    }
                     id = MakeAssetId(path);
+                }
                 if (mRequestedModels[packed] != id.value)
                 {
                     mRequestedModels[packed] = id.value;

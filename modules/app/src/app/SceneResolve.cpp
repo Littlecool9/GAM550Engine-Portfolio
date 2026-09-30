@@ -11,6 +11,7 @@
 #include <assets/AssetBlob.h>
 #include <assets/AssetCache.h>
 #include <assets/AssetId.h>
+#include <assets/AssetPath.h>
 #include <core/ecs/Query.h>
 #include <core/ecs/World.h>
 #include <core/log/Log.h>
@@ -109,11 +110,16 @@ namespace mir
                     return;
 
                 const std::string name = ref.scriptName;
-                const std::string assetPath = std::string(assetIdRoot) + "/scripts/" + name + ".lua";
-
-                if (!LoadScriptAsset(scripts, reload, assets, assetPath, name))
+                const AssetPathResult assetPath = MakeLogicalAssetPath(assetIdRoot, "scripts/" + name + ".lua");
+                if (!assetPath.Ok())
                 {
-                    MIR_LOG_ERROR("ResolveSceneScripts: could not load '{}' for script '{}'", assetPath, name);
+                    MIR_LOG_ERROR("ResolveSceneScripts: script '{}': {}", name, Describe(assetPath.error));
+                    return;
+                }
+
+                if (!LoadScriptAsset(scripts, reload, assets, assetPath.path, name))
+                {
+                    MIR_LOG_ERROR("ResolveSceneScripts: could not load '{}' for script '{}'", assetPath.path, name);
                     return;
                 }
 
@@ -132,9 +138,18 @@ namespace mir
         world.GetOrCreateQuery<MeshRenderer>().ForEach(
             [&](Entity entity, MeshRenderer &meshRenderer)
             {
+                AssetPathResult logical;
                 if (meshRenderer.mesh.IsNull() && meshRenderer.meshName[0] != '\0')
                 {
-                    const std::string assetPath = std::string(assetIdRoot) + "/" + meshRenderer.meshName;
+                    logical = MakeLogicalAssetPath(assetIdRoot, meshRenderer.meshName);
+                    if (!logical.Ok())
+                        MIR_LOG_ERROR("ResolveSceneMeshes: mesh '{}': {}", meshRenderer.meshName,
+                                      Describe(logical.error));
+                }
+
+                if (logical.Ok() && !logical.path.empty())
+                {
+                    const std::string &assetPath = logical.path;
                     const AssetId id = MakeAssetId(assetPath);
 
                     if (auto it = meshCache.find(id.value); it != meshCache.end())

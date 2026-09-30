@@ -49,6 +49,7 @@ add_subdirectory(modules/renderer)
 add_subdirectory(modules/scene)
 add_subdirectory(modules/serial)
 add_subdirectory(modules/script)
+add_subdirectory(modules/terrain)
 add_subdirectory(modules/window)
 
 add_subdirectory(tools/AssetCooker)
@@ -161,6 +162,7 @@ target_link_libraries(MjolnirEngine PRIVATE
     mir::physics
     mir::scene
     mir::script
+    mir::terrain
     nlohmann_json::nlohmann_json
 )
 
