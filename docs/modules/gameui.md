@@ -64,7 +64,8 @@ clip stack be tested without a display.
 | `UIDrawList` | `gameui/UIDrawList.h` | `Rect`, `Texture`, `Text`, `PushClip`/`PopClip`, recorded as `UIDrawCommand`s |
 | `UIId` | `gameui/UIId.h` | A widget's identity: a `constexpr` hash of a name and an optional index |
 | `UIState`, `UIPointer`, `UIInteraction` | `gameui/UIState.h` | Hot and active, the press latch, and the hit test |
-| `UIContext` | `gameui/UIContext.h` | `BeginFrame(area, InputState&, UIPointer)`/`EndFrame`, `Interact`; owns the draw list, the state and the style |
+| `UINavInput` | `gameui/UINavInput.h` | The UI actions for a frame, read from `InputState` by name |
+| `UIContext` | `gameui/UIContext.h` | `BeginFrame(area, InputState&, UIPointer)`/`EndFrame`, `Interact`, `Nav`; owns the draw list, the state and the style |
 
 Coordinates passed to `UIDrawList` and to `Interact` are local: `(0, 0)` is the
 top-left of the area. Each command stores its clip already intersected with
@@ -125,6 +126,15 @@ click.
 a frame is let go at `EndFrame`, so one that is skipped for a frame, or
 disappears, while held never clicks.
 
+**Read keys and buttons through the UI actions, never by device.** No `Key`,
+`MouseButton`, `GamepadButton` or `DeviceKind` appears in the module, tests
+included. `UINavigate`, `UIConfirm`, `UICancel`, `UITabLeft` and `UITabRight`
+come from `input/DefaultInputMap.h`, where each is bound on the keyboard, the
+mouse and a gamepad, and `ReadNavInput` looks them up by those names. A widget
+that branched on the device would ignore the player's rebinds in Project
+Settings. The pointer is the exception: it is a position, not an action, and it
+is how the mouse navigates, so `UINavigate` has no mouse binding.
+
 **Build the pointer from the window's raw input, not `InputState`.** `InputState`
 has no pointer position, and it is a frame old when the UI runs. `App` reads
 `Window::RawInput()`, which `PollEvents` has just refreshed.
@@ -144,8 +154,12 @@ widgets yet; the first one is built on `Interact`.
 `Texture` records but draws a flat tint, and warns once: the renderer has no
 `TextureHandle` to `ImTextureID` bridge yet.
 
-`UIContext::Input()` hands back the `InputState` from `BeginFrame`, but nothing
-reads it. It is a frame old at that point, since `InputSystem` runs later in
+`UIContext::Nav()` holds the UI actions read at `BeginFrame`, but no widget
+reads them yet. `App` merges `DefaultInputMap()` into the project's map at
+startup with `AddDefaultActions`, so they are in every project and appear in
+Project Settings; a rebound action keeps its bindings, and a removed one comes
+back at the next start. `UIContext::Input()` hands back the `InputState` from
+`BeginFrame`. It is a frame old at that point, since `InputSystem` runs later in
 `PreUpdate`.
 
 A click in the viewport reaches the game UI and the editor alike. In Edit mode
