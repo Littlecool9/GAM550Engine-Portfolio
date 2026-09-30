@@ -23,6 +23,7 @@
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
+#include <optional>
 #include <utility>
 
 namespace
@@ -105,19 +106,26 @@ namespace
         return glm::quat(q.GetW(), q.GetX(), q.GetY(), q.GetZ());
     }
 
-    glm::vec3 FromJolt(JPH::RVec3Arg v)
-    {
-        return glm::vec3(static_cast<float>(v.GetX()),
-            static_cast<float>(v.GetY()),
-            static_cast<float>(v.GetZ()));
-    }
-
-#ifdef JPH_DOUBLE_PRECISION
     glm::vec3 FromJolt(JPH::Vec3Arg v)
     {
         return glm::vec3(v.GetX(), v.GetY(), v.GetZ());
     }
-#endif
+
+    // A float Jolt would round every world position on the way in. CMake and
+    // JoltRuntime check the package; this checks what this file compiled against.
+    static_assert(sizeof(JPH::Real) == sizeof(double),
+        "PhysicsWorld needs Jolt built with JPH_DOUBLE_PRECISION (vcpkg-overlays/joltphysics)");
+
+    JPH::RVec3 ToJolt(mir::WorldPosition position)
+    {
+        const glm::dvec3 meters = position.Meters();
+        return JPH::RVec3(meters.x, meters.y, meters.z);
+    }
+
+    std::optional<mir::WorldPosition> PositionFromJolt(JPH::RVec3Arg v)
+    {
+        return mir::WorldPosition::FromMeters(glm::dvec3(v.GetX(), v.GetY(), v.GetZ()));
+    }
 
     JPH::BodyID ToBodyId(mir::BodyHandle handle)
     {
@@ -153,13 +161,13 @@ namespace mir
             mSystem.SetGravity(ToJolt(desc.mGravity));
         }
 
-        BodyHandle CreateBody(const JPH::Shape *shape, const glm::vec3 &position,
+        BodyHandle CreateBody(const JPH::Shape *shape, WorldPosition position,
             const glm::quat &rotation, bool dynamic)
         {
             const JPH::RefConst<JPH::Shape> owned(shape);
 
             const JPH::BodyCreationSettings settings(owned,
-                JPH::RVec3(position.x, position.y, position.z),
+                ToJolt(position),
                 ToJolt(rotation),
                 dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
                 dynamic ? Layers::kMoving : Layers::kNonMoving);
@@ -202,7 +210,7 @@ namespace mir
 
     PhysicsWorld::~PhysicsWorld() = default;
 
-    BodyHandle PhysicsWorld::CreateStaticBox(const glm::vec3 &position, const glm::vec3 &halfExtent,
+    BodyHandle PhysicsWorld::CreateStaticBox(WorldPosition position, const glm::vec3 &halfExtent,
         const glm::quat &rotation)
     {
         if (halfExtent.x <= 0.0f || halfExtent.y <= 0.0f || halfExtent.z <= 0.0f)
@@ -214,7 +222,7 @@ namespace mir
         return mImpl->CreateBody(new JPH::BoxShape(ToJolt(halfExtent)), position, rotation, false);
     }
 
-    BodyHandle PhysicsWorld::CreateStaticSphere(const glm::vec3 &position, float radius,
+    BodyHandle PhysicsWorld::CreateStaticSphere(WorldPosition position, float radius,
         const glm::quat &rotation)
     {
         if (radius <= 0.0f)
@@ -226,7 +234,7 @@ namespace mir
         return mImpl->CreateBody(new JPH::SphereShape(radius), position, rotation, false);
     }
 
-    BodyHandle PhysicsWorld::CreateDynamicBox(const glm::vec3 &position, const glm::vec3 &halfExtent,
+    BodyHandle PhysicsWorld::CreateDynamicBox(WorldPosition position, const glm::vec3 &halfExtent,
         const glm::quat &rotation)
     {
         if (halfExtent.x <= 0.0f || halfExtent.y <= 0.0f || halfExtent.z <= 0.0f)
@@ -238,7 +246,7 @@ namespace mir
         return mImpl->CreateBody(new JPH::BoxShape(ToJolt(halfExtent)), position, rotation, true);
     }
 
-    BodyHandle PhysicsWorld::CreateDynamicSphere(const glm::vec3 &position, float radius,
+    BodyHandle PhysicsWorld::CreateDynamicSphere(WorldPosition position, float radius,
         const glm::quat &rotation)
     {
         if (radius <= 0.0f)
@@ -265,12 +273,18 @@ namespace mir
         bodies.DestroyBody(id);
     }
 
-    glm::vec3 PhysicsWorld::BodyPosition(BodyHandle body) const
+    std::optional<WorldPosition> PhysicsWorld::BodyPosition(BodyHandle body) const
     {
         if (!body.IsValid())
-            return glm::vec3(0.0f);
+            return std::nullopt;
 
-        return FromJolt(mImpl->mSystem.GetBodyInterface().GetPosition(ToBodyId(body)));
+        // Jolt answers a stale id with the origin, which here is a real place.
+        const JPH::BodyInterface &bodies = mImpl->mSystem.GetBodyInterface();
+        const JPH::BodyID id = ToBodyId(body);
+        if (!bodies.IsAdded(id))
+            return std::nullopt;
+
+        return PositionFromJolt(bodies.GetPosition(id));
     }
 
     glm::quat PhysicsWorld::BodyRotation(BodyHandle body) const
@@ -297,13 +311,13 @@ namespace mir
         return FromJolt(mImpl->mSystem.GetBodyInterface().GetAngularVelocity(ToBodyId(body)));
     }
 
-    void PhysicsWorld::SetBodyTransform(BodyHandle body, const glm::vec3 &position, const glm::quat &rotation)
+    void PhysicsWorld::SetBodyTransform(BodyHandle body, WorldPosition position, const glm::quat &rotation)
     {
         if (!body.IsValid())
             return;
 
         mImpl->mSystem.GetBodyInterface().SetPositionAndRotation(ToBodyId(body),
-            JPH::RVec3(position.x, position.y, position.z),
+            ToJolt(position),
             ToJolt(rotation),
             JPH::EActivation::Activate);
     }

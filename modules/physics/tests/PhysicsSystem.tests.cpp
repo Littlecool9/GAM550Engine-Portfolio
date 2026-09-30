@@ -20,6 +20,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <cmath>
+#include <optional>
 
 namespace
 {
@@ -59,7 +60,7 @@ namespace
 
         mir::PhysicsWorld &Physics() { return world.Resource<mir::PhysicsWorld>(); }
 
-        mir::Entity Add(const glm::vec3 &position, const mir::RigidBody &rigidBody)
+        mir::Entity Add(const glm::dvec3 &position, const mir::RigidBody &rigidBody)
         {
             const mir::Entity entity = world.CreateEntity();
             mir::AddTransform(world, entity, mir::Transform{ position });
@@ -177,4 +178,82 @@ TEST_CASE("Writing the Transform teleports the body", "[physics]")
     const glm::dvec3 position = fixture.TransformOf(entity).Position();
     REQUIRE(std::abs(position.x - 3.0) < 0.01);
     REQUIRE(position.y > 9.9f);
+}
+
+namespace
+{
+    // Map-edge coordinates shared with the terrain ADRs.
+    const glm::dvec3 kEdgeA{-150000.125, 350.5, 75000.5};
+    const glm::dvec3 kEdgeB{150000.625, -20.0, -75000.25};
+    const glm::dvec3 kNudge{0.001, -0.002, 0.003};
+
+    glm::dvec3 BodyMeters(PhysicsFixture &fixture, mir::Entity entity)
+    {
+        const mir::RigidBody *rigidBody = fixture.world.GetComponent<mir::RigidBody>(entity);
+        REQUIRE(rigidBody != nullptr);
+        const std::optional<mir::WorldPosition> position = fixture.Physics().BodyPosition(rigidBody->body);
+        REQUIRE(position);
+        return position->Meters();
+    }
+}
+
+TEST_CASE("A far Transform reaches its body without losing a millimeter", "[physics][lwc]")
+{
+    PhysicsFixture fixture;
+    const mir::Entity box = fixture.Add(kEdgeB + kNudge, kStaticBox);
+
+    fixture.Run(1);
+    CHECK(BodyMeters(fixture, box) == kEdgeB + kNudge);
+    CHECK(fixture.TransformOf(box).Position() == kEdgeB + kNudge);
+
+    // an outside edit of another millimeter is pushed to the body as is
+    REQUIRE(fixture.world.GetComponent<mir::Transform>(box)->Translate(kNudge));
+    fixture.Run(1);
+    const glm::dvec3 moved = (kEdgeB + kNudge) + kNudge;
+    CHECK(BodyMeters(fixture, box) == moved);
+    CHECK(fixture.TransformOf(box).Position() == moved);
+}
+
+TEST_CASE("A far dynamic body writes back what Jolt simulated", "[physics][lwc]")
+{
+    double fell[3];
+    const glm::dvec3 starts[3] = {glm::dvec3(0.0, 5.0, 0.0), kEdgeA, kEdgeB};
+    for (int i = 0; i < 3; ++i)
+    {
+        PhysicsFixture fixture;
+        const mir::Entity sphere = fixture.Add(starts[i] + kNudge, kDynamicSphere);
+
+        fixture.Run(30);
+
+        const glm::dvec3 position = fixture.TransformOf(sphere).Position();
+        CHECK(position == BodyMeters(fixture, sphere));
+        // free fall is straight down: the sideways millimeters are untouched
+        CHECK(position.x == starts[i].x + kNudge.x);
+        CHECK(position.z == starts[i].z + kNudge.z);
+        fell[i] = position.y - starts[i].y;
+    }
+
+    CHECK(fell[0] < -1.0);
+    CHECK(std::abs(fell[1] - fell[0]) <= 1e-9);
+    CHECK(std::abs(fell[2] - fell[0]) <= 1e-9);
+}
+
+TEST_CASE("A far dynamic body lands on a far static one", "[physics][lwc]")
+{
+    double restHeight[2];
+    const glm::dvec3 floors[2] = {glm::dvec3(0.0), kEdgeA};
+    for (int i = 0; i < 2; ++i)
+    {
+        PhysicsFixture fixture;
+        fixture.Add(floors[i], kStaticBox);
+        const mir::Entity sphere = fixture.Add(floors[i] + glm::dvec3(0.0, 3.0, 0.0), kDynamicSphere);
+
+        fixture.Run(180);
+
+        restHeight[i] = fixture.TransformOf(sphere).Position().y - floors[i].y;
+        CHECK(restHeight[i] > 0.5);
+        CHECK(restHeight[i] < 1.25);
+    }
+
+    CHECK(std::abs(restHeight[1] - restHeight[0]) <= 1e-4);
 }

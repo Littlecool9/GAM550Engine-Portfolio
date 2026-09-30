@@ -109,6 +109,14 @@ rather than making a second one.
 Dependencies are declared in `vcpkg.json` and installed during configure. They
 resolve against a pinned `builtin-baseline`, so everyone gets the same versions.
 
+Jolt is the one package that does not come from the registry as is:
+`vcpkg-overlays/joltphysics`, registered by `vcpkg-configuration.json`, replaces
+the port so Jolt is built with `JPH_DOUBLE_PRECISION` (world positions are
+double). vcpkg builds it from source on the first configure after it changes;
+`modules/physics/CMakeLists.txt` stops the configure if a float Jolt is found.
+A build directory whose cache has `VCPKG_MANIFEST_INSTALL=OFF` needs one
+configure with `-DVCPKG_MANIFEST_INSTALL=ON` to pick it up.
+
 **Reconfigure** every time a `CMakeLists.txt` or `vcpkg.json` changes.
 
 Ninja does it for you at build time, and cmake-tools can do it on save — see

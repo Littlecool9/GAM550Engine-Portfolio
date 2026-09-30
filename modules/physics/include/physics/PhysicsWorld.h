@@ -13,12 +13,15 @@
 
 #include <physics/PhysicsTypes.h>
 
+#include <core/math/WorldCoordinates.h>
+
 #include <glm/gtc/quaternion.hpp>
 #include <glm/vec3.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 namespace mir
 {
@@ -48,22 +51,28 @@ namespace mir
         PhysicsWorld(PhysicsWorld &&) = delete;
         PhysicsWorld &operator=(PhysicsWorld &&) = delete;
 
-        BodyHandle CreateStaticBox(const glm::vec3 &position, const glm::vec3 &halfExtent,
+        // Bodies live in the fixed Scene world: a position is a double
+        // WorldPosition all the way into Jolt, never a camera-relative or float
+        // one. Shape sizes, rotations, velocities and forces are bounded floats.
+        BodyHandle CreateStaticBox(WorldPosition position, const glm::vec3 &halfExtent,
                                    const glm::quat &rotation = kIdentityRotation);
-        BodyHandle CreateStaticSphere(const glm::vec3 &position, float radius,
+        BodyHandle CreateStaticSphere(WorldPosition position, float radius,
                                       const glm::quat &rotation = kIdentityRotation);
 
-                                      BodyHandle CreateDynamicBox(const glm::vec3 &position, const glm::vec3 &halfExtent,
+        BodyHandle CreateDynamicBox(WorldPosition position, const glm::vec3 &halfExtent,
                                     const glm::quat &rotation = kIdentityRotation);
-        BodyHandle CreateDynamicSphere(const glm::vec3 &position, float radius,
+        BodyHandle CreateDynamicSphere(WorldPosition position, float radius,
                                        const glm::quat &rotation = kIdentityRotation);
 
         void DestroyBody(BodyHandle body);
-        glm::vec3 BodyPosition(BodyHandle body) const;
+
+        // nullopt for an invalid handle, or if the simulation left the body at
+        // a non-finite position; there is no default place to report instead.
+        std::optional<WorldPosition> BodyPosition(BodyHandle body) const;
         glm::quat BodyRotation(BodyHandle body) const;
         glm::vec3 BodyLinearVelocity(BodyHandle body) const;
         glm::vec3 BodyAngularVelocity(BodyHandle body) const;
-        void SetBodyTransform(BodyHandle body, const glm::vec3 &position, const glm::quat &rotation);
+        void SetBodyTransform(BodyHandle body, WorldPosition position, const glm::quat &rotation);
         void SetBodyLinearVelocity(BodyHandle body, const glm::vec3 &velocity);
         void SetBodyAngularVelocity(BodyHandle body, const glm::vec3 &velocity);
         void AddLinearVelocity(BodyHandle body, const glm::vec3 &velocity);
