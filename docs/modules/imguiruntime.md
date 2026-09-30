@@ -74,8 +74,8 @@ own style decision (`EditorTheme::ScaleForDpi` in the editor's case).
 
 ## State
 
-*As of 2026-09-26.* Owns the full lifetime and the frame bracket. `App` calls it
-directly; `editor` is its one UI client.
+*As of 2026-09-27.* Owns the full lifetime and the frame bracket. `App` calls it
+directly; `editor` and `gameui` are its UI clients.
 
 No tests. It needs a device and a display. The `smoke.*` tests cover startup,
 every frame and shutdown, and `smoke.switch` covers the restart that reloads
@@ -83,8 +83,9 @@ every frame and shutdown, and `smoke.switch` covers the restart that reloads
 
 ## Backlog
 
-1. **`gameui`**, the second client, drawing between the same `BeginFrame` and
-   `EndFrame`.
+1. ~~**`gameui`**, the second client~~, landed 2026-09-27; it draws into the
+   background list between the same `BeginFrame` and `EndFrame`. See
+   [gameui.md](gameui.md).
 2. **Input capture.** `App` still asks `Editor::WantsCaptureKeyboard`/
    `WantsCaptureMouse`, which read the shared `ImGuiIO`. Once `gameui` also
    draws, that question is about the context rather than the editor, and belongs
