@@ -23,7 +23,7 @@ namespace mir
         mInput = &input;
         mNav = ReadNavInput(input);
         mDrawList.Reset(area.width, area.height);
-        mState.BeginFrame(area, pointer);
+        mState.BeginFrame(area, pointer, mNav);
         mInFrame = true;
     }
 
@@ -44,10 +44,10 @@ namespace mir
         mInFrame = false;
     }
 
-    UIInteraction UIContext::Interact(UIId id, const UIRect &rect)
+    UIInteraction UIContext::Interact(UIId id, const UIRect &rect, const UIWidgetOptions &options)
     {
         MIR_ASSERT(mInFrame, "UIContext::Interact outside BeginFrame/EndFrame");
 
-        return mState.Interact(id, rect, mDrawList.CurrentClip());
+        return mState.Interact(id, rect, mDrawList.CurrentClip(), options);
     }
 } // namespace mir

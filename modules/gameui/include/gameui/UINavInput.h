@@ -11,8 +11,20 @@
 
 #include <input/InputState.h>
 
+#include <cstdint>
+#include <optional>
+
 namespace mir
 {
+
+    enum class UINavDirection : uint8_t
+    {
+        Up,
+        Down,
+        Left,
+        Right,
+    };
+
     struct UINavInput
     {
         //in -1 to 1, +x is right +y is down
@@ -30,4 +42,15 @@ namespace mir
     };
 
     UINavInput ReadNavInput(const InputState &input);
+
+    class UINavStepper
+    {
+    public:
+        
+        std::optional<UINavDirection> Step(const UINavInput &nav);
+
+    private:
+        
+        uint8_t mHeld = 0;
+    };
 } // namespace mir
