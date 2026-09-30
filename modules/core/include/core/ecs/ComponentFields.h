@@ -23,7 +23,7 @@
 namespace mir
 {
     // The value types a script or an inspector may read and write.
-    // Each field should be small, at most 4-byte aligned
+    // Each field should be small; DVec3 is the only kind aligned past 4 bytes
     // is entered offset based
     enum class FieldKind : uint8_t
     {
@@ -31,6 +31,7 @@ namespace mir
         Int,
         Float,
         Vec3,
+        DVec3, // double; for positions that must hold far from the Scene origin
         Vec4,
         Quat,
         Mat4,
@@ -53,6 +54,8 @@ namespace mir
             return sizeof(float);
         case FieldKind::Vec3:
             return sizeof(glm::vec3);
+        case FieldKind::DVec3:
+            return sizeof(glm::dvec3);
         case FieldKind::Vec4:
             return sizeof(glm::vec4);
         case FieldKind::Quat:
@@ -81,6 +84,8 @@ namespace mir
             return alignof(float);
         case FieldKind::Vec3:
             return alignof(glm::vec3);
+        case FieldKind::DVec3:
+            return alignof(glm::dvec3);
         case FieldKind::Vec4:
             return alignof(glm::vec4);
         case FieldKind::Quat:
@@ -109,6 +114,8 @@ namespace mir
             return "float";
         case FieldKind::Vec3:
             return "vec3";
+        case FieldKind::DVec3:
+            return "dvec3";
         case FieldKind::Vec4:
             return "vec4";
         case FieldKind::Quat:

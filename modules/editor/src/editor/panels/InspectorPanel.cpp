@@ -19,6 +19,7 @@
 
 #include <imgui.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -49,6 +50,15 @@ namespace mir
                 return ImGui::DragFloat(label, static_cast<float *>(bytes), 0.1f);
             case FieldKind::Vec3:
                 return ImGui::DragFloat3(label, glm::value_ptr(*static_cast<glm::vec3 *>(bytes)), 0.1f);
+            case FieldKind::DVec3: {
+                // NoRoundToFormat: a drag must not snap a far position to the 4 shown decimals
+                glm::dvec3 &value = *static_cast<glm::dvec3 *>(bytes);
+                if (!ImGui::DragScalarN(label, ImGuiDataType_Double, glm::value_ptr(value), 3, 0.1f, nullptr,
+                                        nullptr, "%.4f", ImGuiSliderFlags_NoRoundToFormat))
+                    return false;
+                // typed text such as 1e400 parses to inf, which Transform's setter drops silently
+                return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+            }
             case FieldKind::Vec4:
                 return ImGui::DragFloat4(label, glm::value_ptr(*static_cast<glm::vec4 *>(bytes)), 0.1f);
             case FieldKind::Quat: {

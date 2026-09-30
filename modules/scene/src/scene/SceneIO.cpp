@@ -73,6 +73,12 @@ namespace mir
                     const auto &v = *static_cast<const glm::vec3 *>(bytes);
                     return json::array({ CleanFloat(v.x), CleanFloat(v.y), CleanFloat(v.z) });
                 }
+            case FieldKind::DVec3:
+                {
+                    // nlohmann writes the shortest text that parses back to the same double
+                    const auto &v = *static_cast<const glm::dvec3 *>(bytes);
+                    return json::array({ v.x, v.y, v.z });
+                }
             case FieldKind::Vec4:
                 {
                     const auto &v = *static_cast<const glm::vec4 *>(bytes);
@@ -108,7 +114,7 @@ namespace mir
             return nullptr;
         }
 
-        void JsonToField(FieldKind kind, const json &value, void *outBytes)
+        bool JsonToField(FieldKind kind, const json &value, void *outBytes)
         {
             switch (kind)
             {
@@ -127,6 +133,24 @@ namespace mir
                     v.x = value.at(0).get<float>();
                     v.y = value.at(1).get<float>();
                     v.z = value.at(2).get<float>();
+                    break;
+                }
+            case FieldKind::DVec3:
+                {
+                    if (!value.is_array() || value.size() != 3)
+                        return false;
+
+                    glm::dvec3 v{};
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        const json &component = value[i];
+                        if (!component.is_number())
+                            return false;
+                        v[i] = component.get<double>();
+                        if (!std::isfinite(v[i]))
+                            return false;
+                    }
+                    *static_cast<glm::dvec3 *>(outBytes) = v;
                     break;
                 }
             case FieldKind::Vec4:
@@ -173,6 +197,7 @@ namespace mir
             case FieldKind::EntityRef:
                 break; // handled by the caller, needs the id map
             }
+            return true;
         }
     }
 
@@ -349,7 +374,12 @@ namespace mir
                     }
 
                     FieldBuffer buffer{};
-                    JsonToField(field.mKind, *it, buffer.mBytes);
+                    if (!JsonToField(field.mKind, *it, buffer.mBytes))
+                    {
+                        MIR_LOG_ERROR("LoadScene: entity {} '{}.{}' is not three finite numbers, left at default",
+                            id, typeName, field.mName);
+                        continue;
+                    }
                     field.Write(component, buffer.mBytes);
                 }
             }

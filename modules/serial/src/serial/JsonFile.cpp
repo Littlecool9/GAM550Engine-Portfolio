@@ -31,7 +31,7 @@ namespace mir
         {
             return json::parse(text);
         }
-        catch (const json::parse_error &e)
+        catch (const json::exception &e)
         {
             MIR_LOG_ERROR("ParseJson: '{}' is not valid JSON ({})", context, e.what());
             return std::nullopt;

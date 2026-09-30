@@ -100,12 +100,12 @@ namespace mir
     // Transform as a script or inspector sees it
     // Accessor thunks
     inline constexpr FieldDesc kTransformFields[] = {
-        // Narrowed to float until #105 widens the field for SceneIO and Lua.
-        {"position", FieldKind::Vec3, 0,
+        // Absolute on a root, parent-local on a child.
+        {"position", FieldKind::DVec3, 0,
          [](const void *component, void *out)
-         { *static_cast<glm::vec3 *>(out) = glm::vec3(static_cast<const Transform *>(component)->Position()); },
+         { *static_cast<glm::dvec3 *>(out) = static_cast<const Transform *>(component)->Position(); },
          [](void *component, const void *in)
-         { static_cast<Transform *>(component)->SetPosition(glm::dvec3(*static_cast<const glm::vec3 *>(in))); }},
+         { static_cast<Transform *>(component)->SetPosition(*static_cast<const glm::dvec3 *>(in)); }},
 
         {"rotation", FieldKind::Quat, 0,
          [](const void *component, void *out)

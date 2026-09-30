@@ -165,28 +165,39 @@ TEST_CASE("A field write on Transform goes through the setter, not the bytes")
     const FieldDesc *position = ops.FindField("position");
     REQUIRE(position != nullptr);
 
-    const glm::vec3 target{1.0f, 2.0f, 3.0f};
+    // far from the origin, where a float would round the millimetres away
+    CHECK(position->mKind == FieldKind::DVec3);
+    const glm::dvec3 target{-150000.125 + 0.001, 350.5 - 0.002, 75000.5 + 0.003};
     REQUIRE(position->Write(transform, &target));
 
-    CHECK(transform->Position() == glm::dvec3(target));
+    CHECK(transform->Position() == target);
     CHECK(transform->Version() != before);
 
-    glm::vec3 readBack{};
+    glm::dvec3 readBack{};
     position->Read(transform, &readBack);
     CHECK(readBack == target);
+}
+
+TEST_CASE("Transform keeps scale and rotation as float fields")
+{
+    const ComponentOps &ops = ComponentRegistry::Instance().Register<Transform>(mir::kTransformFields);
+
+    CHECK(ops.FindField("scale")->mKind == FieldKind::Vec3);
+    CHECK(ops.FindField("rotation")->mKind == FieldKind::Quat);
 }
 
 TEST_CASE("A field with no setter refuses the write")
 {
     const ComponentOps &ops = ComponentRegistry::Instance().Register<mir::WorldTransform>(mir::kWorldTransformFields);
 
-    const FieldDesc *matrix = ops.FindField("matrix");
-    REQUIRE(matrix != nullptr);
-    CHECK(matrix->ReadOnly());
+    const FieldDesc *position = ops.FindField("position");
+    REQUIRE(position != nullptr);
+    CHECK(position->mKind == FieldKind::DVec3);
+    CHECK(position->ReadOnly());
 
     mir::WorldTransform value{};
-    const glm::mat4 attempt{2.0f};
-    CHECK_FALSE(matrix->Write(&value, &attempt));
+    const glm::dvec3 attempt{2.0};
+    CHECK_FALSE(position->Write(&value, &attempt));
     CHECK(value.Linear() == glm::mat3{1.0f});
     CHECK(value.Position().Meters() == glm::dvec3(0.0));
 }
@@ -253,6 +264,31 @@ TEST_CASE("A script declares a component and the registry lays it out")
     CHECK(ops.FindField("target")->mOffset == 8);
     CHECK(ops.mSize == 16);
     CHECK(ops.mAlign == 4);
+}
+
+TEST_CASE("A script-declared dvec3 field is 8-aligned and keeps full precision")
+{
+    constexpr RuntimeFieldDecl fields[] = {
+        {"flag", FieldKind::Bool},
+        {"anchor", FieldKind::DVec3},
+    };
+
+    const ComponentOps &ops = ComponentRegistry::Instance().RegisterRuntime("ScriptAnchor", fields);
+
+    CHECK(ops.FindField("anchor")->mOffset == 8);
+    CHECK(ops.mSize == 32);
+    CHECK(ops.mAlign == 8);
+
+    World world;
+    const Entity entity = world.CreateEntity();
+    ops.AddDefault(world, entity);
+
+    const glm::dvec3 anchor{150000.625 + 0.001, -20.0, -75000.25};
+    REQUIRE(ops.FindField("anchor")->Write(ops.GetComponent(world, entity), &anchor));
+
+    glm::dvec3 readBack{};
+    ops.FindField("anchor")->Read(ops.GetComponent(world, entity), &readBack);
+    CHECK(readBack == anchor);
 }
 
 TEST_CASE("A script component round-trips through the world")

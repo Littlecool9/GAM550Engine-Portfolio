@@ -82,16 +82,9 @@ namespace mir
 
     // only getter, set is only to be done by Hierarchy System
     inline constexpr FieldDesc kWorldTransformFields[] = {
-        // Relative to the Scene origin, so it rounds far from it until #105
-        // replaces this view. Identity only if the offset does not fit a float.
-        {"matrix", FieldKind::Mat4, 0,
+        {"position", FieldKind::DVec3, 0,
          [](const void *component, void *out)
-         {
-             *static_cast<glm::mat4 *>(out) = static_cast<const WorldTransform *>(component)
-                                                  ->Pose()
-                                                  .TryMatrixRelativeTo(WorldPosition{})
-                                                  .value_or(glm::mat4(1.0f));
-         },
+         { *static_cast<glm::dvec3 *>(out) = static_cast<const WorldTransform *>(component)->Position().Meters(); },
          nullptr},
     };
 }
