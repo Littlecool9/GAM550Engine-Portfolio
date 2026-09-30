@@ -31,89 +31,49 @@ namespace mir
         }
     }
 
-    // Absolute Position
-    class WorldPosition
+    // Finite meters on some axes. Only Tag says which, so coordinates with
+    // different Tags never convert into each other.
+    template <typename Tag>
+    class Coordinate
     {
     public:
-        WorldPosition() = default; // Scene origin
+        Coordinate() = default; // zero, e.g. the Scene origin for WorldPosition
 
-        [[nodiscard]] static std::optional<WorldPosition> FromMeters(const glm::dvec3 &meters)
+        [[nodiscard]] static std::optional<Coordinate> FromMeters(const glm::dvec3 &meters)
         {
             if (!detail::FiniteCoordinates(meters))
                 return std::nullopt;
-            return WorldPosition(meters);
+            return Coordinate(meters);
         }
 
         [[nodiscard]] glm::dvec3 Meters() const { return mMeters; }
 
     private:
-        explicit WorldPosition(const glm::dvec3 &meters) : mMeters(meters) {}
+        explicit Coordinate(const glm::dvec3 &meters) : mMeters(meters) {}
 
         glm::dvec3 mMeters{0.0};
     };
+
+    // Declared only: a tag names a meaning and is never instantiated.
+    namespace detail
+    {
+        struct WorldPositionTag;
+        struct WorldOffsetTag;
+        struct ParentLocalTag;
+        struct TerrainLocalTag;
+    }
+
+    // Absolute Position
+    using WorldPosition = Coordinate<detail::WorldPositionTag>;
 
     // A displacement expressed on the fixed world axes, not parent-local axes.
-    class WorldOffset
-    {
-    public:
-        WorldOffset() = default;
-
-        [[nodiscard]] static std::optional<WorldOffset> FromMeters(const glm::dvec3 &meters)
-        {
-            if (!detail::FiniteCoordinates(meters))
-                return std::nullopt;
-            return WorldOffset(meters);
-        }
-
-        [[nodiscard]] glm::dvec3 Meters() const { return mMeters; }
-
-    private:
-        explicit WorldOffset(const glm::dvec3 &meters) : mMeters(meters) {}
-
-        glm::dvec3 mMeters{0.0};
-    };
+    using WorldOffset = Coordinate<detail::WorldOffsetTag>;
 
     // A child's translation in its parent's axes, before parent rotation/scale.
-    class ParentLocalTranslation
-    {
-    public:
-        ParentLocalTranslation() = default;
-
-        [[nodiscard]] static std::optional<ParentLocalTranslation> FromMeters(const glm::dvec3 &meters)
-        {
-            if (!detail::FiniteCoordinates(meters))
-                return std::nullopt;
-            return ParentLocalTranslation(meters);
-        }
-
-        [[nodiscard]] glm::dvec3 Meters() const { return mMeters; }
-
-    private:
-        explicit ParentLocalTranslation(const glm::dvec3 &meters) : mMeters(meters) {}
-
-        glm::dvec3 mMeters{0.0};
-    };
+    using ParentLocalTranslation = Coordinate<detail::ParentLocalTag>;
 
     // A point in a terrain asset's unrotated, unscaled local coordinate grid.
-    class TerrainLocalPosition
-    {
-    public:
-        TerrainLocalPosition() = default;
-
-        [[nodiscard]] static std::optional<TerrainLocalPosition> FromMeters(const glm::dvec3 &meters)
-        {
-            if (!detail::FiniteCoordinates(meters))
-                return std::nullopt;
-            return TerrainLocalPosition(meters);
-        }
-
-        [[nodiscard]] glm::dvec3 Meters() const { return mMeters; }
-
-    private:
-        explicit TerrainLocalPosition(const glm::dvec3 &meters) : mMeters(meters) {}
-
-        glm::dvec3 mMeters{0.0};
-    };
+    using TerrainLocalPosition = Coordinate<detail::TerrainLocalTag>;
 
     // Fallible arithmetic rejects non-finite results, including double overflow.
     [[nodiscard]] inline std::optional<WorldPosition> TryTranslateWorld(WorldPosition position, WorldOffset offset)

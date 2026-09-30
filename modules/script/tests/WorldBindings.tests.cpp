@@ -110,6 +110,8 @@ namespace
         static const RuntimeFieldDecl fields[] = {
             {"child", FieldKind::EntityRef}, {"world", FieldKind::DVec3},  {"scaleRead", FieldKind::DVec3},
             {"rejected", FieldKind::Int},    {"nilOk", FieldKind::Int},    {"declared", FieldKind::Int},
+            {"posePos", FieldKind::DVec3},   {"col0", FieldKind::Vec3},    {"col1", FieldKind::Vec3},
+            {"col2", FieldKind::Vec3},
         };
         return ComponentRegistry::Instance().RegisterRuntime("PositionProbe", fields);
     }
@@ -155,7 +157,30 @@ function T.OnStart(self, world, entity)
     world:set(entity, "PositionProbe", "rejected", (not inf and not nan) and 1 or 0)
 
     local bare = world:spawn()
-    world:set(entity, "PositionProbe", "nilOk", world:world_position(bare) == nil and 1 or 0)
+    local nilOk = world:world_position(bare) == nil and world:world_pose(bare) == nil
+    world:set(entity, "PositionProbe", "nilOk", nilOk and 1 or 0)
+end
+
+return T
+)LUA";
+
+    // linear is column-major, so each column is three consecutive entries
+    constexpr std::string_view kPoseSource = R"LUA(
+local T = {}
+
+function T.NewInstanceData()
+    return {}
+end
+
+function T.OnStart(self, world, entity)
+    local child = world:get(entity, "PositionProbe").child
+    local pose = world:world_pose(child)
+    world:set(entity, "PositionProbe", "posePos", pose.position)
+
+    local m = pose.linear
+    world:set(entity, "PositionProbe", "col0", { x = m[1], y = m[2], z = m[3] })
+    world:set(entity, "PositionProbe", "col1", { x = m[4], y = m[5], z = m[6] })
+    world:set(entity, "PositionProbe", "col2", { x = m[7], y = m[8], z = m[9] })
 end
 
 return T
@@ -239,4 +264,36 @@ TEST_CASE("world:set refuses a non-finite position and leaves the Transform unto
     CHECK(world.GetComponent<Transform>(entity)->Version() == version);
     CHECK(ReadProbe(probe, world, entity, "rejected") == 1);
     CHECK(ReadProbe(probe, world, entity, "nilOk") == 1);
+}
+
+TEST_CASE("world:world_pose hands a script the resolved position and linear part", "[script]")
+{
+    mir::RegisterCoreComponents();
+    const ComponentOps &probe = PositionProbeOps();
+
+    // far parent turned +90 degrees about Z and scaled 2x, so linear is not identity
+    const glm::dvec3 rootPosition = glm::dvec3(-150000.125, 350.5, 75000.5) + glm::dvec3(0.001, -0.002, 0.003);
+    const glm::quat turn = glm::angleAxis(glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+
+    World world;
+    const Entity root = world.CreateEntity();
+    const Entity child = world.CreateEntity();
+    mir::AddTransform(world, root, Transform{rootPosition, turn, glm::vec3(2.0f)});
+    mir::AddTransform(world, child, Transform{glm::dvec3(1.0005, 0.0, 0.0)}, root);
+    probe.AddDefault(world, root);
+    probe.FindField("child")->Write(probe.GetComponent(world, root), &child);
+
+    RunOnStart("world_pose", kPoseSource, world, root);
+
+    const mir::WorldPose expected = mir::ResolveWorld(world, child);
+    CHECK(ReadProbeDVec3(probe, world, root, "posePos") == expected.position.Meters());
+
+    // float linear widened to a Lua number and back is exact
+    const char *columns[] = {"col0", "col1", "col2"};
+    for (int c = 0; c < 3; ++c)
+    {
+        glm::vec3 column{-1.0f};
+        probe.FindField(columns[c])->Read(probe.GetComponent(world, root), &column);
+        CHECK(column == expected.linear[c]);
+    }
 }

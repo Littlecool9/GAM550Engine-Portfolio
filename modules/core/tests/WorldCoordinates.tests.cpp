@@ -44,6 +44,19 @@ TEST_CASE("Fixed-world coordinates remain ECS-compatible value types", "[core][l
     STATIC_REQUIRE(std::is_standard_layout_v<mir::TerrainLocalPosition>);
     STATIC_REQUIRE(alignof(mir::WorldPosition) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__);
 
+    // one template, but each meaning stays its own type
+    STATIC_REQUIRE_FALSE(std::is_same_v<mir::WorldPosition, mir::WorldOffset>);
+    STATIC_REQUIRE_FALSE(std::is_same_v<mir::WorldPosition, mir::ParentLocalTranslation>);
+    STATIC_REQUIRE_FALSE(std::is_same_v<mir::WorldPosition, mir::TerrainLocalPosition>);
+    STATIC_REQUIRE_FALSE(std::is_same_v<mir::WorldOffset, mir::ParentLocalTranslation>);
+    STATIC_REQUIRE_FALSE(std::is_same_v<mir::WorldOffset, mir::TerrainLocalPosition>);
+    STATIC_REQUIRE_FALSE(std::is_same_v<mir::ParentLocalTranslation, mir::TerrainLocalPosition>);
+    STATIC_REQUIRE_FALSE(std::is_convertible_v<mir::WorldOffset, mir::WorldPosition>);
+    STATIC_REQUIRE_FALSE(std::is_convertible_v<mir::WorldPosition, mir::WorldOffset>);
+    STATIC_REQUIRE_FALSE(std::is_convertible_v<mir::ParentLocalTranslation, mir::WorldOffset>);
+    STATIC_REQUIRE_FALSE(std::is_convertible_v<mir::TerrainLocalPosition, mir::WorldPosition>);
+    STATIC_REQUIRE_FALSE(std::is_convertible_v<glm::dvec3, mir::WorldPosition>);
+
     const mir::WorldPosition origin;
     CHECK(origin.Meters() == glm::dvec3(0.0));
 }

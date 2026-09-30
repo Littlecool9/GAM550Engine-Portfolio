@@ -382,6 +382,27 @@ namespace mir
             return DVec3ToLua(sol::state_view(state), ResolveWorld(world, entity).position.Meters());
         }
 
+        // Resolved now, like world_position. linear is world rotation * scale,
+        // column-major as glm stores it: linear[c * 3 + r + 1] = m[c][r].
+        sol::object WorldWorldPose(World &world, Entity entity, sol::this_state state)
+        {
+            if (world.GetComponent<Transform>(entity) == nullptr)
+                return sol::nil; // dead entity or no Transform
+
+            sol::state_view lua(state);
+            const WorldPose pose = ResolveWorld(world, entity);
+
+            sol::table linear = lua.create_table(9, 0);
+            const float *m = glm::value_ptr(pose.linear);
+            for (int i = 0; i < 9; ++i)
+                linear[i + 1] = m[i];
+
+            sol::table out = lua.create_table();
+            out["position"] = DVec3ToLua(lua, pose.position.Meters());
+            out["linear"] = linear;
+            return out;
+        }
+
         Entity WorldSpawn(World &world)
         {
             return world.CreateEntity();
@@ -601,6 +622,7 @@ namespace mir
                                 "get", &WorldGet,
                                 "set", &WorldSet,
                                 "world_position", &WorldWorldPosition,
+                                "world_pose", &WorldWorldPose,
                                 "spawn", &WorldSpawn,
                                 "destroy", &WorldDestroy,
                                 "add", &WorldAdd,
