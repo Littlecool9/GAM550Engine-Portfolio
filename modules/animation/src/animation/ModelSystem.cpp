@@ -277,19 +277,19 @@ namespace mir
                                             throw std::runtime_error("non-finite morph override");
                                     pose[i].weights = w->second;
                                 }
-                    // Relative to the Scene origin, so far positions still round
-                    // in float; #106 subtracts the viewport camera instead.
-                    const auto entityMatrix = transform.Pose().TryMatrixRelativeTo(WorldPosition{});
-                    if (!entityMatrix)
-                        return;
                     auto visible = VisibleModelNodes(data.resources.model, uint32_t(player.Scene()));
                     for (size_t i = 0; i < pose.size(); ++i)
                     {
                         const auto &node = data.resources.model.nodes[i];
                         if (!visible[i] || node.mesh.IsNull())
                             continue;
-                        const auto world = *entityMatrix * pose[i].world;
-                        const auto det = glm::determinant(glm::mat3(world));
+                        // The node pose is model-local and bounded; only the
+                        // entity's world position needs double.
+                        const auto world = TryComposePose(transform.Pose(), glm::mat3(pose[i].world),
+                                                          glm::vec3(pose[i].world[3]));
+                        if (!world)
+                            continue;
+                        const auto det = glm::determinant(world->linear);
                         if (std::abs(det) < 1e-10f)
                             continue;
                         auto matrices = SkinMatrices(data.resources.model, pose, uint32_t(i));
@@ -299,12 +299,12 @@ namespace mir
                         {
                             mDeformations.push_back(
                                 BuildDeformationData(mesh.primitives[p], pose[i].weights, matrices));
-                            DrawItem item{gpu[p].mesh,
-                                          world,
-                                          glm::inverseTranspose(glm::mat3(world)),
-                                          gpu[p].factor,
-                                          det < 0 ? gpu[p].mirrored : gpu[p].material,
-                                          mDeformations.back()};
+                            WorldDrawItem item{gpu[p].mesh,
+                                               *world,
+                                               glm::inverseTranspose(world->linear),
+                                               gpu[p].factor,
+                                               det < 0 ? gpu[p].mirrored : gpu[p].material,
+                                               mDeformations.back()};
                             item.transparent = gpu[p].transparent;
                             draws.items.push_back(item);
                         }

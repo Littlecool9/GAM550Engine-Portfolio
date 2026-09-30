@@ -24,9 +24,7 @@ namespace mir
         struct TransformResolver;
     }
 
-    // An entity's resolved placement in the fixed Scene world: the double
-    // position a float world matrix would round away, plus the bounded
-    // rotation * scale part that float holds fine.
+    // position is in double precision while the other are stored in float as it was
     struct WorldPose
     {
         WorldPosition position;
@@ -45,6 +43,21 @@ namespace mir
             return m;
         }
     };
+
+    // It fails when the result is out of precision range or being placed at an invalid place
+    [[nodiscard]] inline std::optional<WorldPose> TryComposePose(
+        const WorldPose &parent, const glm::mat3 &localLinear, const glm::vec3 &localTranslation)
+    {
+        const std::optional<ParentLocalTranslation> translation =
+            ParentLocalTranslation::FromMeters(glm::dvec3(localTranslation));
+        const std::optional<WorldOffset> offset =
+            translation ? TryParentLocalToWorldOffset(glm::dmat3(parent.linear), *translation) : std::nullopt;
+        const std::optional<WorldPosition> position =
+            offset ? TryTranslateWorld(parent.position, *offset) : std::nullopt;
+        if (!position)
+            return std::nullopt;
+        return WorldPose{ *position, parent.linear * localLinear };
+    }
 
     // Read it through ResolveWorld (core/ecs/TransformHierarchy.h)
     class WorldTransform

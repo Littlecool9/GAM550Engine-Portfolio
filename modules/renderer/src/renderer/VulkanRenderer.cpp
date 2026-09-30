@@ -76,8 +76,9 @@ namespace mir
             glm::vec4 lightColor;   // rgb = light color/intensity
             glm::vec4 ambientColor; // rgb = flat ambient term
             glm::mat4 invViewProj;
-            glm::vec4 cameraPosWS;  // xyz = camera world position
-            glm::vec4 fogColor;     // rgb = fog color, a = density (0 = disabled)
+            glm::vec4 cameraPos;      // xyz = camera in render space: always the origin
+            glm::vec4 fogColor;       // rgb = fog color, a = density (0 = disabled)
+            glm::vec4 cameraWorldPos; // xyz = absolute camera, narrowed from the Scene origin; atmosphere only
         };
 
         struct RtInstanceInfo
@@ -2006,16 +2007,22 @@ namespace mir
         }
     }
 
-    void VulkanRenderer::WriteCameraData(const glm::mat4 &viewProj, const glm::vec3 &cameraPosWS, uint32_t viewIndex)
+    void VulkanRenderer::WriteCameraData(const glm::mat4 &viewProj, WorldPosition cameraPosition, uint32_t viewIndex)
     {
+        // The atmosphere needs the camera's altitude over its planet, where
+        // float's 1/64 m at the map edge is invisible; no geometry reads it.
+        const glm::vec3 cameraWorld =
+            TryCameraRelativeFloat(cameraPosition, WorldPosition{}).value_or(glm::vec3(0.0f));
+
         const CameraData data{
             .viewProj = viewProj,
             .lightDirWS = glm::vec4(mLightDirection, 0.0f),
             .lightColor = glm::vec4(mLightColor, 0.0f),
             .ambientColor = glm::vec4(mAmbientColor, 0.0f),
             .invViewProj = glm::inverse(viewProj),
-            .cameraPosWS = glm::vec4(cameraPosWS, 1.0f),
-            .fogColor = glm::vec4(mFogColor, mFogDensity) };
+            .cameraPos = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f),
+            .fogColor = glm::vec4(mFogColor, mFogDensity),
+            .cameraWorldPos = glm::vec4(cameraWorld, 1.0f) };
         const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
 
         std::byte *const dst = mCameraMapped[mFrameIndex] + offset;
@@ -2147,7 +2154,14 @@ namespace mir
         for (const DrawItem &item : items)
         {
             if (instanceCount >= kMaxRtInstances)
+            {
+                if (!mWarnedRtInstanceCap)
+                {
+                    MIR_LOG_WARN("RecordTlasBuild: more than {} draws; the rest are not traced", kMaxRtInstances);
+                    mWarnedRtInstanceCap = true;
+                }
                 break;
+            }
 
             const GpuMesh *const mesh = FindMesh(item.mesh);
             if (mesh == nullptr || mesh->mBlas == VK_NULL_HANDLE)
@@ -3238,7 +3252,7 @@ namespace mir
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &rect);
 
-        WriteCameraData(view.viewProj, view.cameraPos, viewIndex);
+        WriteCameraData(view.viewProj, view.cameraPosition, viewIndex);
         const uint32_t cameraOffset = static_cast<uint32_t>(viewIndex * mCameraAlignedSize);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
             1, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
@@ -3311,7 +3325,7 @@ namespace mir
 
         const VkRect2D rect = ResolveViewRect(view.rect, mSwapchainExtent);
 
-        WriteCameraData(view.viewProj, view.cameraPos, 0);
+        WriteCameraData(view.viewProj, view.cameraPosition, 0);
         const uint32_t cameraOffset = 0;
 
         if (mValidationEnabled)

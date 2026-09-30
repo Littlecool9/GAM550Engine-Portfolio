@@ -14,7 +14,9 @@ cbuffer CameraData
     float4 lightColor;
     float4 ambientColor;
     float4x4 invViewProj;
-    float4 cameraPosWS;
+    float4 cameraPos; // the origin of camera-relative render space
+    float4 fogColor;
+    float4 cameraWorldPos; // absolute camera position, for the altitude only
 };
 
 [shader("vertex")]
@@ -39,10 +41,10 @@ float4 fragmentMain(VSOutput input) : SV_Target
 {
     float4 worldFar = mul(invViewProj, float4(input.ndc, 1.0, 1.0));
     float3 worldPos = worldFar.xyz / worldFar.w;
-    float3 rayDir = normalize(worldPos - cameraPosWS.xyz);
+    float3 rayDir = normalize(worldPos - cameraPos.xyz);
 
     // Camera position relative to the planet's center
-    float3 rayOrigin = float3(cameraPosWS.x, kPlanetRadius + cameraPosWS.y, cameraPosWS.z);
+    float3 rayOrigin = float3(cameraWorldPos.x, kPlanetRadius + cameraWorldPos.y, cameraWorldPos.z);
 
     float3 color = Atmosphere(rayDir, rayOrigin, normalize(lightDirWS.xyz));
     color = TonemapReinhard(color);

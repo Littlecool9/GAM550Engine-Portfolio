@@ -1014,3 +1014,28 @@ TEST_CASE("A pose narrows to float only after subtracting the origin", "[ecs][tr
     REQUIRE(far);
     CHECK_FALSE(pose.TryMatrixRelativeTo(*far));
 }
+
+TEST_CASE("TryComposePose places a float child under a far parent", "[ecs][transform][hierarchy][lwc]")
+{
+    const std::optional<mir::WorldPosition> at = mir::WorldPosition::FromMeters(kEdgeA);
+    REQUIRE(at);
+    const glm::mat3 turnAndScale = glm::mat3_cast(QuarterTurnZ()) * glm::mat3(2.0f);
+    const mir::WorldPose parent{*at, turnAndScale};
+
+    const std::optional<mir::WorldPose> child =
+        mir::TryComposePose(parent, glm::mat3(1.0f), glm::vec3(1.0005f, 0.0f, 0.0f));
+    REQUIRE(child);
+    // same float-linear bound as the hierarchy's own composition
+    CHECK(MaxError(child->position.Meters(), kEdgeA + glm::dvec3(0.0, 2.001, 0.0)) <= 1e-6);
+    CHECK(child->linear == turnAndScale);
+
+    const std::optional<mir::WorldPose> moved =
+        mir::TryComposePose(parent, glm::mat3(1.0f), glm::vec3(1.0005f, 0.0f, 0.0f) + glm::vec3(0.001f, 0.0f, 0.0f));
+    REQUIRE(moved);
+    CHECK(MaxError(moved->position.Meters() - child->position.Meters(), glm::dvec3(0.0, 0.002, 0.0)) <= 1e-6);
+
+    // a float child cannot push a double past overflow, so only non-finite input fails
+    CHECK_FALSE(mir::TryComposePose(parent, glm::mat3(1.0f), glm::vec3(std::nanf(""), 0.0f, 0.0f)));
+    const mir::WorldPose badParent{*at, glm::mat3(std::numeric_limits<float>::infinity())};
+    CHECK_FALSE(mir::TryComposePose(badParent, glm::mat3(1.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+}

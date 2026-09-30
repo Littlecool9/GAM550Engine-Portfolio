@@ -31,8 +31,9 @@ cbuffer CameraData
     float4 lightColor;
     float4 ambientColor;
     float4x4 invViewProj;
-    float4 cameraPosWS;
+    float4 cameraPos; // the origin: the TLAS is built relative to this view's camera
     float4 fogColor;
+    float4 cameraWorldPos; // absolute camera position, for the atmosphere only
 };
 
 struct RtPushData
@@ -64,10 +65,10 @@ void rayGenMain()
 
     const float4 worldFar = mul(invViewProj, float4(ndc, 1.0, 1.0));
     const float3 worldPos = worldFar.xyz / worldFar.w;
-    const float3 rayDir = normalize(worldPos - cameraPosWS.xyz);
+    const float3 rayDir = normalize(worldPos - cameraPos.xyz);
 
     RayDesc ray;
-    ray.Origin = cameraPosWS.xyz;
+    ray.Origin = cameraPos.xyz;
     ray.Direction = rayDir;
     ray.TMin = 0.001;
     ray.TMax = 10000.0;
@@ -83,7 +84,7 @@ void rayGenMain()
 [shader("miss")]
 void missMain(inout RayPayload payload)
 {
-    const float3 rayOrigin = float3(cameraPosWS.x, kPlanetRadius + cameraPosWS.y, cameraPosWS.z);
+    const float3 rayOrigin = float3(cameraWorldPos.x, kPlanetRadius + cameraWorldPos.y, cameraWorldPos.z);
     float3 color = Atmosphere(WorldRayDirection(), rayOrigin, normalize(lightDirWS.xyz));
     payload.color = TonemapReinhard(color);
 }
@@ -133,7 +134,7 @@ void closestHitMain(inout RayPayload payload, in BuiltInTriangleIntersectionAttr
 
         const float3 hitWorldPos = WorldRayOrigin() + RayTCurrent() * WorldRayDirection();
         const float3 L = normalize(lightDirWS.xyz);
-        const float3 V = normalize(cameraPosWS.xyz - hitWorldPos);
+        const float3 V = normalize(cameraPos.xyz - hitWorldPos);
         const float3 H = normalize(L + V);
 
         const float diffuse = max(dot(N, L), 0.0);
