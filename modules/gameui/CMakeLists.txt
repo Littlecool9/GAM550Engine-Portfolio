@@ -14,6 +14,7 @@ target_sources(engine_gameui PRIVATE
     src/gameui/UIBackendImGui.cpp
     src/gameui/UIContext.cpp
     src/gameui/UIDrawList.cpp
+    src/gameui/UINavInput.cpp
     src/gameui/UIState.cpp
 )
 

@@ -21,6 +21,7 @@ namespace mir
 
         mArea = area;
         mInput = &input;
+        mNav = ReadNavInput(input);
         mDrawList.Reset(area.width, area.height);
         mState.BeginFrame(area, pointer);
         mInFrame = true;
@@ -39,6 +40,7 @@ namespace mir
             mState.EndFrame();
 
         mInput = nullptr;
+        mNav = UINavInput{};
         mInFrame = false;
     }
 

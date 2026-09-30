@@ -8,6 +8,7 @@ target_link_libraries(engine_input
 target_link_libraries(engine_input PRIVATE mir::serial)
 
 target_sources(engine_input PRIVATE
+    src/input/DefaultInputMap.cpp
     src/input/InputMap.cpp
     src/input/InputSystem.cpp
 )

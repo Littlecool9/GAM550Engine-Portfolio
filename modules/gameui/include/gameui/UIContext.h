@@ -12,6 +12,7 @@
 
 #include "UIDrawList.h"
 #include "UIId.h"
+#include "UINavInput.h"
 #include "UIState.h"
 #include "UITypes.h"
 
@@ -46,6 +47,9 @@ namespace mir
         //only between BeginFrame and EndFrame; null outside a frame
         InputState *Input() const { return mInput; }
 
+        //the UI actions read from the input at BeginFrame while zero outside a frame
+        const UINavInput &Nav() const { return mNav; }
+
         UIStyle &Style() { return mStyle; }
         const UIStyle &Style() const { return mStyle; }
 
@@ -54,6 +58,7 @@ namespace mir
         UIState mState;
         UIRect mArea;
         InputState *mInput = nullptr;
+        UINavInput mNav;
         UIStyle mStyle;
         bool mInFrame = false;
     };
