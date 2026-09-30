@@ -92,7 +92,7 @@ void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera
 | `Viewport`, `ViewportId` | `renderer/RenderSystem.h` | `RenderSystem`'s per-viewport state: rect plus a World `Entity`, an external camera, or neither (fallback) |
 | `MeshRenderer`, `Camera` | `renderer/components/` | Handles, and `fovY`/`near`/`far`, declared here rather than in `core` |
 | `MeshBounds` | `renderer/components/MeshBounds.h` | `{mLocalMin, mLocalMax}`, a mesh's own local-space AABB; attached by `ResolveSceneMeshes` (see [app.md](app.md)), read by the editor's viewport click-picking (see [editor.md](editor.md)) — not used for rendering at all |
-| `Ray`, `MakeCameraRay`, `RayIntersectsAABB` | `renderer/CameraMath.h` | World-space camera ray from a click, and a ray/AABB slab test — the same file `MakeViewProjection` lives in, so both stay in the same Vulkan-convention math |
+| `Ray`, `RayIntersectsAABB`, `WorldRay`, `MakeCameraRay`, `RayIntersectsBox` | `renderer/CameraMath.h` | `WorldRay` is a camera ray with a double `WorldPosition` origin and a float direction; `RayIntersectsBox` places a `WorldPose` box relative to that origin in double, then runs the local ray/AABB slab test — the same file `MakeViewProjection` lives in, so both stay in the same Vulkan-convention math |
 | `RenderSystem` | `renderer/RenderSystem.h` | The ECS-to-renderer bridge, `SystemPhase::Render` |
 | `Shapes.h` | `renderer/Shapes.h` | `MakeCube()` and friends — plain vectors, no Vulkan |
 | `RenderSettings` | `renderer/RenderSettings.h` | Project Settings' `"rendering"` section (`rayTracing: bool`, `fog: bool`); `LoadFile`/`SaveFile`, a World resource loaded in `App::Initialize` |
@@ -475,6 +475,19 @@ No tests. Everything here needs a device, and the module is verified by running.
    gap rather than fixing it.
 
 ## Changed
+
+*2026-09-29* — **Camera rays keep a double origin, and the projection names
+its clip convention.** Was: `MakeCameraRay(cameraWorld, viewProj, ndc)` returned
+a float `Ray` whose origin was the camera's float world position, and
+`MakeViewProjection` called `glm::perspective` under a file-local
+`GLM_FORCE_DEPTH_ZERO_TO_ONE`. `Editor.cpp` instantiated the same inline
+template without the macro, and in the Debug `MjolnirEngine.exe` the linker kept
+that -1..1 copy for both, so the renderer's near plane sat at about twice
+`nearZ`. Now: `MakeCameraRay(cameraPose, lens, aspect, ndc)` returns a
+`WorldRay` (double `WorldPosition` origin, float direction) and
+`RayIntersectsBox` subtracts that origin from the box's `WorldPose` in double
+before the slab test; `MakeViewProjection` calls `glm::perspectiveRH_ZO`
+outright and the macro is gone.
 
 *2026-09-27* — **RT's `missMain` renders the real sky, and vertex-stride
 drift between raster and RT got fixed along the way — issues #55 and #80.**

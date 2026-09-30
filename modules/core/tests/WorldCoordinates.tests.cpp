@@ -169,6 +169,31 @@ TEST_CASE("Parent-local translation becomes world-axis displacement after linear
     CheckNear(recovered->Meters(), worldOffset->Meters(), DoubleErrorBudget(150000.0));
 }
 
+TEST_CASE("World-axis displacement converts back to a parent-local translation", "[core][lwc]")
+{
+    glm::dmat3 parentLinear(1.0);
+    parentLinear[0] = {0.0, 2.0, 0.0};
+    parentLinear[1] = {-3.0, 0.0, 0.0};
+
+    const auto local = mir::ParentLocalTranslation::FromMeters({0.001, 2.0, 3.0});
+    REQUIRE(local);
+    const auto worldOffset = mir::TryParentLocalToWorldOffset(parentLinear, *local);
+    REQUIRE(worldOffset);
+
+    const auto recovered = mir::TryWorldOffsetToParentLocal(parentLinear, *worldOffset);
+    REQUIRE(recovered);
+    CheckNear(recovered->Meters(), local->Meters(), 1e-15);
+
+    // a zero scale has no inverse
+    glm::dmat3 flattened(1.0);
+    flattened[1] = {0.0, 0.0, 0.0};
+    CHECK_FALSE(mir::TryWorldOffsetToParentLocal(flattened, *worldOffset));
+
+    glm::dmat3 invalidLinear(1.0);
+    invalidLinear[0][0] = std::numeric_limits<double>::quiet_NaN();
+    CHECK_FALSE(mir::TryWorldOffsetToParentLocal(invalidLinear, *worldOffset));
+}
+
 TEST_CASE("Translated terrain instance round-trips local coordinates", "[core][lwc]")
 {
     const auto instance = mir::WorldPosition::FromMeters({123456.125, 350.5, -76543.75});

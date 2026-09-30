@@ -20,6 +20,7 @@
 #include <editor/Selection.h>
 #include <editortheme/EditorTheme.h>
 #include <renderer/CameraMath.h>
+#include <renderer/ViewSubmission.h>
 #include <renderer/components/MeshBounds.h>
 #include <renderer/components/MeshRenderer.h>
 
@@ -54,16 +55,28 @@ namespace mir
             return ImGuizmo::TRANSLATE;
         }
 
-        void DecomposeTRS(const glm::mat4 &matrix, glm::vec3 &position, glm::quat &rotation, glm::vec3 &scale)
+        void DecomposeRotationScale(const glm::mat3 &linear, glm::quat &rotation, glm::vec3 &scale)
         {
-            position = glm::vec3(matrix[3]);
-            scale = {glm::length(glm::vec3(matrix[0])), glm::length(glm::vec3(matrix[1])),
-                     glm::length(glm::vec3(matrix[2]))};
+            scale = {glm::length(linear[0]), glm::length(linear[1]), glm::length(linear[2])};
 
-            const glm::mat3 rotationMatrix(glm::vec3(matrix[0]) / (scale.x != 0.0f ? scale.x : 1.0f),
-                                           glm::vec3(matrix[1]) / (scale.y != 0.0f ? scale.y : 1.0f),
-                                           glm::vec3(matrix[2]) / (scale.z != 0.0f ? scale.z : 1.0f));
+            const glm::mat3 rotationMatrix(linear[0] / (scale.x != 0.0f ? scale.x : 1.0f),
+                                           linear[1] / (scale.y != 0.0f ? scale.y : 1.0f),
+                                           linear[2] / (scale.z != 0.0f ? scale.z : 1.0f));
             rotation = glm::quat_cast(rotationMatrix);
+        }
+
+        // Radius around the entity's origin that holds its scaled mesh box.
+        float BoundsRadius(const MeshBounds &bounds, const glm::mat3 &linear)
+        {
+            float radius = 0.0f;
+            for (int i = 0; i < 8; ++i)
+            {
+                const glm::vec3 corner{(i & 1) != 0 ? bounds.mLocalMax.x : bounds.mLocalMin.x,
+                                       (i & 2) != 0 ? bounds.mLocalMax.y : bounds.mLocalMin.y,
+                                       (i & 4) != 0 ? bounds.mLocalMax.z : bounds.mLocalMin.z};
+                radius = std::max(radius, glm::length(linear * corner));
+            }
+            return radius;
         }
     } // namespace
 
@@ -309,45 +322,78 @@ namespace mir
         }
         ImGui::End();
 
-        const glm::mat4 view = glm::inverse(mCamera.Matrix());
-        const glm::mat4 proj = glm::perspective(glm::radians(mCamera.mLens.mFovYDegrees), width / height,
-                                                mCamera.mLens.mNearZ, mCamera.mLens.mFarZ);
+        // ImGuizmo works in the scene viewport's camera-relative space: the
+        // camera is the origin, so its float matrices stay small however far
+        // the entity is from the Scene origin.
+        const WorldPose camera = mCamera.Pose();
+        const glm::mat4 view = glm::inverse(glm::mat4(camera.linear));
+        // ImGuizmo takes the OpenGL clip convention, not the renderer's.
+        const glm::mat4 proj = glm::perspectiveRH_NO(glm::radians(mCamera.mLens.mFovYDegrees), width / height,
+                                                     mCamera.mLens.mNearZ, mCamera.mLens.mFarZ);
 
-        // Relative to the Scene origin, so the gizmo rounds far from it; #107
-        // moves it next to the camera.
-        const std::optional<glm::mat4> resolved = ResolveWorld(world, entity).TryMatrixRelativeTo(WorldPosition{});
+        const std::optional<glm::mat4> resolved = ResolveWorld(world, entity).TryMatrixRelativeTo(camera.position);
         if (!resolved)
             return;
-        glm::mat4 worldMatrix = *resolved;
+        glm::mat4 gizmoMatrix = *resolved;
 
         ImGuizmo::SetOrthographic(false);
         ImGuizmo::BeginFrame();
         ImGuizmo::SetDrawlist(ImGui::GetForegroundDrawList(ImGui::GetMainViewport()));
         ImGuizmo::SetRect(x, y, width, height);
 
-        if (ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj), ToImGuizmoOperation(mGizmoOperation),
-                                 ImGuizmo::LOCAL, glm::value_ptr(worldMatrix)))
+        if (!ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj), ToImGuizmoOperation(mGizmoOperation),
+                                  ImGuizmo::LOCAL, glm::value_ptr(gizmoMatrix)))
+            return;
+
+        // A root composes under the identity at the Scene origin.
+        const Entity parent = ParentOf(world, entity);
+        const WorldPose parentPose = parent.IsNull() ? WorldPose{} : ResolveWorld(world, parent);
+
+        // Each operation writes only its own channel, so rotating or scaling
+        // never sends a far position through the float matrix and back.
+        if (mGizmoOperation == GizmoOperation::Translate)
         {
-            const Entity parent = ParentOf(world, entity);
-            glm::mat4 localMatrix = worldMatrix;
-            if (!parent.IsNull())
-            {
-                const std::optional<glm::mat4> parentMatrix =
-                    ResolveWorld(world, parent).TryMatrixRelativeTo(WorldPosition{});
-                if (!parentMatrix)
-                    return;
-                localMatrix = glm::inverse(*parentMatrix) * worldMatrix;
-            }
-
-            glm::vec3 position{};
-            glm::vec3 scale{};
-            glm::quat rotation{};
-            DecomposeTRS(localMatrix, position, rotation, scale);
-
-            transform->SetPosition(glm::dvec3(position));
-            transform->SetRotation(rotation);
-            transform->SetScale(scale);
+            const std::optional<WorldOffset> fromCamera =
+                WorldOffset::FromMeters(glm::dvec3(glm::vec3(gizmoMatrix[3])));
+            const std::optional<WorldPosition> moved =
+                fromCamera ? TryTranslateWorld(camera.position, *fromCamera) : std::nullopt;
+            const std::optional<ParentLocalTranslation> local =
+                moved ? TryWorldToParentLocal(parentPose, *moved) : std::nullopt;
+            if (local)
+                transform->SetPosition(local->Meters());
+            return;
         }
+
+        if (glm::determinant(parentPose.linear) == 0.0f)
+            return;
+
+        glm::vec3 scale{};
+        glm::quat rotation{};
+        DecomposeRotationScale(glm::inverse(parentPose.linear) * glm::mat3(gizmoMatrix), rotation, scale);
+
+        if (mGizmoOperation == GizmoOperation::Rotate)
+            transform->SetRotation(rotation);
+        else
+            transform->SetScale(scale);
+    }
+
+    void Editor::FocusSelection(const EngineModeState &mode, World &world)
+    {
+        if (mode.mMode != EngineMode::Edit)
+            return;
+
+        // F would also land in a focused text field.
+        if (ImGui::GetIO().WantTextInput || !ImGui::IsKeyPressed(ImGuiKey_F, false))
+            return;
+
+        const Selection *selection = world.TryResource<Selection>();
+        const Entity entity = selection != nullptr ? selection->Primary() : kNullEntity;
+        if (entity.IsNull() || !world.IsAlive(entity) || world.GetComponent<Transform>(entity) == nullptr)
+            return;
+
+        const WorldPose pose = ResolveWorld(world, entity);
+        const MeshBounds *bounds = world.GetComponent<MeshBounds>(entity);
+        mCamera.FocusOn(pose.position, bounds != nullptr ? BoundsRadius(*bounds, pose.linear) : 0.0f);
     }
 
     void Editor::UpdateViewportPicking(const EngineModeState &mode, World &world)
@@ -380,9 +426,9 @@ namespace mir
             return;
 
         const glm::vec2 ndc{ (px / width) * 2.0f - 1.0f, (py / height) * 2.0f - 1.0f };
-        const glm::mat4 viewProj = MakeViewProjection(mCamera.Matrix(), mCamera.mLens.mFovYDegrees,
-            mCamera.mLens.mNearZ, mCamera.mLens.mFarZ, width / height);
-        const Ray ray = MakeCameraRay(mCamera.Matrix(), viewProj, ndc);
+        // The ray belongs to the scene viewport's own camera, and each box is
+        // placed relative to that origin before anything becomes float.
+        const WorldRay ray = MakeCameraRay(mCamera.Pose(), mCamera.mLens, width / height, ndc);
 
         Entity hitEntity = kNullEntity;
         float hitDistance = std::numeric_limits<float>::max();
@@ -390,26 +436,11 @@ namespace mir
         world.GetOrCreateQuery<const WorldTransform, const MeshRenderer, const MeshBounds>().ForEach(
             [&](Entity entity, const WorldTransform &transform, const MeshRenderer &, const MeshBounds &bounds)
             {
-                // Scene-origin relative until #107 starts the ray at a double origin.
-                const std::optional<glm::mat4> resolved = transform.Pose().TryMatrixRelativeTo(WorldPosition{});
-                if (!resolved)
-                    return;
-                const glm::mat4 worldMatrix = *resolved;
-                const glm::mat4 invWorld = glm::inverse(worldMatrix);
-                const glm::vec3 localOrigin = glm::vec3(invWorld * glm::vec4(ray.origin, 1.0f));
-                const glm::vec3 localDir = glm::vec3(invWorld * glm::vec4(ray.direction, 0.0f));
-
-                const std::optional<float> t =
-                    RayIntersectsAABB(Ray{ localOrigin, localDir }, bounds.mLocalMin, bounds.mLocalMax);
-                if (!t)
-                    return;
-
-                const glm::vec3 localHit = localOrigin + localDir * (*t);
-                const glm::vec3 worldHit = glm::vec3(worldMatrix * glm::vec4(localHit, 1.0f));
-                const float distance = glm::length(worldHit - ray.origin);
-                if (distance < hitDistance)
+                const std::optional<float> distance =
+                    RayIntersectsBox(ray, transform.Pose(), bounds.mLocalMin, bounds.mLocalMax);
+                if (distance && *distance < hitDistance)
                 {
-                    hitDistance = distance;
+                    hitDistance = *distance;
                     hitEntity = entity;
                 }
             });
@@ -434,8 +465,8 @@ namespace mir
         const float width = static_cast<float>(mSceneViewportRect.extent.width);
         const float height = static_cast<float>(mSceneViewportRect.extent.height);
 
-        const glm::mat4 viewProj = MakeViewProjection(mCamera.Matrix(), mCamera.mLens.mFovYDegrees,
-            mCamera.mLens.mNearZ, mCamera.mLens.mFarZ, width / height);
+        const WorldPose camera = mCamera.Pose();
+        const glm::mat4 viewProj = MakeCameraRelativeViewProjection(camera, mCamera.mLens, width / height);
 
         ImDrawList *drawList = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
         drawList->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
@@ -450,8 +481,7 @@ namespace mir
             if (bounds == nullptr)
                 continue;
 
-            // Scene-origin relative, as the camera is, until #107.
-            const std::optional<glm::mat4> resolved = ResolveWorld(world, entity).TryMatrixRelativeTo(WorldPosition{});
+            const std::optional<glm::mat4> resolved = ResolveWorld(world, entity).TryMatrixRelativeTo(camera.position);
             if (!resolved)
                 continue;
             const glm::mat4 worldMatrix = *resolved;
@@ -594,6 +624,7 @@ namespace mir
             }
 
             UpdateViewportPicking(mode, world);
+            FocusSelection(mode, world);
             DrawSelectionHighlights(mode, world);
             DrawViewportGizmo(mode, world);
 

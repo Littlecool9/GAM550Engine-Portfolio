@@ -8,6 +8,7 @@
 #pragma once
 
 #include <glm/mat3x3.hpp>
+#include <glm/matrix.hpp>
 #include <glm/vec3.hpp>
 
 #include <cmath>
@@ -94,6 +95,16 @@ namespace mir
         if (!detail::FiniteCoordinates(parentLinear))
             return std::nullopt;
         return WorldOffset::FromMeters(parentLinear * translation.Meters());
+    }
+
+    // The inverse of TryParentLocalToWorldOffset. A parent that cannot be
+    // inverted (a zero scale) yields a non-finite result, so it is nullopt.
+    [[nodiscard]] inline std::optional<ParentLocalTranslation> TryWorldOffsetToParentLocal(
+        const glm::dmat3 &parentLinear, WorldOffset offset)
+    {
+        if (!detail::FiniteCoordinates(parentLinear))
+            return std::nullopt;
+        return ParentLocalTranslation::FromMeters(glm::inverse(parentLinear) * offset.Meters());
     }
 
     // Explicit narrowing for a bounded world-space displacement. This checks

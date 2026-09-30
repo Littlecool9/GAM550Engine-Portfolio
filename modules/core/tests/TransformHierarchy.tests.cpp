@@ -1039,3 +1039,40 @@ TEST_CASE("TryComposePose places a float child under a far parent", "[ecs][trans
     const mir::WorldPose badParent{*at, glm::mat3(std::numeric_limits<float>::infinity())};
     CHECK_FALSE(mir::TryComposePose(badParent, glm::mat3(1.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
 }
+
+TEST_CASE("TryWorldToParentLocal inverts a far parent's composition", "[ecs][transform][hierarchy][lwc]")
+{
+    World world;
+    const Entity parent = MakeAtD(world, kEdgeA);
+    world.GetComponent<Transform>(parent)->SetRotation(QuarterTurnZ());
+    world.GetComponent<Transform>(parent)->SetScale(glm::vec3(2.0f));
+    const Entity child = MakeAtD(world, glm::dvec3(1.0005, 0.0, 0.0), parent);
+
+    const mir::WorldPose parentPose = mir::ResolveWorld(world, parent);
+    const std::optional<mir::ParentLocalTranslation> local =
+        mir::TryWorldToParentLocal(parentPose, mir::ResolveWorld(world, child).position);
+    REQUIRE(local);
+    // the float linear part bounds this, as it does the forward composition
+    CHECK(MaxError(local->Meters(), glm::dvec3(1.0005, 0.0, 0.0)) <= 1e-6);
+
+    // a millimeter of world motion lands as half a millimeter of local motion
+    const std::optional<mir::WorldPosition> moved =
+        mir::WorldPosition::FromMeters(WorldOf(world, child) + glm::dvec3(0.0, 0.001, 0.0));
+    REQUIRE(moved);
+    const std::optional<mir::ParentLocalTranslation> movedLocal = mir::TryWorldToParentLocal(parentPose, *moved);
+    REQUIRE(movedLocal);
+    CHECK(MaxError(movedLocal->Meters() - local->Meters(), glm::dvec3(0.0005, 0.0, 0.0)) <= 1e-9);
+
+    // writing it back puts the child where the world position asked
+    REQUIRE(world.GetComponent<Transform>(child)->SetPosition(movedLocal->Meters()));
+    CHECK(MaxError(WorldOf(world, child), moved->Meters()) <= 1e-6);
+
+    // under the identity a root's world position is its own translation
+    const std::optional<mir::ParentLocalTranslation> rootLocal =
+        mir::TryWorldToParentLocal(mir::WorldPose{}, *moved);
+    REQUIRE(rootLocal);
+    CHECK(rootLocal->Meters() == moved->Meters());
+
+    const mir::WorldPose flat{parentPose.position, glm::mat3(0.0f)};
+    CHECK_FALSE(mir::TryWorldToParentLocal(flat, *moved));
+}

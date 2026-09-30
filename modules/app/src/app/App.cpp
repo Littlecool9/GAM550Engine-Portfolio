@@ -442,10 +442,7 @@ namespace mir
             {
                 mEditor.UpdateCamera(dt);
                 const EditorCamera &camera = mEditor.SceneCamera();
-                // The editor camera is still float (#107 makes it double); widen
-                // it here so render submission already sees a WorldPosition.
-                if (const auto position = WorldPosition::FromMeters(glm::dvec3(camera.mPosition)))
-                    mRenderSystem->SetExternalCamera(0, WorldPose{ *position, glm::mat3(camera.Matrix()) }, camera.mLens);
+                mRenderSystem->SetExternalCamera(0, camera.Pose(), camera.mLens);
             }
             else
             {

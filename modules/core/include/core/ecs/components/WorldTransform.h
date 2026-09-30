@@ -59,6 +59,15 @@ namespace mir
         return WorldPose{ *position, parent.linear * localLinear };
     }
 
+    // The translation a child of `parent` needs to sit at `world`. nullopt if
+    // the parent's linear part cannot be inverted (a zero scale).
+    [[nodiscard]] inline std::optional<ParentLocalTranslation> TryWorldToParentLocal(
+        const WorldPose &parent, WorldPosition world)
+    {
+        const std::optional<WorldOffset> offset = TryWorldDifference(world, parent.position);
+        return offset ? TryWorldOffsetToParentLocal(glm::dmat3(parent.linear), *offset) : std::nullopt;
+    }
+
     // Read it through ResolveWorld (core/ecs/TransformHierarchy.h)
     class WorldTransform
     {

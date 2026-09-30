@@ -10,6 +10,11 @@
  */
 #pragma once
 
+#include "renderer/components/Camera.h"
+
+#include <core/ecs/components/WorldTransform.h>
+#include <core/math/WorldCoordinates.h>
+
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
@@ -22,13 +27,29 @@ namespace mir
                                  float fovYDegrees, float nearZ, float farZ,
                                  float aspectRatio);
 
+    // A ray in a bounded float space, such as a mesh's local space.
     struct Ray
     {
         glm::vec3 origin{ 0.0f };
         glm::vec3 direction{ 0.0f, 0.0f, -1.0f };
     };
 
-    Ray MakeCameraRay(const glm::mat4 &cameraWorld, const glm::mat4 &viewProj, glm::vec2 ndc);
-
     std::optional<float> RayIntersectsAABB(const Ray &ray, const glm::vec3 &boxMin, const glm::vec3 &boxMax);
+
+    // A ray in the fixed Scene world: the origin keeps its double position,
+    // and only the bounded unit direction is float.
+    struct WorldRay
+    {
+        WorldPosition origin;
+        glm::vec3 direction{ 0.0f, 0.0f, -1.0f };
+    };
+
+    // The ray through `ndc` of the viewport that `camera` and `lens` draw.
+    WorldRay MakeCameraRay(const WorldPose &camera, const Camera &lens, float aspectRatio, glm::vec2 ndc);
+
+    // Distance in meters along the ray to a box given in `box`'s local space.
+    // The box is placed relative to the ray origin in double before anything
+    // narrows, so neither end is rounded to a far float position.
+    std::optional<float> RayIntersectsBox(const WorldRay &ray, const WorldPose &box,
+                                          const glm::vec3 &localMin, const glm::vec3 &localMax);
 }

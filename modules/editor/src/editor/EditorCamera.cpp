@@ -12,6 +12,8 @@
 #include <glm/trigonometric.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <optional>
 
 namespace mir
 {
@@ -30,18 +32,43 @@ namespace mir
         return glm::normalize(glm::cross(Forward(), Up()));
     }
 
-    glm::mat4 EditorCamera::Matrix() const
+    WorldPose EditorCamera::Pose() const
     {
         const glm::vec3 forward = Forward();
         const glm::vec3 right = Right();
         const glm::vec3 up = glm::normalize(glm::cross(right, forward));
 
-        glm::mat4 m{ 1.0f };
-        m[0] = glm::vec4(right, 0.0f);
-        m[1] = glm::vec4(up, 0.0f);
-        m[2] = glm::vec4(-forward, 0.0f);
-        m[3] = glm::vec4(mPosition, 1.0f);
-        return m;
+        return WorldPose{ mPosition, glm::mat3(right, up, -forward) };
+    }
+
+    bool EditorCamera::Translate(const glm::dvec3 &meters)
+    {
+        const std::optional<WorldOffset> offset = WorldOffset::FromMeters(meters);
+        const std::optional<WorldPosition> moved = offset ? TryTranslateWorld(mPosition, *offset) : std::nullopt;
+        if (!moved)
+            return false;
+
+        mPosition = *moved;
+        return true;
+    }
+
+    bool EditorCamera::FocusOn(WorldPosition target, float radius)
+    {
+        constexpr float kMinRadius = 0.25f;
+        constexpr float kMargin = 1.5f;
+
+        const float halfFov = glm::radians(std::clamp(mLens.mFovYDegrees, 1.0f, 179.0f)) * 0.5f;
+        const float fit = std::max(radius, kMinRadius) / std::sin(halfFov) * kMargin;
+        // stay outside the near plane whatever the lens says
+        const double distance = std::max(fit, mLens.mNearZ * 2.0f);
+
+        const std::optional<WorldOffset> back = WorldOffset::FromMeters(glm::dvec3(Forward()) * -distance);
+        const std::optional<WorldPosition> eye = back ? TryTranslateWorld(target, *back) : std::nullopt;
+        if (!eye)
+            return false;
+
+        mPosition = *eye;
+        return true;
     }
 
     void EditorCamera::Update(const RawInputSnapshot &input, bool lookHeld, float dt)
@@ -71,17 +98,22 @@ namespace mir
         const glm::vec3 forward = Forward();
         const glm::vec3 right = Right();
 
+        // The frame's step is small and float; it meets the far position only
+        // in the double add, so a millimeter of travel is not rounded away.
+        glm::vec3 step{ 0.0f };
         if (input.IsDown(Key::W))
-            mPosition += forward * speed;
+            step += forward * speed;
         if (input.IsDown(Key::S))
-            mPosition -= forward * speed;
+            step -= forward * speed;
         if (input.IsDown(Key::D))
-            mPosition += right * speed;
+            step += right * speed;
         if (input.IsDown(Key::A))
-            mPosition -= right * speed;
+            step -= right * speed;
         if (input.IsDown(Key::E))
-            mPosition += Up() * speed;
+            step += Up() * speed;
         if (input.IsDown(Key::Q))
-            mPosition -= Up() * speed;
+            step -= Up() * speed;
+
+        Translate(glm::dvec3(step));
     }
 }
