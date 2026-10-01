@@ -10,6 +10,8 @@
 
 #include <editor/Editor.h>
 
+#include <core/ecs/ComponentGizmo.h>
+#include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/Query.h>
 #include <core/ecs/TransformHierarchy.h>
 #include <core/ecs/World.h>
@@ -20,7 +22,6 @@
 #include <editor/Selection.h>
 #include <editortheme/EditorTheme.h>
 #include <renderer/CameraMath.h>
-#include <renderer/components/Light.h>
 #include <renderer/components/MeshBounds.h>
 #include <renderer/components/MeshRenderer.h>
 
@@ -102,6 +103,34 @@ namespace mir
                 prev = next;
             }
         }
+
+        // Lets a component's owning module draw viewport gizmos (GizmoCanvas) without depending on ImGui.
+        class ScreenGizmoCanvas final : public GizmoCanvas
+        {
+        public:
+            ScreenGizmoCanvas(ImDrawList *drawList, const glm::mat4 &viewProj, float x0, float y0, float width,
+                float height)
+                : mDrawList(drawList), mViewProj(viewProj), mX0(x0), mY0(y0), mWidth(width), mHeight(height)
+            {}
+
+            void Line(const glm::vec3 &a, const glm::vec3 &b, uint32_t colorRGBA, float thickness) const override
+            {
+                DrawWorldLine(mDrawList, mViewProj, mX0, mY0, mWidth, mHeight, a, b,
+                    static_cast<ImU32>(colorRGBA), thickness);
+            }
+
+            void Circle(const glm::vec3 &center, const glm::vec3 &right, const glm::vec3 &up, float radius,
+                uint32_t colorRGBA, int segments) const override
+            {
+                DrawWorldCircle(mDrawList, mViewProj, mX0, mY0, mWidth, mHeight, center, right, up, radius,
+                    static_cast<ImU32>(colorRGBA), segments);
+            }
+
+        private:
+            ImDrawList *mDrawList;
+            glm::mat4 mViewProj;
+            float mX0, mY0, mWidth, mHeight;
+        };
     } // namespace
 
     Editor::~Editor() {}
@@ -437,39 +466,40 @@ namespace mir
                 }
             });
 
-        constexpr float kLightPickRadius = 0.3f;
-        world.GetOrCreateQuery<const WorldTransform, const Light>().ForEach(
-            [&](Entity entity, const WorldTransform &transform, const Light &light)
-            {
-                const glm::vec3 lightPos = glm::vec3(transform.Matrix()[3]);
-                const float t = glm::dot(lightPos - ray.origin, ray.direction);
-                if (t < 0.0f)
-                    return;
+        // Any component whose owning module registered a pick radius (e.g. Light): a simple
+        // world-space sphere test around the entity's transform origin.
+        for (const ComponentOps *ops : ComponentRegistry::Instance().All())
+        {
+            if (ops->mPickRadius == nullptr)
+                continue;
 
-                float pickRadius = kLightPickRadius;
-                switch (light.mType)
+            world.ForEachAliveEntity([&](Entity entity)
                 {
-                case LightType::Sun:
-                    break;
-                case LightType::Point:
-                case LightType::Spot:
-                    pickRadius = std::max(pickRadius, light.mRange);
-                    break;
-                case LightType::Area:
-                    pickRadius = std::max(pickRadius, light.mAreaSize * 1.5f);
-                    break;
-                }
+                    if (!ops->Has(world, entity))
+                        return;
+                    const WorldTransform *transform = world.GetComponent<WorldTransform>(entity);
+                    if (transform == nullptr)
+                        return;
 
-                const glm::vec3 closest = ray.origin + ray.direction * t;
-                if (glm::length(lightPos - closest) > pickRadius)
-                    return;
+                    const glm::vec3 pos = glm::vec3(transform->Matrix()[3]);
+                    const float t = glm::dot(pos - ray.origin, ray.direction);
+                    if (t < 0.0f)
+                        return;
 
-                if (t < hitDistance)
-                {
-                    hitDistance = t;
-                    hitEntity = entity;
-                }
-            });
+                    const void *component = ops->GetComponent(world, entity);
+                    const float pickRadius = ops->mPickRadius(component);
+
+                    const glm::vec3 closest = ray.origin + ray.direction * t;
+                    if (glm::length(pos - closest) > pickRadius)
+                        return;
+
+                    if (t < hitDistance)
+                    {
+                        hitDistance = t;
+                        hitEntity = entity;
+                    }
+                });
+        }
 
         ApplyClick(world.Resource<Selection>(), hitEntity, ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift);
     }
@@ -540,7 +570,7 @@ namespace mir
         drawList->PopClipRect();
     }
 
-    void Editor::DrawLightGizmos(const EngineModeState &mode, World &world)
+    void Editor::DrawComponentGizmos(const EngineModeState &mode, World &world)
     {
         if (mode.mMode != EngineMode::Edit)
             return;
@@ -561,68 +591,27 @@ namespace mir
         ImDrawList *drawList = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
         drawList->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
 
-        world.GetOrCreateQuery<const WorldTransform, const Light>().ForEach(
-            [&](Entity entity, const WorldTransform &transform, const Light &light)
-            {
-                const glm::mat4 worldMatrix = transform.Matrix();
-                const glm::vec3 pos = glm::vec3(worldMatrix[3]);
-                const glm::vec3 right = glm::normalize(glm::vec3(worldMatrix[0]));
-                const glm::vec3 up = glm::normalize(glm::vec3(worldMatrix[1]));
-                const glm::vec3 forward = glm::normalize(glm::vec3(worldMatrix * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
+        const ScreenGizmoCanvas canvas(drawList, viewProj, x0, y0, width, height);
 
-                const bool selected = selection != nullptr && selection->Contains(entity);
-                const ImU32 color = selected ? IM_COL32(255, 220, 80, 255) : IM_COL32(200, 200, 120, 140);
+        // Any component whose owning module registered a gizmo drawer (e.g. Light).
+        for (const ComponentOps *ops : ComponentRegistry::Instance().All())
+        {
+            if (ops->mDrawGizmo == nullptr)
+                continue;
 
-                switch (light.mType)
+            world.ForEachAliveEntity([&](Entity entity)
                 {
-                case LightType::Sun:
-                    {
-                        const glm::vec3 sunDir =
-                            glm::normalize(glm::vec3(worldMatrix * glm::vec4(kSunReferenceLocalDirection, 0.0f)));
-                        DrawWorldCircle(drawList, viewProj, x0, y0, width, height, pos, right, up, 0.3f, color, 16);
-                        DrawWorldLine(drawList, viewProj, x0, y0, width, height, pos, pos + sunDir * 0.6f, color, 2.0f);
-                        break;
-                    }
-                case LightType::Point:
-                    {
-                        DrawWorldCircle(drawList, viewProj, x0, y0, width, height, pos, right, up, light.mRange, color, 32);
-                        DrawWorldCircle(drawList, viewProj, x0, y0, width, height, pos, up, forward, light.mRange, color, 32);
-                        DrawWorldCircle(drawList, viewProj, x0, y0, width, height, pos, forward, right, light.mRange, color, 32);
-                        break;
-                    }
-                case LightType::Spot:
-                    {
-                        const float clampedAngle = std::clamp(light.mSpotAngleDegrees, 1.0f, 179.0f);
-                        const float halfAngle = glm::radians(clampedAngle * 0.5f);
-                        const float baseRadius = light.mRange * std::tan(halfAngle);
-                        const glm::vec3 baseCenter = pos + forward * light.mRange;
-                        DrawWorldCircle(drawList, viewProj, x0, y0, width, height, baseCenter, right, up, baseRadius, color, 24);
-                        constexpr int kSpokes = 8;
-                        for (int i = 0; i < kSpokes; ++i)
-                        {
-                            const float angle = (static_cast<float>(i) / static_cast<float>(kSpokes)) * 2.0f * glm::pi<float>();
-                            const glm::vec3 edge = baseCenter + right * (baseRadius * std::cos(angle)) +
-                                up * (baseRadius * std::sin(angle));
-                            DrawWorldLine(drawList, viewProj, x0, y0, width, height, pos, edge, color, 1.5f);
-                        }
-                        break;
-                    }
-                case LightType::Area:
-                    {
-                        const float s = light.mAreaSize;
-                        const glm::vec3 corners[4] = {
-                            pos + right * s + up * s, pos - right * s + up * s,
-                            pos - right * s - up * s, pos + right * s - up * s };
-                        for (int i = 0; i < 4; ++i)
-                            DrawWorldLine(drawList, viewProj, x0, y0, width, height, corners[i], corners[(i + 1) % 4],
-                                color, 2.0f);
-                        DrawWorldLine(drawList, viewProj, x0, y0, width, height, pos, pos + forward * (s * 0.5f), color, 1.5f);
-                        const ImU32 rangeColor = selected ? IM_COL32(255, 220, 80, 90) : IM_COL32(200, 200, 120, 60);
-                        DrawWorldCircle(drawList, viewProj, x0, y0, width, height, pos, right, up, light.mRange, rangeColor, 32);
-                        break;
-                    }
-                }
-            });
+                    if (!ops->Has(world, entity))
+                        return;
+                    const WorldTransform *transform = world.GetComponent<WorldTransform>(entity);
+                    if (transform == nullptr)
+                        return;
+
+                    const void *component = ops->GetComponent(world, entity);
+                    const bool selected = selection != nullptr && selection->Contains(entity);
+                    ops->mDrawGizmo(component, transform->Matrix(), selected, canvas);
+                });
+        }
 
         drawList->PopClipRect();
     }
@@ -734,7 +723,7 @@ namespace mir
 
             UpdateViewportPicking(mode, world);
             DrawSelectionHighlights(mode, world);
-            DrawLightGizmos(mode, world);
+            DrawComponentGizmos(mode, world);
             DrawViewportGizmo(mode, world);
 
             if (ImGui::BeginMainMenuBar())
