@@ -46,7 +46,7 @@
     },
     {
       "fields": {
-        "materialShader": "",
+        "materialShader": "default",
         "meshName": "meshes/cube.mesh.json",
         "tint": [
           1.0,

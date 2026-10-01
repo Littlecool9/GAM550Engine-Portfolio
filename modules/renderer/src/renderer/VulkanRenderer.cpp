@@ -3368,8 +3368,6 @@ namespace mir
         // only runs where nothing above wrote depth, i.e. still at the far
         // clear value - a fullscreen ray-marched shader paying its cost only
         // on actual background pixels, with early-z doing the rejection.
-        // Gated on a Sky entity existing (#97): with none, the clear color
-        // shows through instead, same as before any Sky entity existed.
         if (mSkyVisible)
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipeline);

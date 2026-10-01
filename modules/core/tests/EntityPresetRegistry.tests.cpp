@@ -1,12 +1,12 @@
 /**
- * @file EntityTypeRegistry.tests.cpp
+ * @file EntityPresetRegistry.tests.cpp
  * @author Rahul Nair
  * @brief Tests for the editor create-menu's name -> entity factory registry.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
-#include <core/ecs/EntityTypeRegistry.h>
+#include <core/ecs/EntityPresetRegistry.h>
 
 #include <core/ecs/World.h>
 #include <core/ecs/components/Transform.h>
@@ -16,8 +16,8 @@
 namespace
 {
     using mir::Entity;
-    using mir::EntityTypeDesc;
-    using mir::EntityTypeRegistry;
+    using mir::EntityPresetDesc;
+    using mir::EntityPresetRegistry;
     using mir::Transform;
     using mir::World;
 
@@ -27,17 +27,17 @@ namespace
     };
 }
 
-TEST_CASE("EntityTypeRegistry: registered type appears in All() and its factory runs", "[core][ecs]")
+TEST_CASE("EntityPresetRegistry: registered type appears in All() and its factory runs", "[core][ecs]")
 {
-    EntityTypeRegistry::Instance().Register("EntityTypeRegistryTestProbe", [](World &world, Entity entity)
+    EntityPresetRegistry::Instance().Register("EntityPresetRegistryTestProbe", [](World &world, Entity entity)
         {
             world.AddComponent<Transform>(entity, Transform{});
             world.AddTag<RegistryProbe>(entity);
         });
 
-    const EntityTypeDesc *found = nullptr;
-    for (const EntityTypeDesc &type : EntityTypeRegistry::Instance().All())
-        if (type.mName == "EntityTypeRegistryTestProbe")
+    const EntityPresetDesc *found = nullptr;
+    for (const EntityPresetDesc &type : EntityPresetRegistry::Instance().All())
+        if (type.mName == "EntityPresetRegistryTestProbe")
             found = &type;
 
     REQUIRE(found != nullptr);

@@ -15,7 +15,7 @@
 #include "renderer/components/Sky.h"
 
 #include <core/ecs/ComponentRegistry.h>
-#include <core/ecs/EntityTypeRegistry.h>
+#include <core/ecs/EntityPresetRegistry.h>
 #include <core/ecs/TransformHierarchy.h>
 #include <core/ecs/components/Name.h>
 #include <core/ecs/components/Transform.h>
@@ -59,22 +59,6 @@ namespace mir
             return !exists;
         }
 
-        const char *LightTypeEntityPrefix(LightType type)
-        {
-            switch (type)
-            {
-            case LightType::Sun:
-                return "Sun";
-            case LightType::Point:
-                return "Point";
-            case LightType::Spot:
-                return "Spot";
-            case LightType::Area:
-                return "Area";
-            }
-            return "Light";
-        }
-
         template <LightType Type>
         void CreateLightEntity(World &world, Entity entity)
         {
@@ -83,7 +67,7 @@ namespace mir
             light.mType = Type;
             world.AddComponent<Light>(entity, light);
             world.AddComponent<Name>(entity,
-                MakeName(std::format("{}_Entity{}", LightTypeEntityPrefix(Type), entity.mIndex)));
+                MakeName(std::format("{}_Entity{}", LightTypeName(Type), entity.mIndex)));
         }
     }
 
@@ -97,12 +81,12 @@ namespace mir
 
     void RegisterRendererEntityTypes()
     {
-        EntityTypeRegistry::Instance().Register("Light/Sun", &CreateLightEntity<LightType::Sun>, &CanCreateSunLight);
-        EntityTypeRegistry::Instance().Register("Light/Point", &CreateLightEntity<LightType::Point>);
-        EntityTypeRegistry::Instance().Register("Light/Spot", &CreateLightEntity<LightType::Spot>);
-        EntityTypeRegistry::Instance().Register("Light/Area", &CreateLightEntity<LightType::Area>);
+        EntityPresetRegistry::Instance().Register("Light/Sun", &CreateLightEntity<LightType::Sun>, &CanCreateSunLight);
+        EntityPresetRegistry::Instance().Register("Light/Point", &CreateLightEntity<LightType::Point>);
+        EntityPresetRegistry::Instance().Register("Light/Spot", &CreateLightEntity<LightType::Spot>);
+        EntityPresetRegistry::Instance().Register("Light/Area", &CreateLightEntity<LightType::Area>);
 
-        EntityTypeRegistry::Instance().Register("Sky", [](World &world, Entity entity)
+        EntityPresetRegistry::Instance().Register("Sky", [](World &world, Entity entity)
             {
                 AddTransform(world, entity);
                 world.AddComponent<Sky>(entity, Sky{});

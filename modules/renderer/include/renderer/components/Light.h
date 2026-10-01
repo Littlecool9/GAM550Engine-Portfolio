@@ -1,7 +1,7 @@
 /**
  * @file Light.h
  * @author Rahul Nair
- * @brief Marks an entity as a light source - sun/point/spot/area, issue #98.
+ * @brief Marks an entity as a light source - sun/point/spot/area.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -27,6 +27,23 @@ namespace mir
     };
 
     inline const glm::vec3 kSunReferenceLocalDirection = glm::normalize(glm::vec3(0.4f, 0.7f, 0.5f));
+
+    // Shared by the Inspector's type combo and the default name given to new light entities.
+    inline const char *LightTypeName(LightType type)
+    {
+        switch (type)
+        {
+        case LightType::Sun:
+            return "Sun";
+        case LightType::Point:
+            return "Point";
+        case LightType::Spot:
+            return "Spot";
+        case LightType::Area:
+            return "Area";
+        }
+        return "?";
+    }
 
     struct Light
     {

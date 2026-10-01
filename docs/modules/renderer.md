@@ -563,8 +563,8 @@ gizmos — issues #96, #97, #98.** Was: no way to create a non-mesh entity at
 all from the editor; the sky was `VulkanRenderer`'s own always-on hardcoded
 Nishita constants and direction, invisible as scene data; lighting was one
 hardcoded directional light + ambient, `SetDirectionalLight`/
-`SetAmbientColor` never actually called by anything. Now: `EntityTypeRegistry`
-(new, `core/ecs/EntityTypeRegistry.h`, sibling to `ComponentRegistry`) holds
+`SetAmbientColor` never actually called by anything. Now: `EntityPresetRegistry`
+(new, `core/ecs/EntityPresetRegistry.h`, sibling to `ComponentRegistry`) holds
 a name → factory list a module registers into (`RegisterRendererEntityTypes`,
 alongside `RegisterRendererComponents`); `HierarchyPanel`'s right-click
 "Create" menu lists it and selects whatever it makes (#96). `Sky` gained

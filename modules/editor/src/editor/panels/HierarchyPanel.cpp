@@ -9,7 +9,7 @@
 
 #include <editor/panels/HierarchyPanel.h>
 
-#include <core/ecs/EntityTypeRegistry.h>
+#include <core/ecs/EntityPresetRegistry.h>
 #include <core/ecs/HierarchyIndex.h>
 #include <core/ecs/components/Name.h>
 #include <editor/Selection.h>
@@ -56,7 +56,7 @@ namespace mir
             }
         }
 
-        void CreateFromMenu(World &world, Selection &selection, const EntityTypeDesc &type)
+        void CreateFromMenu(World &world, Selection &selection, const EntityPresetDesc &type)
         {
             if (type.mCanCreate != nullptr && !type.mCanCreate(world))
                 return;
@@ -69,16 +69,16 @@ namespace mir
         struct MenuTop
         {
             std::string_view mName; // group name, or the flat item's full name
-            const EntityTypeDesc *mFlat = nullptr; // set only when this is a flat (non-grouped) entry
-            std::vector<const EntityTypeDesc *> mItems; // children, only when mFlat == nullptr
+            const EntityPresetDesc *mFlat = nullptr; // set only when this is a flat (non-grouped) entry
+            std::vector<const EntityPresetDesc *> mItems; // children, only when mFlat == nullptr
         };
 
-        std::vector<MenuTop> BuildCreateMenu(std::span<const EntityTypeDesc> types)
+        std::vector<MenuTop> BuildCreateMenu(std::span<const EntityPresetDesc> types)
         {
             std::vector<MenuTop> tops;
             std::unordered_map<std::string_view, size_t> groupIndex;
 
-            for (const EntityTypeDesc &type : types)
+            for (const EntityPresetDesc &type : types)
             {
                 const std::size_t slash = type.mName.find('/');
                 if (slash == std::string_view::npos)
@@ -106,7 +106,7 @@ namespace mir
         {
             if (ImGui::BeginMenu("Create"))
             {
-                for (const MenuTop &top : BuildCreateMenu(EntityTypeRegistry::Instance().All()))
+                for (const MenuTop &top : BuildCreateMenu(EntityPresetRegistry::Instance().All()))
                 {
                     if (top.mFlat != nullptr)
                     {
@@ -117,7 +117,7 @@ namespace mir
 
                     if (ImGui::BeginMenu(std::string(top.mName).c_str()))
                     {
-                        for (const EntityTypeDesc *child : top.mItems)
+                        for (const EntityPresetDesc *child : top.mItems)
                         {
                             const std::string_view item = child->mName.substr(child->mName.find('/') + 1);
                             if (ImGui::MenuItem(std::string(item).c_str()))

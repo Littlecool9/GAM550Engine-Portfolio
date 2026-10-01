@@ -1,5 +1,5 @@
 /**
- * @file EntityTypeRegistry.h
+ * @file EntityPresetRegistry.h
  * @author Rahul Nair
  * @brief Name -> entity factory, for the editor's create-entity menu.
  *
@@ -17,24 +17,24 @@ namespace mir
 {
     class World;
 
-    struct EntityTypeDesc
+    struct EntityPresetDesc
     {
         std::string_view mName;
         void (*mCreate)(World &world, Entity entity) = nullptr;
         bool (*mCanCreate)(const World &world) = nullptr;
     };
 
-    class EntityTypeRegistry
+    class EntityPresetRegistry
     {
     public:
-        static EntityTypeRegistry &Instance();
+        static EntityPresetRegistry &Instance();
 
         void Register(std::string_view name, void (*create)(World &, Entity),
             bool (*canCreate)(const World &) = nullptr);
 
-        std::span<const EntityTypeDesc> All() const { return mTypes; }
+        std::span<const EntityPresetDesc> All() const { return mTypes; }
 
     private:
-        std::vector<EntityTypeDesc> mTypes;
+        std::vector<EntityPresetDesc> mTypes;
     };
 }

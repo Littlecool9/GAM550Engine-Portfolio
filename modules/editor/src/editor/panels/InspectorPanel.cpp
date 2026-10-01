@@ -39,22 +39,6 @@ namespace mir
             std::byte mBytes[64];
         };
 
-        const char *LightTypeName(LightType type)
-        {
-            switch (type)
-            {
-            case LightType::Sun:
-                return "Sun";
-            case LightType::Point:
-                return "Point";
-            case LightType::Spot:
-                return "Spot";
-            case LightType::Area:
-                return "Area";
-            }
-            return "?";
-        }
-
         bool DrawFieldWidget(const FieldDesc &field, void *bytes)
         {
             const char *label = field.mName.data();

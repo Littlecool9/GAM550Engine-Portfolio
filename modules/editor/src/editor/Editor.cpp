@@ -518,14 +518,12 @@ namespace mir
             bool behindCamera = false;
             for (int i = 0; i < 8; ++i)
             {
-                const glm::vec4 clip = viewProj * worldMatrix * glm::vec4(corners[i], 1.0f);
-                if (clip.w <= 0.0f)
+                const glm::vec3 worldCorner = glm::vec3(worldMatrix * glm::vec4(corners[i], 1.0f));
+                if (!ProjectToScreen(viewProj, x0, y0, width, height, worldCorner, screen[i]))
                 {
                     behindCamera = true;
                     break;
                 }
-                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
-                screen[i] = ImVec2(x0 + (ndc.x * 0.5f + 0.5f) * width, y0 + (ndc.y * 0.5f + 0.5f) * height);
             }
             if (behindCamera)
                 continue;

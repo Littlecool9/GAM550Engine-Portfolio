@@ -1,8 +1,7 @@
 /**
  * @file Name.h
  * @author Rahul Nair
- * @brief Optional display name for an entity - what the Hierarchy/Inspector
- *        show instead of "Entity N" when present.
+ * @brief Display name for an entity.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
