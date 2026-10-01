@@ -21,6 +21,7 @@
 #include <editortheme/EditorTheme.h>
 #include <renderer/CameraMath.h>
 #include <renderer/ViewSubmission.h>
+#include <renderer/components/Light.h>
 #include <renderer/components/MeshBounds.h>
 #include <renderer/components/MeshRenderer.h>
 
@@ -29,10 +30,12 @@
 #include <imgui_internal.h>
 #include <ImGuizmo.h>
 
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -78,12 +81,47 @@ namespace mir
             }
             return radius;
         }
+
+        bool ProjectToScreen(const glm::mat4 &viewProj, float x0, float y0, float width, float height,
+            const glm::vec3 &worldPos, ImVec2 &out)
+        {
+            const glm::vec4 clip = viewProj * glm::vec4(worldPos, 1.0f);
+            if (clip.w <= 0.0f)
+                return false;
+            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+            out = ImVec2(x0 + (ndc.x * 0.5f + 0.5f) * width, y0 + (ndc.y * 0.5f + 0.5f) * height);
+            return true;
+        }
+
+        void DrawWorldLine(ImDrawList *drawList, const glm::mat4 &viewProj, float x0, float y0, float width,
+            float height, const glm::vec3 &a, const glm::vec3 &b, ImU32 color, float thickness)
+        {
+            ImVec2 sa, sb;
+            if (!ProjectToScreen(viewProj, x0, y0, width, height, a, sa) ||
+                !ProjectToScreen(viewProj, x0, y0, width, height, b, sb))
+                return;
+            drawList->AddLine(sa, sb, color, thickness);
+        }
+
+        void DrawWorldCircle(ImDrawList *drawList, const glm::mat4 &viewProj, float x0, float y0, float width,
+            float height, const glm::vec3 &center, const glm::vec3 &right, const glm::vec3 &up,
+            float radius, ImU32 color, int segments)
+        {
+            glm::vec3 prev = center + right * radius;
+            for (int i = 1; i <= segments; ++i)
+            {
+                const float angle = (static_cast<float>(i) / static_cast<float>(segments)) * 2.0f * glm::pi<float>();
+                const glm::vec3 next = center + right * (radius * std::cos(angle)) + up * (radius * std::sin(angle));
+                DrawWorldLine(drawList, viewProj, x0, y0, width, height, prev, next, color, 1.5f);
+                prev = next;
+            }
+        }
     } // namespace
 
     Editor::~Editor() {}
 
     bool Editor::Initialize(const ImGuiRuntime &imgui, Window &window, std::filesystem::path projectSettingsPath,
-                            World &world)
+        World &world)
     {
         if (!imgui.IsInitialized())
         {
@@ -114,11 +152,11 @@ namespace mir
         if (!mInitialized)
             return;
 
-        
+
         ImGuiIO &io = ImGui::GetIO();
         if (io.IniFilename != nullptr && ImGui::GetCurrentContext()->SettingsLoaded)
             ImGui::SaveIniSettingsToDisk(io.IniFilename);
-        
+
         io.IniFilename = nullptr;
 
         mWindow = nullptr;
@@ -132,7 +170,7 @@ namespace mir
         const float barHeight = Window::kTitleBarHeightDip * scale;
 
         if (!ImGui::BeginViewportSideBar("##TitleBar", viewport, ImGuiDir_Up, barHeight,
-                                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
         {
             ImGui::End();
             return;
@@ -152,19 +190,20 @@ namespace mir
 
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 
-        const auto controlButton = [&](const char *icon) {
-            ImGui::PushID(icon);
-            ImGui::SetCursorPosY(buttonY);
-            const bool clicked = ImGui::Button(icon, ImVec2(buttonWidth, buttonHeight));
-            const ImVec2 rMin = ImGui::GetItemRectMin();
-            const ImVec2 rMax = ImGui::GetItemRectMax();
-            mTitleBarInteractiveRects.push_back(PixelRect{static_cast<int32_t>(rMin.x), static_cast<int32_t>(rMin.y),
-                                                          static_cast<uint32_t>(rMax.x - rMin.x),
-                                                          static_cast<uint32_t>(rMax.y - rMin.y)});
-            ImGui::PopID();
-            ImGui::SameLine();
-            return clicked;
-        };
+        const auto controlButton = [&](const char *icon)
+            {
+                ImGui::PushID(icon);
+                ImGui::SetCursorPosY(buttonY);
+                const bool clicked = ImGui::Button(icon, ImVec2(buttonWidth, buttonHeight));
+                const ImVec2 rMin = ImGui::GetItemRectMin();
+                const ImVec2 rMax = ImGui::GetItemRectMax();
+                mTitleBarInteractiveRects.push_back(PixelRect{ static_cast<int32_t>(rMin.x), static_cast<int32_t>(rMin.y),
+                                                              static_cast<uint32_t>(rMax.x - rMin.x),
+                                                              static_cast<uint32_t>(rMax.y - rMin.y) });
+                ImGui::PopID();
+                ImGui::SameLine();
+                return clicked;
+            };
 
         if (controlButton(ICON_FA_WINDOW_MINIMIZE))
             mWindow->Minimize();
@@ -189,7 +228,7 @@ namespace mir
         const float height = 28.0f * mWindow->ContentScale();
 
         if (!ImGui::BeginViewportSideBar("##PlayControls", viewport, ImGuiDir_Up, height,
-                                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
         {
             ImGui::End();
             return action;
@@ -254,7 +293,7 @@ namespace mir
 
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
         if (!ImGui::BeginPopupModal(kPopupId, nullptr,
-                                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
             return;
 
         ImGui::Text("Open \"%s\"?", mPendingProject.mName.c_str());
@@ -300,19 +339,20 @@ namespace mir
         ImGui::SetNextWindowPos(ImVec2(x + 8.0f, y + 8.0f), ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(0.6f);
         if (ImGui::Begin("##GizmoToolbar", nullptr,
-                         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav |
-                             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
-                             ImGuiWindowFlags_NoFocusOnAppearing))
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav |
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoFocusOnAppearing))
         {
-            const auto modeButton = [&](const char *label, GizmoOperation op) {
-                const bool active = mGizmoOperation == op;
-                if (active)
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-                if (ImGui::Button(label))
-                    mGizmoOperation = op;
-                if (active)
-                    ImGui::PopStyleColor();
-            };
+            const auto modeButton = [&](const char *label, GizmoOperation op)
+                {
+                    const bool active = mGizmoOperation == op;
+                    if (active)
+                        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+                    if (ImGui::Button(label))
+                        mGizmoOperation = op;
+                    if (active)
+                        ImGui::PopStyleColor();
+                };
 
             modeButton("Translate", GizmoOperation::Translate);
             ImGui::SameLine();
@@ -453,6 +493,43 @@ namespace mir
                 }
             });
 
+        constexpr float kLightPickRadius = 0.3f;
+        world.GetOrCreateQuery<const WorldTransform, const Light>().ForEach(
+            [&](Entity entity, const WorldTransform &transform, const Light &light)
+            {
+                const std::optional<glm::vec3> fromRay = TryCameraRelativeFloat(transform.Position(), ray.origin);
+                if (!fromRay)
+                    return;
+                const glm::vec3 lightPos = *fromRay;
+                const float t = glm::dot(lightPos, ray.direction);
+                if (t < 0.0f)
+                    return;
+
+                float pickRadius = kLightPickRadius;
+                switch (light.mType)
+                {
+                case LightType::Sun:
+                    break;
+                case LightType::Point:
+                case LightType::Spot:
+                    pickRadius = std::max(pickRadius, light.mRange);
+                    break;
+                case LightType::Area:
+                    pickRadius = std::max(pickRadius, light.mAreaSize * 1.5f);
+                    break;
+                }
+
+                const glm::vec3 closest = ray.direction * t;
+                if (glm::length(lightPos - closest) > pickRadius)
+                    return;
+
+                if (t < hitDistance)
+                {
+                    hitDistance = t;
+                    hitEntity = entity;
+                }
+            });
+
         ApplyClick(world.Resource<Selection>(), hitEntity, ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift);
     }
 
@@ -496,21 +573,19 @@ namespace mir
             const glm::vec3 mn = bounds->mLocalMin;
             const glm::vec3 mx = bounds->mLocalMax;
             const glm::vec3 corners[8] = {
-                { mn.x, mn.y, mn.z }, { mx.x, mn.y, mn.z }, { mx.x, mx.y, mn.z }, { mn.x, mx.y, mn.z },
-                { mn.x, mn.y, mx.z }, { mx.x, mn.y, mx.z }, { mx.x, mx.y, mx.z }, { mn.x, mx.y, mx.z } };
+                { mn.x, mn.y, mn.z },{ mx.x, mn.y, mn.z },{ mx.x, mx.y, mn.z },{ mn.x, mx.y, mn.z },
+                { mn.x, mn.y, mx.z },{ mx.x, mn.y, mx.z },{ mx.x, mx.y, mx.z },{ mn.x, mx.y, mx.z } };
 
             ImVec2 screen[8];
             bool behindCamera = false;
             for (int i = 0; i < 8; ++i)
             {
-                const glm::vec4 clip = viewProj * worldMatrix * glm::vec4(corners[i], 1.0f);
-                if (clip.w <= 0.0f)
+                const glm::vec3 worldCorner = glm::vec3(worldMatrix * glm::vec4(corners[i], 1.0f));
+                if (!ProjectToScreen(viewProj, x0, y0, width, height, worldCorner, screen[i]))
                 {
                     behindCamera = true;
                     break;
                 }
-                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
-                screen[i] = ImVec2(x0 + (ndc.x * 0.5f + 0.5f) * width, y0 + (ndc.y * 0.5f + 0.5f) * height);
             }
             if (behindCamera)
                 continue;
@@ -518,11 +593,101 @@ namespace mir
             const ImU32 color = (entity == primary) ? IM_COL32(255, 170, 0, 255) : IM_COL32(255, 220, 130, 190);
 
             static constexpr int kEdges[12][2] = {
-                { 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 }, { 4, 5 }, { 5, 6 },
-                { 6, 7 }, { 7, 4 }, { 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 } };
+                { 0, 1 },{ 1, 2 },{ 2, 3 },{ 3, 0 },{ 4, 5 },{ 5, 6 },
+                { 6, 7 },{ 7, 4 },{ 0, 4 },{ 1, 5 },{ 2, 6 },{ 3, 7 } };
             for (const auto &edge : kEdges)
                 drawList->AddLine(screen[edge[0]], screen[edge[1]], color, 2.0f);
         }
+
+        drawList->PopClipRect();
+    }
+
+    void Editor::DrawLightGizmos(const EngineModeState &mode, World &world)
+    {
+        if (mode.mMode != EngineMode::Edit)
+            return;
+
+        if (mSceneViewportRect.extent.width == 0 || mSceneViewportRect.extent.height == 0)
+            return;
+
+        const Selection *selection = world.TryResource<Selection>();
+
+        const float x0 = static_cast<float>(mSceneViewportRect.offset.x);
+        const float y0 = static_cast<float>(mSceneViewportRect.offset.y);
+        const float width = static_cast<float>(mSceneViewportRect.extent.width);
+        const float height = static_cast<float>(mSceneViewportRect.extent.height);
+
+        const WorldPose camera = mCamera.Pose();
+        const glm::mat4 viewProj = MakeCameraRelativeViewProjection(camera, mCamera.mLens, width / height);
+
+        ImDrawList *drawList = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+        drawList->PushClipRect(ImVec2(x0, y0), ImVec2(x0 + width, y0 + height), true);
+
+        world.GetOrCreateQuery<const WorldTransform, const Light>().ForEach(
+            [&](Entity entity, const WorldTransform &transform, const Light &light)
+            {
+                const std::optional<glm::mat4> resolved = transform.Pose().TryMatrixRelativeTo(camera.position);
+                if (!resolved)
+                    return;
+                const glm::mat4 worldMatrix = *resolved;
+                const glm::vec3 pos = glm::vec3(worldMatrix[3]);
+                const glm::vec3 right = glm::normalize(glm::vec3(worldMatrix[0]));
+                const glm::vec3 up = glm::normalize(glm::vec3(worldMatrix[1]));
+                const glm::vec3 forward = glm::normalize(glm::vec3(worldMatrix * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
+
+                const bool selected = selection != nullptr && selection->Contains(entity);
+                const ImU32 color = selected ? IM_COL32(255, 220, 80, 255) : IM_COL32(200, 200, 120, 140);
+
+                switch (light.mType)
+                {
+                case LightType::Sun:
+                    {
+                        const glm::vec3 sunDir =
+                            glm::normalize(glm::vec3(worldMatrix * glm::vec4(kSunReferenceLocalDirection, 0.0f)));
+                        DrawWorldCircle(drawList, viewProj, x0, y0, width, height, pos, right, up, 0.3f, color, 16);
+                        DrawWorldLine(drawList, viewProj, x0, y0, width, height, pos, pos + sunDir * 0.6f, color, 2.0f);
+                        break;
+                    }
+                case LightType::Point:
+                    {
+                        DrawWorldCircle(drawList, viewProj, x0, y0, width, height, pos, right, up, light.mRange, color, 32);
+                        DrawWorldCircle(drawList, viewProj, x0, y0, width, height, pos, up, forward, light.mRange, color, 32);
+                        DrawWorldCircle(drawList, viewProj, x0, y0, width, height, pos, forward, right, light.mRange, color, 32);
+                        break;
+                    }
+                case LightType::Spot:
+                    {
+                        const float clampedAngle = std::clamp(light.mSpotAngleDegrees, 1.0f, 179.0f);
+                        const float halfAngle = glm::radians(clampedAngle * 0.5f);
+                        const float baseRadius = light.mRange * std::tan(halfAngle);
+                        const glm::vec3 baseCenter = pos + forward * light.mRange;
+                        DrawWorldCircle(drawList, viewProj, x0, y0, width, height, baseCenter, right, up, baseRadius, color, 24);
+                        constexpr int kSpokes = 8;
+                        for (int i = 0; i < kSpokes; ++i)
+                        {
+                            const float angle = (static_cast<float>(i) / static_cast<float>(kSpokes)) * 2.0f * glm::pi<float>();
+                            const glm::vec3 edge = baseCenter + right * (baseRadius * std::cos(angle)) +
+                                up * (baseRadius * std::sin(angle));
+                            DrawWorldLine(drawList, viewProj, x0, y0, width, height, pos, edge, color, 1.5f);
+                        }
+                        break;
+                    }
+                case LightType::Area:
+                    {
+                        const float s = light.mAreaSize;
+                        const glm::vec3 corners[4] = {
+                            pos + right * s + up * s, pos - right * s + up * s,
+                            pos - right * s - up * s, pos + right * s - up * s };
+                        for (int i = 0; i < 4; ++i)
+                            DrawWorldLine(drawList, viewProj, x0, y0, width, height, corners[i], corners[(i + 1) % 4],
+                                color, 2.0f);
+                        DrawWorldLine(drawList, viewProj, x0, y0, width, height, pos, pos + forward * (s * 0.5f), color, 1.5f);
+                        const ImU32 rangeColor = selected ? IM_COL32(255, 220, 80, 90) : IM_COL32(200, 200, 120, 60);
+                        DrawWorldCircle(drawList, viewProj, x0, y0, width, height, pos, right, up, light.mRange, rangeColor, 32);
+                        break;
+                    }
+                }
+            });
 
         drawList->PopClipRect();
     }
@@ -542,7 +707,7 @@ namespace mir
 
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
         if (!ImGui::BeginPopupModal(kPopupId, nullptr,
-                                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
             return;
 
         ImGui::InputTextWithHint("Name", "Project name...", mNewProjectName, sizeof(mNewProjectName));
@@ -550,9 +715,10 @@ namespace mir
         ImGui::Spacing();
 
         const std::string_view name(mNewProjectName);
-        const bool collides = std::any_of(projects.begin(), projects.end(), [&](const ProjectMenuEntry &project) {
-            return project.mDir == "games/" + std::string(name);
-        });
+        const bool collides = std::any_of(projects.begin(), projects.end(), [&](const ProjectMenuEntry &project)
+            {
+                return project.mDir == "games/" + std::string(name);
+            });
         const bool canCreate = !name.empty() && !collides;
 
         ImGui::BeginDisabled(!canCreate);
@@ -571,15 +737,15 @@ namespace mir
         if (collides)
         {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "A project named \"%s\" already exists.",
-                               mNewProjectName);
+                mNewProjectName);
         }
 
         ImGui::EndPopup();
     }
 
     EditorActions Editor::DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
-                                     const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-                                     std::string_view currentProject, World &world, const AssetImportView &assetImport)
+        const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
+        std::string_view currentProject, World &world, const AssetImportView &assetImport)
     {
         EditorActions actions;
 
@@ -626,14 +792,15 @@ namespace mir
                 centralNode != nullptr)
             {
                 mSceneViewportRect = VkRect2D{
-                    .offset{static_cast<int32_t>(centralNode->Pos.x), static_cast<int32_t>(centralNode->Pos.y)},
-                    .extent{static_cast<uint32_t>(std::max(centralNode->Size.x, 0.0f)),
-                            static_cast<uint32_t>(std::max(centralNode->Size.y, 0.0f))}};
+                    .offset{ static_cast<int32_t>(centralNode->Pos.x), static_cast<int32_t>(centralNode->Pos.y) },
+                    .extent{ static_cast<uint32_t>(std::max(centralNode->Size.x, 0.0f)),
+                            static_cast<uint32_t>(std::max(centralNode->Size.y, 0.0f)) } };
             }
 
             UpdateViewportPicking(mode, world);
             FocusSelection(mode, world);
             DrawSelectionHighlights(mode, world);
+            DrawLightGizmos(mode, world);
             DrawViewportGizmo(mode, world);
 
             if (ImGui::BeginMainMenuBar())

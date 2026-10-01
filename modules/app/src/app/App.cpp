@@ -63,24 +63,37 @@ namespace mir
                              input.IsDown(MouseButton::Left)};
         }
 
+        //column of three panels whose up and down links wrap so hover,
+        //gamepad stick, d-pad and arrow keys all move one focus
         void DrawPlaceholderHud(UIContext &ui)
         {
             const UIStyle &style = ui.Style();
             UIDrawList &draw = ui.DrawList();
 
-            const UIRect panel{16.0f, 16.0f, 220.0f, 40.0f};
-            const UIInteraction interaction = ui.Interact(UIId("placeholder_hud"), panel);
-            if (interaction.mClicked)
-                MIR_LOG_INFO("gameui: placeholder panel clicked");
+            constexpr uint64_t kCount = 3;
+            for (uint64_t i = 0; i < kCount; ++i)
+            {
+                const UIRect panel{16.0f, 16.0f + 48.0f * static_cast<float>(i), 220.0f, 40.0f};
+                const UINavLinks links{UIId("placeholder_hud", (i + kCount - 1) % kCount),
+                                       UIId("placeholder_hud", (i + 1) % kCount), UIId{}, UIId{}};
+                const UIInteraction interaction =
+                    ui.Interact(UIId("placeholder_hud", i), panel, UIWidgetOptions{.mLinks = links});
+                if (interaction.mClicked)
+                    MIR_LOG_INFO("gameui: placeholder panel {} clicked", i);
 
-            UIColor color = style.mPanelColor;
-            if (interaction.mHeld && interaction.mHovered)
-                color.a = 0.95f;
-            else if (interaction.mHovered)
-                color.a = 0.8f;
+                UIColor color = style.mPanelColor;
+                if (interaction.mHeld && interaction.mHovered)
+                    color.a = 0.95f;
+                else if (interaction.mFocused)
+                    color.a = 0.8f;
 
-            draw.Rect(panel, color, style.mPanelRounding);
-            draw.Text(28.0f, 28.0f, "this is test for game ui", style.mTextColor, style.mFontSize);
+                draw.Rect(panel, color, style.mPanelRounding);
+                draw.Text(28.0f, 28.0f + 48.0f * static_cast<float>(i), "this is test for game ui",
+                          style.mTextColor, style.mFontSize);
+            }
+
+            if (ui.CancelPressed())
+                MIR_LOG_INFO("gameui: placeholder screen cancelled");
         }
     }
 
@@ -161,6 +174,7 @@ namespace mir
         // Before anything may load a script
         RegisterCoreComponents();
         RegisterRendererComponents();
+        RegisterRendererEntityTypes();
         RegisterPhysicsComponents();
         RegisterScriptComponents();
         RegisterAudioComponents();

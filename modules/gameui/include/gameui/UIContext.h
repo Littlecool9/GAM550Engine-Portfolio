@@ -34,7 +34,7 @@ namespace mir
 
         void EndFrame();
 
-        UIInteraction Interact(UIId id, const UIRect &rect);
+        UIInteraction Interact(UIId id, const UIRect &rect, const UIWidgetOptions &options = {});
 
         UIDrawList &DrawList() { return mDrawList; }
 
@@ -49,6 +49,9 @@ namespace mir
 
         //the UI actions read from the input at BeginFrame while zero outside a frame
         const UINavInput &Nav() const { return mNav; }
+
+        //cancel for specific frame, belongs to whatevr is drawing UI
+        bool CancelPressed() const { return mNav.mCancel; }
 
         UIStyle &Style() { return mStyle; }
         const UIStyle &Style() const { return mStyle; }

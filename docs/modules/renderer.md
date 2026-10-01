@@ -440,10 +440,15 @@ No tests. Everything here needs a device, and the module is verified by running.
 2. **Draw-item sorting and batching.** There is one pipeline bind per item today,
    so a frame scales with the number of distinct materials rather than with draw
    count.
-3. **Lighting beyond one hardcoded directional light + flat ambient.** No
-   point/spot lights, no shadows, no per-entity `Light` component yet — the
-   direction/color/ambient are renderer-wide state set via
-   `SetDirectionalLight`/`SetAmbientColor`, not scene data.
+3. **Lighting beyond flat ambient, one Sun, and `kMaxLights` (64) Point/Spot/
+   Area — issue #98 closed the "no per-entity `Light` component" gap, not
+   the rest.** No shadows from any light type - RT's `closestHitMain` now
+   reads the same Point/Spot/Area list `default.slang` does, but neither
+   path traces occlusion, so a light shines through geometry that should
+   block it. Area is Point in a trenchcoat — same range-based falloff, no
+   real rectangular-light integration; its `mAreaSize` is authored and
+   inspectable but nothing reads it yet. `SetAmbientColor` is still the only
+   ambient input; no per-entity control there either.
 4. **Per-config shader output paths.** Release currently ships unoptimised
    shaders, and the debug flags cannot become conditional while both
    configurations write to a path that carries no configuration component.
@@ -453,26 +458,27 @@ No tests. Everything here needs a device, and the module is verified by running.
    exists and is tested by `App` using only viewport 0; nothing yet adds a second
    one for, say, an editor-camera view alongside the game view during a paused
    Play session.
-7. **No cubemap/gradient sky option, and no time-of-day driver.** The sky is
-   Nishita-only — there's no `MaterialDesc`-style switch to a static cubemap
-   asset or a cheap two-color gradient for scenes that don't want the
-   ray-march cost. Sun elevation is whatever direction `SetDirectionalLight`
-   is holding; nothing animates it over time yet (a script/system driving
-   `SetDirectionalLight` on a timer would get a day/night cycle for free,
-   since sky and lit shading already read the same UBO fields — see the
-   set-1 rules above). There's also no moon/stars, so full night is flat
-   black rather than lit by anything but `SetAmbientColor`.
-8. **RT still isn't full parity with raster — issues #55 and #80 closed the
-   material-shading and sky gaps, not the rest.** `kMaxRtInstances` (256) is
-   a fixed cap with no overflow handling beyond silently dropping the rest;
-   the TLAS rebuilds fully every `TraceFrame` call with no dirty-tracking
-   (see the Rules section above - correct, just not efficient); only the
-   two shaders that exist (`default`/`unlit`) get RT parity, so a third
-   custom material shader would trace with whichever of those two
-   `GpuMaterial::mUnlit` happens to pick, not its own look; and
-   `TraceFrame` only ever traces `views[0]` - a second viewport on screen
-   at once is backlog item 6 regardless of raster/RT, and RT inherits that
-   gap rather than fixing it.
+7. **No cubemap/gradient sky option, and no time-of-day driver.** The Sky
+   entity (#97) is Nishita-only — `SkyMode` has one value; there's no
+   `MaterialDesc`-style switch to a static cubemap asset or a cheap
+   two-color gradient for scenes that don't want the ray-march cost. Sun
+   elevation is whatever a Sun-type Light's or the Sky entity's rotation is
+   holding (#98 supersedes #97's own rotation the moment a Sun Light
+   exists); nothing animates either over time yet (a script/system rotating
+   one on a timer would get a day/night cycle for free — see Rules). There's
+   also no moon/stars, so full night is flat black rather than lit by
+   anything but `SetAmbientColor`.
+8. **RT still isn't full parity with raster — issues #55, #80 and #98
+   closed the material-shading, sky, and full-light-list gaps, not the
+   rest.** `kMaxRtInstances` (256) is a fixed cap with no overflow handling
+   beyond silently dropping the rest; the TLAS rebuilds fully every
+   `TraceFrame` call with no dirty-tracking (see the Rules section above -
+   correct, just not efficient); only the two shaders that exist
+   (`default`/`unlit`) get RT parity, so a third custom material shader
+   would trace with whichever of those two `GpuMaterial::mUnlit` happens to
+   pick, not its own look; and `TraceFrame` only ever traces `views[0]` - a
+   second viewport on screen at once is backlog item 6 regardless of
+   raster/RT, and RT inherits that gap rather than fixing it.
 
 ## Changed
 
@@ -502,6 +508,123 @@ that -1..1 copy for both, so the renderer's near plane sat at about twice
 `RayIntersectsBox` subtracts that origin from the box's `WorldPose` in double
 before the slab test; `MakeViewProjection` calls `glm::perspectiveRH_ZO`
 outright and the macro is gone.
+
+*2026-09-27* — **RT gets the Point/Spot/Area light list too, and the
+Inspector edits a `Light`'s color as a color instead of three raw floats
+— #98 follow-up, from the user's own testing.** The RT gap wasn't a bug -
+`closestHitMain` genuinely never read `gLights`, matching the light list's
+own binding being fragment-stage-only. Now: `CreateCameraResources`
+conditionally adds `VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR` to that binding's
+`stageFlags` when RT is supported (same descriptor set and buffer raster
+already uses, so nothing new to allocate), and `closestHitMain` runs the
+identical falloff/cone loop `default.slang`'s fragment shader does, off
+`hitWorldPos`/`N` instead of `input.worldPos`/`input.normal`. Separately:
+`range`/`intensity`/`areaSize`/`spotAngleDegrees` going negative, or `range`
+to exactly 0 (an easy slip with a bare `DragFloat`, no min/max), silently
+zeroes or degenerates a light's contribution with no visual cue why - the
+Inspector now clamps each to its own sensible range (`range` > 0, since 0
+means "affects nothing, ever"; `intensity`/`areaSize` >= 0, since 0 is a
+legitimate off/degenerate value for those two; `spotAngleDegrees` to
+`[1, 179]`, since 0 or 180+ isn't a cone) with `ImGuiSliderFlags_AlwaysClamp`
+- without that flag, `DragFloat`'s min/max only bound the drag gesture,
+never a typed-in value (double-click to type bypassed them entirely).
+`color` draws as `ImGui::ColorEdit3` instead of a raw `DragFloat3`, and its
+combo/color-picker special-case widgets now honor `FieldDesc::ReadOnly()`
+the same way the generic per-field loop already did (they didn't, at
+first). Reduced `Light`'s default `mRange` (10 → 2.5) and `mAreaSize`
+(1 → 0.5) to match HelloWorld-scale scenes - the gizmo math was already
+1:1 world units (`DrawLightGizmos` passes `light.mRange` straight through
+as a screen-projected radius), the old defaults were just enormous relative
+to a ~1-2-unit scene; `UpdateViewportPicking`'s light pick radius now scales
+with `mRange`/`mAreaSize` too, so clicking anywhere on a light's visible
+gizmo (not just within a fixed 0.3-unit dot at its center) selects it.
+Two correctness fixes surfaced along the way: `SetLights` was writing
+straight into `mLightMapped[mFrameIndex]` from `RenderSystem::OnUpdate`,
+before `DrawFrame`/`TraceFrame`'s own `vkWaitSemaphores` had confirmed the
+GPU was done reading that frame-in-flight slot's *previous* contents - a
+race `WriteCameraData` never had, since it only ever runs from inside
+`RecordCommands`/`RecordRtFrame`, after that wait. `SetLights` now only
+stages into `mPendingLights`; a new `UploadLights()`, called from
+`RecordCommands`/`RecordRtFrame` right after their waits, does the actual
+write. Separately, a Sky entity's own path called `SetSunDirection`
+(direction only) rather than `SetDirectionalLight` (direction + color) -
+harmless while a Sun Light had never existed, but once one existed and was
+then removed or retyped, `mLightColor` would keep that stale Sun's color
+forever, since nothing on the Sky path ever touched it again. The Sky path
+now always calls `SetDirectionalLight`, with a `kDefaultLightColor` fallback
+(`VulkanRenderer`'s own original default) when no Sun Light claims the
+direction; `SetSunDirection` is gone, nothing else called it.
+`kSunReferenceLocal` was hand-duplicated in both `RenderSystem.h` and
+`Editor.cpp`'s gizmo code - moved to `Light.h` as `kSunReferenceLocalDirection`,
+one definition both now share, so the Sun gizmo can't silently point somewhere
+the light doesn't. A second Sun-type Light could be created with no guard
+(unlike `Sky`'s `CanCreateSky`) even though `RenderSystem` only ever honors
+the first one `Query::ForEach` happens to visit - order that isn't guaranteed,
+so which Sun "won" could change frame to frame; a `CanCreateSunLight` guard,
+same shape as `CanCreateSky`, closes that. The four `Light/*` entity-type
+factories were near-identical copy-pasted lambdas differing only in
+`LightType` and a name prefix - collapsed into one `CreateLightEntity<Type>`
+template, so a wrong-type copy-paste slip can't happen. `HierarchyPanel`'s
+Create-menu grouping required same-prefix entity types (`"Light/Sun"`,
+`"Light/Point"`, ...) to be registered contiguously to nest into one submenu
+correctly - true today, but unenforced and silently wrong the moment it
+isn't; rewritten to group by name via a small index instead of scanning for
+runs of matching neighbors, so registration order no longer matters. The
+`GpuLight` struct and falloff/cone-attenuation loop were copy-pasted verbatim
+between `default.slang` and `raytrace.slang` (the review that found this also
+noticed the loop's `dist2` was actually `length()`, not a squared distance -
+a misleading name given a "2" suffix usually means squared); both now
+`#include` a new `LightingCommon.slang` (same sharing pattern
+`AtmosphereCommon.slang` already established for sky rendering) holding the
+struct, the `gLights` binding, and one `AccumulatePunctualLights` function -
+future falloff/shadow changes only need to happen once. `DrawLightGizmos`'s
+Area case only ever drew the flat `mAreaSize` square, with nothing showing
+`mRange` - the field that actually drives its falloff today (Area shades
+identically to Point); it now also draws the same range circle Point does,
+dimmer, so the square doesn't imply `mAreaSize` controls reach it doesn't yet
+control.
+
+*2026-09-27* — **Entities can add themselves now: Light and Sky entity
+types, a data-driven Sky, and Sun/Point/Spot/Area lights with viewport
+gizmos — issues #96, #97, #98.** Was: no way to create a non-mesh entity at
+all from the editor; the sky was `VulkanRenderer`'s own always-on hardcoded
+Nishita constants and direction, invisible as scene data; lighting was one
+hardcoded directional light + ambient, `SetDirectionalLight`/
+`SetAmbientColor` never actually called by anything. Now: `EntityPresetRegistry`
+(new, `core/ecs/EntityPresetRegistry.h`, sibling to `ComponentRegistry`) holds
+a name → factory list a module registers into (`RegisterRendererEntityTypes`,
+alongside `RegisterRendererComponents`); `HierarchyPanel`'s right-click
+"Create" menu lists it and selects whatever it makes (#96). `Sky` gained
+real fields (`SkyMode`, planet/atmosphere radius, Rayleigh/Mie coefficients
+and scale heights, `mieG`, sun intensity, all in slider-friendly display
+units) that `VulkanRenderer::SetAtmosphere` converts to the physical units
+`AtmosphereCommon.slang`'s `Atmosphere()` now takes as a parameter struct
+instead of `static const` globals; the first Sky entity found (Camera's
+fallback idiom) drives `lightDirWS` from its `Transform` rotation and gates
+the raster sky-dome draw entirely — no Sky entity, no dome, clear color
+shows through (#97). A `CanCreateSky` guard on its entity-type registration
+logs an error and refuses a second one; HelloWorld's own sky, previously
+invisible renderer state, is now `Sky_Entity6` in its scene file, visible
+and editable like anything else. `Light` gained `LightType`
+(Sun/Point/Spot/Area), color, intensity, range, spot angle, and area size;
+`RenderSystem` resolves the first Sun-type Light (if any) to
+`SetDirectionalLight` directly, taking priority over a Sky entity's own
+rotation, and packs every Point/Spot/Area into a new per-frame list
+(`VulkanRenderer::SetLights`, `LightItem`, `kMaxLights` = 64, same
+silently-drop-the-rest cap style as `kMaxRtInstances`) that lives in the
+camera descriptor set's new binding 1 (a `StructuredBuffer`) - one more set
+member, not a new set, so no other pipeline layout changed. `default.slang`
+reads it (falloff to 0 at range; Spot narrows that with a single `>=`
+cone-cosine test that Point/Area's `-1` sentinel always passes, so one loop
+serves all three with no per-type branch); `unlit.slang` intentionally
+does not - it stays unlit, same as its RT closest-hit counterpart already
+does for `GpuMaterial::mUnlit`. Each Light entity draws its own wireframe
+gizmo (sun rays, a 3-great-circle sphere at `range`, a cone, or a flat
+square) every frame regardless of selection, brighter when selected, using
+the same world→clip→screen technique `DrawSelectionHighlights` already used
+for `MeshBounds`; `UpdateViewportPicking` gained a second pass testing
+closest-approach-within-a-fixed-radius against the ray, since a Light has
+neither `MeshRenderer` nor `MeshBounds` for the existing AABB test to find.
 
 *2026-09-27* — **RT's `missMain` renders the real sky, and vertex-stride
 drift between raster and RT got fixed along the way — issues #55 and #80.**
