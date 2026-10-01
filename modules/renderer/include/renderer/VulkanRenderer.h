@@ -12,6 +12,7 @@
 #include <renderer/Material.h>
 #include <renderer/Mesh.h>
 #include <renderer/Texture.h>
+#include <renderer/components/Sky.h>
 
 #include <volk.h>
 
@@ -71,6 +72,13 @@ namespace mir
     // picked up by RenderSystem as a World resource.
     struct ModelDrawItems { std::vector<DrawItem> items; };
 
+    struct LightItem
+    {
+        glm::vec4 positionAndRange{ 0.0f };       // xyz = world position, w = range
+        glm::vec4 directionAndSpotCos{ 0.0f, -1.0f, 0.0f, -1.0f }; // xyz = normalized aim direction, w = cos(half-angle); -1 = no cone (Point/Area)
+        glm::vec4 color{ 0.0f };                  // rgb = color * intensity
+    };
+
     // One camera's worth of draw items, clipped to a screen-space rect
     struct RenderView
     {
@@ -108,8 +116,8 @@ namespace mir
         // Releases a selected model generation after a replacement has been
         // prepared. Handles not present in these spans remain valid.
         void ReleaseModelResources(std::span<const MeshHandle> meshes,
-                                   std::span<const MaterialHandle> materials,
-                                   std::span<const TextureHandle> textures);
+            std::span<const MaterialHandle> materials,
+            std::span<const TextureHandle> textures);
 
         VkExtent2D SwapchainExtent() const { return mSwapchainExtent; }
 
@@ -134,6 +142,12 @@ namespace mir
             mFogColor = color;
             mFogDensity = density;
         }
+
+        void SetAtmosphere(const Sky &sky) { mAtmosphere = sky; }
+
+        void SetSkyVisible(bool visible) { mSkyVisible = visible; }
+
+        void SetLights(std::span<const LightItem> lights);
 
         void Shutdown();
 
@@ -198,6 +212,7 @@ namespace mir
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
         void RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex);
         void WriteCameraData(const glm::mat4 &viewProj, const glm::vec3 &cameraPosWS, uint32_t viewIndex);
+        void UploadLights();
 
     private:
         constexpr static uint32_t VulkanVersion{ VK_API_VERSION_1_4 };
@@ -213,6 +228,9 @@ namespace mir
 
         glm::vec3 mFogColor{ 0.02f, 0.02f, 0.02f };
         float mFogDensity = 0.0f;
+
+        Sky mAtmosphere{};
+        bool mSkyVisible = false;
 
         const ISurfaceProvider *mWindow;
         VkInstance mVulkanInstance = VK_NULL_HANDLE;
@@ -270,6 +288,13 @@ namespace mir
         VmaAllocation mCameraAllocations[kFramesInFlight]{};
         std::byte *mCameraMapped[kFramesInFlight]{};
         VkDeviceSize mCameraAlignedSize = 0;
+
+        constexpr static uint32_t kMaxLights = 64;
+        VkBuffer mLightBuffers[kFramesInFlight]{};
+        VmaAllocation mLightAllocations[kFramesInFlight]{};
+        std::byte *mLightMapped[kFramesInFlight]{};
+        uint32_t mActiveLightCount = 0;
+        std::vector<LightItem> mPendingLights;
 
         VkDescriptorSetLayout mModelSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool mModelPools[kFramesInFlight]{};

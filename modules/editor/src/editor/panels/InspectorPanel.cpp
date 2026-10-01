@@ -12,10 +12,14 @@
 
 #include <core/ecs/ComponentFields.h>
 #include <core/ecs/ComponentRegistry.h>
+#include <core/ecs/components/Name.h>
 #include <editor/Selection.h>
+#include <renderer/components/Light.h>
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
+
+#include <cfloat>
 
 #include <imgui.h>
 
@@ -51,34 +55,37 @@ namespace mir
                 return ImGui::DragFloat3(label, glm::value_ptr(*static_cast<glm::vec3 *>(bytes)), 0.1f);
             case FieldKind::Vec4:
                 return ImGui::DragFloat4(label, glm::value_ptr(*static_cast<glm::vec4 *>(bytes)), 0.1f);
-            case FieldKind::Quat: {
-                // Editing quaternion components directly can denormalize them
-                glm::quat &quat = *static_cast<glm::quat *>(bytes);
-                glm::vec3 euler = glm::degrees(glm::eulerAngles(quat));
-                if (ImGui::DragFloat3(label, glm::value_ptr(euler), 0.5f))
+            case FieldKind::Quat:
                 {
-                    quat = glm::quat(glm::radians(euler));
-                    return true;
+// Editing quaternion components directly can denormalize them
+                    glm::quat &quat = *static_cast<glm::quat *>(bytes);
+                    glm::vec3 euler = glm::degrees(glm::eulerAngles(quat));
+                    if (ImGui::DragFloat3(label, glm::value_ptr(euler), 0.5f))
+                    {
+                        quat = glm::quat(glm::radians(euler));
+                        return true;
+                    }
+                    return false;
                 }
-                return false;
-            }
-            case FieldKind::Mat4: {
-                ImGui::TextUnformatted(label);
-                bool changed = false;
-                float *m = glm::value_ptr(*static_cast<glm::mat4 *>(bytes));
-                for (int row = 0; row < 4; ++row)
+            case FieldKind::Mat4:
                 {
-                    ImGui::PushID(row);
-                    changed |= ImGui::DragFloat4("##row", m + row * 4, 0.1f);
-                    ImGui::PopID();
+                    ImGui::TextUnformatted(label);
+                    bool changed = false;
+                    float *m = glm::value_ptr(*static_cast<glm::mat4 *>(bytes));
+                    for (int row = 0; row < 4; ++row)
+                    {
+                        ImGui::PushID(row);
+                        changed |= ImGui::DragFloat4("##row", m + row * 4, 0.1f);
+                        ImGui::PopID();
+                    }
+                    return changed;
                 }
-                return changed;
-            }
-            case FieldKind::EntityRef: {
-                const Entity *ref = static_cast<const Entity *>(bytes);
-                ImGui::Text("%s: Entity %u", label, ref->mIndex);
-                return false;
-            }
+            case FieldKind::EntityRef:
+                {
+                    const Entity *ref = static_cast<const Entity *>(bytes);
+                    ImGui::Text("%s: Entity %u", label, ref->mIndex);
+                    return false;
+                }
             case FieldKind::Handle:
                 return ImGui::DragScalarN(label, ImGuiDataType_U32, bytes, 2);
             case FieldKind::String:
@@ -101,6 +108,46 @@ namespace mir
                 else
                 {
                     ImGui::Indent();
+                    if (ops.mType.name == "Light")
+                    {
+                        if (const FieldDesc *typeField = ops.FindField("type"))
+                        {
+                            const bool readOnly = typeField->ReadOnly();
+                            FieldBuffer current{};
+                            typeField->Read(component, current.mBytes);
+                            const LightType currentType = *reinterpret_cast<const LightType *>(current.mBytes);
+
+                            ImGui::BeginDisabled(readOnly);
+                            if (ImGui::BeginCombo("type", LightTypeName(currentType)))
+                            {
+                                for (LightType option :
+                                { LightType::Sun, LightType::Point, LightType::Spot, LightType::Area })
+                                {
+                                    const bool isSelected = option == currentType;
+                                    if (ImGui::Selectable(LightTypeName(option), isSelected) && !isSelected)
+                                    {
+                                        FieldBuffer value{};
+                                        *reinterpret_cast<LightType *>(value.mBytes) = option;
+                                        typeField->Write(component, value.mBytes);
+                                    }
+                                }
+                                ImGui::EndCombo();
+                            }
+                            ImGui::EndDisabled();
+                        }
+
+                        if (const FieldDesc *colorField = ops.FindField("color"))
+                        {
+                            const bool readOnly = colorField->ReadOnly();
+                            FieldBuffer buffer{};
+                            colorField->Read(component, buffer.mBytes);
+                            ImGui::BeginDisabled(readOnly);
+                            const bool edited = ImGui::ColorEdit3("color", reinterpret_cast<float *>(buffer.mBytes));
+                            ImGui::EndDisabled();
+                            if (edited && !readOnly)
+                                colorField->Write(component, buffer.mBytes);
+                        }
+                    }
                     if (ops.mType.name == "ModelPlayer")
                     {
                         const FieldDesc *modelAsset = nullptr;
@@ -117,7 +164,7 @@ namespace mir
                             {
                                 char id[17]{};
                                 std::snprintf(id, sizeof(id), "%016llx",
-                                              static_cast<unsigned long long>(model.mAssetId));
+                                    static_cast<unsigned long long>(model.mAssetId));
                                 if (std::string_view(id) == currentId)
                                     preview = model.mPath.c_str();
                             }
@@ -128,7 +175,7 @@ namespace mir
                                     {
                                         FieldBuffer value{};
                                         std::snprintf(reinterpret_cast<char *>(value.mBytes), kFieldStringCapacity,
-                                                      "%016llx", static_cast<unsigned long long>(model.mAssetId));
+                                            "%016llx", static_cast<unsigned long long>(model.mAssetId));
                                         if (std::string_view(reinterpret_cast<const char *>(value.mBytes)) != currentId)
                                         {
                                             modelAsset->Write(component, value.mBytes);
@@ -150,7 +197,11 @@ namespace mir
                         // the picker above; clip selection uses the public clip index.
                         if (ops.mType.name == "ModelPlayer" &&
                             (field.mName == "modelName" || field.mName == "modelAsset" ||
-                             field.mName == "animationAsset"))
+                                field.mName == "animationAsset"))
+                            continue;
+
+                        // Shown as the combo/color-picker
+                        if (ops.mType.name == "Light" && (field.mName == "type" || field.mName == "color"))
                             continue;
 
                         FieldBuffer buffer{};
@@ -158,7 +209,27 @@ namespace mir
 
                         const bool readOnly = field.ReadOnly();
                         ImGui::BeginDisabled(readOnly);
-                        const bool edited = DrawFieldWidget(field, buffer.mBytes);
+                        float clampMin = 0.0f;
+                        float clampMax = FLT_MAX;
+                        bool isClamped = true;
+                        if (ops.mType.name != "Light")
+                            isClamped = false;
+                        else if (field.mName == "range")
+                            clampMin = 0.01f; // 0 would mean "affects nothing, ever" - never a valid value
+                        else if (field.mName == "intensity" || field.mName == "areaSize")
+                            clampMin = 0.0f; // 0 is a legitimate "off"/degenerate value for these two
+                        else if (field.mName == "spotAngleDegrees")
+                        {
+                            clampMin = 1.0f;
+                            clampMax = 179.0f; // full cone angle; >=180 or <=0 isn't a cone
+                        }
+                        else
+                            isClamped = false;
+
+                        const bool edited = isClamped
+                            ? ImGui::DragFloat(field.mName.data(), reinterpret_cast<float *>(buffer.mBytes),
+                                0.05f, clampMin, clampMax, "%.3f", ImGuiSliderFlags_AlwaysClamp)
+                            : DrawFieldWidget(field, buffer.mBytes);
                         ImGui::EndDisabled();
 
                         if (edited && !readOnly)
@@ -191,7 +262,10 @@ namespace mir
             return;
         }
 
-        ImGui::Text("Entity %u", entity.mIndex);
+        if (const Name *name = world.GetComponent<Name>(entity))
+            ImGui::Text("%s", name->mValue);
+        else
+            ImGui::Text("Entity %u", entity.mIndex);
         ImGui::Separator();
 
         for (const ComponentOps *ops : ComponentRegistry::Instance().All())

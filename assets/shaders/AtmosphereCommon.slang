@@ -11,14 +11,17 @@ static const float kPi = 3.14159265;
 static const int kPrimarySteps = 16;
 static const int kLightSteps = 8;
 
-static const float kPlanetRadius = 6371e3;
-static const float kAtmosphereRadius = 6471e3;
-static const float3 kRayleighCoeff = float3(5.5e-6, 13.0e-6, 22.4e-6);
-static const float kMieCoeff = 21e-6;
-static const float kRayleighScaleHeight = 8e3;
-static const float kMieScaleHeight = 1.2e3;
-static const float kMieG = 0.758;
-static const float kSunIntensity = 22.0;
+struct AtmosphereParams
+{
+    float planetRadius;
+    float atmosphereRadius;
+    float3 rayleighCoeff;
+    float mieCoeff;
+    float rayleighScaleHeight;
+    float mieScaleHeight;
+    float mieG;
+    float sunIntensity;
+};
 
 float2 RaySphere(float3 rayOrigin, float3 rayDir, float radius)
 {
@@ -32,14 +35,14 @@ float2 RaySphere(float3 rayOrigin, float3 rayDir, float radius)
     return float2((-b - sqrtD) / (2.0 * a), (-b + sqrtD) / (2.0 * a));
 }
 
-float AtmosphereHeight(float3 pos)
+float AtmosphereHeight(float3 pos, float planetRadius)
 {
-    return max(length(pos) - kPlanetRadius, 0.0);
+    return max(length(pos) - planetRadius, 0.0);
 }
 
-float3 Atmosphere(float3 rayDir, float3 rayOrigin, float3 sunDir)
+float3 Atmosphere(float3 rayDir, float3 rayOrigin, float3 sunDir, AtmosphereParams params)
 {
-    float2 hit = RaySphere(rayOrigin, rayDir, kAtmosphereRadius);
+    float2 hit = RaySphere(rayOrigin, rayDir, params.atmosphereRadius);
     if (hit.x > hit.y)
         return float3(0.0, 0.0, 0.0);
 
@@ -56,23 +59,23 @@ float3 Atmosphere(float3 rayDir, float3 rayOrigin, float3 sunDir)
 
     float mu = dot(rayDir, sunDir);
     float mumu = mu * mu;
-    float gg = kMieG * kMieG;
+    float gg = params.mieG * params.mieG;
     float phaseRayleigh = 3.0 / (16.0 * kPi) * (1.0 + mumu);
     float phaseMie = 3.0 / (8.0 * kPi) * ((1.0 - gg) * (mumu + 1.0)) /
-                      (pow(1.0 + gg - 2.0 * mu * kMieG, 1.5) * (2.0 + gg));
+                     (pow(1.0 + gg - 2.0 * mu * params.mieG, 1.5) * (2.0 + gg));
 
     for (int i = 0; i < kPrimarySteps; i++)
     {
         float3 samplePos = rayOrigin + rayDir * (rayTime + stepSize * 0.5);
-        float sampleHeight = AtmosphereHeight(samplePos);
+        float sampleHeight = AtmosphereHeight(samplePos, params.planetRadius);
 
-        float stepOdRayleigh = exp(-sampleHeight / kRayleighScaleHeight) * stepSize;
-        float stepOdMie = exp(-sampleHeight / kMieScaleHeight) * stepSize;
+        float stepOdRayleigh = exp(-sampleHeight / params.rayleighScaleHeight) * stepSize;
+        float stepOdMie = exp(-sampleHeight / params.mieScaleHeight) * stepSize;
         opticalDepthRayleigh += stepOdRayleigh;
         opticalDepthMie += stepOdMie;
 
         // Secondary ray toward the sun
-        float lightRayLength = RaySphere(samplePos, sunDir, kAtmosphereRadius).y;
+        float lightRayLength = RaySphere(samplePos, sunDir, params.atmosphereRadius).y;
         float lightStepSize = lightRayLength / float(kLightSteps);
         float lightTime = 0.0;
         float lightOdRayleigh = 0.0;
@@ -81,21 +84,21 @@ float3 Atmosphere(float3 rayDir, float3 rayOrigin, float3 sunDir)
         for (int j = 0; j < kLightSteps; j++)
         {
             float3 lightSamplePos = samplePos + sunDir * (lightTime + lightStepSize * 0.5);
-            float lightSampleHeight = AtmosphereHeight(lightSamplePos);
-            lightOdRayleigh += exp(-lightSampleHeight / kRayleighScaleHeight) * lightStepSize;
-            lightOdMie += exp(-lightSampleHeight / kMieScaleHeight) * lightStepSize;
+            float lightSampleHeight = AtmosphereHeight(lightSamplePos, params.planetRadius);
+            lightOdRayleigh += exp(-lightSampleHeight / params.rayleighScaleHeight) * lightStepSize;
+            lightOdMie += exp(-lightSampleHeight / params.mieScaleHeight) * lightStepSize;
             lightTime += lightStepSize;
         }
 
-        float3 attenuation = exp(-(kMieCoeff * (opticalDepthMie + lightOdMie) +
-                                    kRayleighCoeff * (opticalDepthRayleigh + lightOdRayleigh)));
+        float3 attenuation = exp(-(params.mieCoeff * (opticalDepthMie + lightOdMie) +
+                                   params.rayleighCoeff * (opticalDepthRayleigh + lightOdRayleigh)));
         totalRayleigh += stepOdRayleigh * attenuation;
         totalMie += stepOdMie * attenuation;
 
         rayTime += stepSize;
     }
 
-    return kSunIntensity * (phaseRayleigh * kRayleighCoeff * totalRayleigh + phaseMie * kMieCoeff * totalMie);
+    return params.sunIntensity * (phaseRayleigh * params.rayleighCoeff * totalRayleigh + phaseMie * params.mieCoeff * totalMie);
 }
 
 // The raw scattering integral is unbounded near the sun disc.

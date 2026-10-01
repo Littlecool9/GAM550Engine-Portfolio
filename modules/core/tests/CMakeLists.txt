@@ -13,5 +13,6 @@ engine_add_module_tests(core
     Resources.tests.cpp
     Entity.tests.cpp
     ComponentRegistry.tests.cpp
+    EntityPresetRegistry.tests.cpp
     RuntimeQuery.tests.cpp
 )

@@ -1,4 +1,5 @@
 #include "AtmosphereCommon.slang"
+#include "LightingCommon.slang"
 
 [[vk::binding(0, 0)]]
 RaytracingAccelerationStructure gTlas;
@@ -8,8 +9,8 @@ RWTexture2D<float4> gOutput;
 
 struct RtInstanceInfo
 {
-    float* vertexAddress;
-    uint* indexAddress;
+    float *vertexAddress;
+    uint *indexAddress;
     float4 tint;
     float4 normalCol0;
     float4 normalCol1;
@@ -33,6 +34,10 @@ cbuffer CameraData
     float4x4 invViewProj;
     float4 cameraPosWS;
     float4 fogColor;
+    float4 atmosphereScattering;
+    float4 atmosphereRadii;
+    float4 atmosphereMisc;
+    float4 lightingMeta; // x = active count in gLights
 };
 
 struct RtPushData
@@ -83,8 +88,18 @@ void rayGenMain()
 [shader("miss")]
 void missMain(inout RayPayload payload)
 {
-    const float3 rayOrigin = float3(cameraPosWS.x, kPlanetRadius + cameraPosWS.y, cameraPosWS.z);
-    float3 color = Atmosphere(WorldRayDirection(), rayOrigin, normalize(lightDirWS.xyz));
+    AtmosphereParams params;
+    params.rayleighCoeff = atmosphereScattering.xyz;
+    params.mieCoeff = atmosphereScattering.w;
+    params.planetRadius = atmosphereRadii.x;
+    params.atmosphereRadius = atmosphereRadii.y;
+    params.rayleighScaleHeight = atmosphereRadii.z;
+    params.mieScaleHeight = atmosphereRadii.w;
+    params.mieG = atmosphereMisc.x;
+    params.sunIntensity = atmosphereMisc.y;
+
+    const float3 rayOrigin = float3(cameraPosWS.x, params.planetRadius + cameraPosWS.y, cameraPosWS.z);
+    float3 color = Atmosphere(WorldRayDirection(), rayOrigin, normalize(lightDirWS.xyz), params);
     payload.color = TonemapReinhard(color);
 }
 
@@ -142,6 +157,8 @@ void closestHitMain(inout RayPayload payload, in BuiltInTriangleIntersectionAttr
         const float3 albedo = kAlbedo * info.tint.rgb;
         color = albedo * (ambientColor.rgb + lightColor.rgb * diffuse) +
                 lightColor.rgb * kSpecularStrength * specular;
+
+        color += AccumulatePunctualLights(hitWorldPos, N, albedo, int(lightingMeta.x));
     }
 
     const float fogFactor = clamp(1.0 - exp(-fogColor.a * RayTCurrent()), 0.0, 1.0);

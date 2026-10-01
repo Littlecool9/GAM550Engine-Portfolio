@@ -173,6 +173,7 @@ namespace mir
         // Before anything may load a script
         RegisterCoreComponents();
         RegisterRendererComponents();
+        RegisterRendererEntityTypes();
         RegisterPhysicsComponents();
         RegisterScriptComponents();
         RegisterAudioComponents();
