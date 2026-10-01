@@ -12,7 +12,7 @@ struct VSOutput
     float3 worldPos : TEXCOORD0;
 };
 
-struct PushData
+struct RasterPushConstants
 {
     float4x4 model;
     float4 normalCol0;
@@ -22,7 +22,7 @@ struct PushData
 }
 
 [[vk::push_constant]]
-PushData pushData;
+RasterPushConstants pushData;
 
 // set 1, binding 0: per-view camera data (VulkanRenderer's camera UBO).
 [[vk::binding(0, 1)]]

@@ -8,6 +8,7 @@
  */
 #include "renderer/VulkanRenderer.h"
 #include "vulkan/VulkanSurface.h"
+#include "vulkan/VulkanPushConstants.h"
 #include "vulkan/VulkanUtil.h"
 #include <core/log/Log.h>
 #include <core/log/Assert.h>
@@ -36,18 +37,6 @@ namespace mir
 {
     namespace
     {
-        // normalCols = Normal matrix
-        // vulkan's guaranteed minimum constant size = 128
-        // vulkan pads every column to 16 anyways
-        struct PushData
-        {
-            glm::mat4 model;      // 64
-            glm::vec4 normalCol0; // 16
-            glm::vec4 normalCol1; // 16
-            glm::vec4 normalCol2; // 16
-            glm::vec4 tint;       // 16
-        };
-
         constexpr std::string_view kModelShaderName = "model";
         struct CameraData
         {
@@ -1299,7 +1288,7 @@ namespace mir
         const VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .offset = 0,
-            .size = sizeof(PushData) };
+            .size = sizeof(vk::RasterPushConstants) };
 
         // set 0 = material (textures), set 1 = per-view camera UBO,
         // set 2 = per-draw model data.
@@ -1543,7 +1532,7 @@ namespace mir
         const VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR,
             .offset = 0,
-            .size = 2 * sizeof(uint32_t) };
+            .size = sizeof(vk::RtPushConstants) };
 
         const VkPipelineLayoutCreateInfo pipelineLayoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -3174,7 +3163,7 @@ namespace mir
 
             vkCmdBindIndexBuffer(cmd, mesh->mIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-            const PushData pushData{
+            const vk::RasterPushConstants pushData{
                 .model = item.model,
                 .normalCol0 = glm::vec4(item.normalMatrix[0], 0.0f),
                 .normalCol1 = glm::vec4(item.normalMatrix[1], 0.0f),
@@ -3182,7 +3171,7 @@ namespace mir
                 .tint = item.tint };
 
             vkCmdPushConstants(cmd, mPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
-                0, sizeof(PushData), &pushData);
+                0, sizeof(vk::RasterPushConstants), &pushData);
 
             vkCmdDrawIndexed(cmd, mesh->mIndexCount, 1, 0, 0, 0);
         }
@@ -3242,10 +3231,10 @@ namespace mir
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, mRtPipelineLayout,
                 0, static_cast<uint32_t>(sets.size()), sets.data(), 1, &cameraOffset);
 
-            const std::array<uint32_t, 2> outputOffset{
-                static_cast<uint32_t>(rect.offset.x), static_cast<uint32_t>(rect.offset.y) };
+            const vk::RtPushConstants pushConstants{
+                .outputOffset{ static_cast<uint32_t>(rect.offset.x), static_cast<uint32_t>(rect.offset.y) } };
             vkCmdPushConstants(cmd, mRtPipelineLayout, VK_SHADER_STAGE_RAYGEN_BIT_KHR,
-                0, static_cast<uint32_t>(outputOffset.size() * sizeof(uint32_t)), outputOffset.data());
+                0, sizeof(vk::RtPushConstants), &pushConstants);
 
             vkCmdTraceRaysKHR(cmd, &mSbtRaygenRegion, &mSbtMissRegion, &mSbtHitRegion, &mSbtCallableRegion,
                 rect.extent.width, rect.extent.height, 1);

@@ -35,13 +35,13 @@ cbuffer CameraData
     float4 fogColor;
 };
 
-struct RtPushData
+struct RtPushConstants
 {
     uint2 outputOffset;
 };
 
 [[vk::push_constant]]
-RtPushData pushData;
+RtPushConstants pushData;
 
 struct RayPayload
 {
