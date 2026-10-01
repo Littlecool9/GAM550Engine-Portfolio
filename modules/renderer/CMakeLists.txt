@@ -45,6 +45,7 @@ target_sources(engine_renderer PRIVATE
     src/renderer/VulkanRenderer.cpp
     src/renderer/VulkanModel.cpp
     src/renderer/vulkan/VmaImpl.cpp
+    src/renderer/vulkan/VulkanUtil.cpp
 )
 if(ENGINE_FAMILY_DESKTOP)
     if(ENGINE_PLATFORM STREQUAL "Windows")

@@ -8,6 +8,7 @@
  */
 #include "renderer/VulkanRenderer.h"
 #include "vulkan/VulkanSurface.h"
+#include "vulkan/VulkanUtil.h"
 #include <core/log/Log.h>
 #include <core/log/Assert.h>
 #include <core/fs/Paths.h>
@@ -35,27 +36,6 @@ namespace mir
 {
     namespace
     {
-        bool CreateBuffer(VmaAllocator allocator,
-            VkDeviceSize size,
-            VkBufferUsageFlags usage,
-            VmaAllocationCreateFlags allocFlags,
-            VkBuffer &outBuffer,
-            VmaAllocation &outAllocation,
-            VmaAllocationInfo *outInfo)
-        {
-            const VkBufferCreateInfo bufferInfo{
-                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                .size = size,
-                .usage = usage,
-                .sharingMode = VK_SHARING_MODE_EXCLUSIVE };
-
-            const VmaAllocationCreateInfo allocInfo{
-                .flags = allocFlags,
-                .usage = VMA_MEMORY_USAGE_AUTO };
-
-            return vmaCreateBuffer(allocator, &bufferInfo, &allocInfo,
-                &outBuffer, &outAllocation, outInfo) == VK_SUCCESS;
-        }
         // normalCols = Normal matrix
         // vulkan's guaranteed minimum constant size = 128
         // vulkan pads every column to 16 anyways
@@ -92,12 +72,6 @@ namespace mir
             uint32_t pad[3];
         };
 
-        VkDeviceSize AlignUp(VkDeviceSize size, VkDeviceSize alignment)
-        {
-            if (alignment == 0)
-                return size;
-            return (size + alignment - 1) & ~(alignment - 1);
-        }
         VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
             VkDebugUtilsMessageSeverityFlagBitsEXT severity,
             VkDebugUtilsMessageTypeFlagsEXT,
@@ -347,50 +321,7 @@ namespace mir
                 caps.maxImageExtent.height);
             return extent;
         }
-        VkRect2D ResolveViewRect(const VkRect2D &requested, VkExtent2D swapchainExtent)
-        {
-            VkRect2D rect = (requested.extent.width > 0 && requested.extent.height > 0)
-                ? requested
-                : VkRect2D{ .offset{ 0, 0 }, .extent = swapchainExtent };
 
-            rect.offset.x = std::clamp(rect.offset.x, 0, static_cast<int32_t>(swapchainExtent.width));
-            rect.offset.y = std::clamp(rect.offset.y, 0, static_cast<int32_t>(swapchainExtent.height));
-            rect.extent.width = std::min(rect.extent.width,
-                swapchainExtent.width - static_cast<uint32_t>(rect.offset.x));
-            rect.extent.height = std::min(rect.extent.height,
-                swapchainExtent.height - static_cast<uint32_t>(rect.offset.y));
-            return rect;
-        }
-
-        void ImageBarrier(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspectMask,
-            VkImageLayout oldLayout, VkImageLayout newLayout,
-            VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
-            VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess,
-            uint32_t levelCount = 1)
-        {
-            const VkImageMemoryBarrier2 barrier{
-                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-                .srcStageMask = srcStage,
-                .srcAccessMask = srcAccess,
-                .dstStageMask = dstStage,
-                .dstAccessMask = dstAccess,
-                .oldLayout = oldLayout,
-                .newLayout = newLayout,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .image = image,
-                .subresourceRange{
-                    .aspectMask = aspectMask,
-                    .levelCount = levelCount,
-                    .layerCount = 1 } };
-
-            const VkDependencyInfo dep{
-                .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-                .imageMemoryBarrierCount = 1,
-                .pImageMemoryBarriers = &barrier };
-
-            vkCmdPipelineBarrier2(cmd, &dep);
-        }
         // Level 0, then every smaller level if desc asks for them, packed back
         // to back into one staging blob with a copy region each. Returns the
         // level count. The box filter averages in linear light, so an sRGB
@@ -465,45 +396,6 @@ namespace mir
             }
 
             return mip + 1;
-        }
-        std::optional<std::vector<uint32_t>> ReadSpirv(const std::filesystem::path &path)
-        {
-            const std::optional<std::vector<std::byte>> bytes = ReadBytes(path);
-            if (!bytes)
-                // ReadBytes takes care of logging onfailure
-                return std::nullopt;
-
-            if (bytes->empty() || bytes->size() % sizeof(uint32_t) != 0)
-            {
-                MIR_LOG_CRITICAL("Bad SPIR-V size ({} bytes): {}", bytes->size(), path.string());
-                return std::nullopt;
-            }
-
-            // Copied, not reinterpreted: vkCreateShaderModule needs pCode 4-byte
-            // aligned and a vector<byte> is only aligned to 1.
-            std::vector<uint32_t> words(bytes->size() / sizeof(uint32_t));
-            std::memcpy(words.data(), bytes->data(), bytes->size());
-            return words;
-        }
-
-        VkShaderModule CreateShaderModule(VkDevice device, const std::filesystem::path &path)
-        {
-            const std::optional<std::vector<uint32_t>> words = ReadSpirv(path);
-            if (!words.has_value())
-                return VK_NULL_HANDLE;
-
-            const VkShaderModuleCreateInfo info{
-                .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-                .codeSize = words->size() * sizeof(uint32_t),
-                .pCode = words->data() };
-
-            VkShaderModule module = VK_NULL_HANDLE;
-            if (vkCreateShaderModule(device, &info, nullptr, &module) != VK_SUCCESS)
-            {
-                MIR_LOG_CRITICAL("vkCreateShaderModule failed: {}", path.string());
-                return VK_NULL_HANDLE;
-            }
-            return module;
         }
     }
 
@@ -1432,8 +1324,8 @@ namespace mir
 
     bool VulkanRenderer::CreateSkyPipeline()
     {
-        VkShaderModule vertModule = CreateShaderModule(mDevice, ShaderPath("sky.vertexMain.spv"));
-        VkShaderModule fragModule = CreateShaderModule(mDevice, ShaderPath("sky.fragmentMain.spv"));
+        VkShaderModule vertModule = vk::CreateShaderModule(mDevice, ShaderPath("sky.vertexMain.spv"));
+        VkShaderModule fragModule = vk::CreateShaderModule(mDevice, ShaderPath("sky.fragmentMain.spv"));
 
         if (vertModule == VK_NULL_HANDLE || fragModule == VK_NULL_HANDLE)
         {
@@ -1565,9 +1457,9 @@ namespace mir
 
     bool VulkanRenderer::CreateRtPipeline()
     {
-        VkShaderModule raygenModule = CreateShaderModule(mDevice, ShaderPath("raytrace.rayGenMain.spv"));
-        VkShaderModule missModule = CreateShaderModule(mDevice, ShaderPath("raytrace.missMain.spv"));
-        VkShaderModule hitModule = CreateShaderModule(mDevice, ShaderPath("raytrace.closestHitMain.spv"));
+        VkShaderModule raygenModule = vk::CreateShaderModule(mDevice, ShaderPath("raytrace.rayGenMain.spv"));
+        VkShaderModule missModule = vk::CreateShaderModule(mDevice, ShaderPath("raytrace.missMain.spv"));
+        VkShaderModule hitModule = vk::CreateShaderModule(mDevice, ShaderPath("raytrace.closestHitMain.spv"));
 
         if (raygenModule == VK_NULL_HANDLE || missModule == VK_NULL_HANDLE || hitModule == VK_NULL_HANDLE)
         {
@@ -1726,8 +1618,8 @@ namespace mir
         }
 
         const uint32_t handleSize = mRtProperties.shaderGroupHandleSize;
-        const uint32_t handleSizeAligned = AlignUp(handleSize, mRtProperties.shaderGroupHandleAlignment);
-        const VkDeviceSize regionSize = AlignUp(handleSizeAligned, mRtProperties.shaderGroupBaseAlignment);
+        const uint32_t handleSizeAligned = vk::AlignUp(handleSize, mRtProperties.shaderGroupHandleAlignment);
+        const VkDeviceSize regionSize = vk::AlignUp(handleSizeAligned, mRtProperties.shaderGroupBaseAlignment);
         const VkDeviceSize sbtSize = regionSize * 3;
 
         std::vector<std::byte> handles(static_cast<size_t>(handleSize) * 3);
@@ -1886,7 +1778,7 @@ namespace mir
     {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(mPhysicalDevice, &props);
-        mCameraAlignedSize = AlignUp(sizeof(CameraData), props.limits.minUniformBufferOffsetAlignment);
+        mCameraAlignedSize = vk::AlignUp(sizeof(CameraData), props.limits.minUniformBufferOffsetAlignment);
 
         VkShaderStageFlags cameraStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         if (mRayTracingSupported)
@@ -1933,7 +1825,7 @@ namespace mir
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
             VmaAllocationInfo allocInfo{};
-            if (!CreateBuffer(mAllocator, bufferSize,
+            if (!vk::CreateBuffer(mAllocator, bufferSize,
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
@@ -2032,7 +1924,7 @@ namespace mir
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
             VmaAllocationInfo instanceInfo{};
-            if (!CreateBuffer(mAllocator, sizeof(VkAccelerationStructureInstanceKHR) * kMaxRtInstances,
+            if (!vk::CreateBuffer(mAllocator, sizeof(VkAccelerationStructureInstanceKHR) * kMaxRtInstances,
                 VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -2045,7 +1937,7 @@ namespace mir
             mInstanceMapped[i] = static_cast<std::byte *>(instanceInfo.pMappedData);
 
             VmaAllocationInfo instanceRtInfo{};
-            if (!CreateBuffer(mAllocator, sizeof(RtInstanceInfo) * kMaxRtInstances,
+            if (!vk::CreateBuffer(mAllocator, sizeof(RtInstanceInfo) * kMaxRtInstances,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
@@ -2083,7 +1975,7 @@ namespace mir
                 return false;
             }
 
-            if (!CreateBuffer(mAllocator, sizes.buildScratchSize,
+            if (!vk::CreateBuffer(mAllocator, sizes.buildScratchSize,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 0, mTlasScratchBuffers[i], mTlasScratchAllocations[i], nullptr))
             {
@@ -2213,8 +2105,8 @@ namespace mir
 
     VkPipeline VulkanRenderer::BuildPipeline(const MaterialDesc &desc)
     {
-        VkShaderModule vertModule = CreateShaderModule(mDevice, ShaderPath(desc.shaderName + ".vertexMain.spv"));
-        VkShaderModule fragModule = CreateShaderModule(mDevice, ShaderPath(desc.shaderName + ".fragmentMain.spv"));
+        VkShaderModule vertModule = vk::CreateShaderModule(mDevice, ShaderPath(desc.shaderName + ".vertexMain.spv"));
+        VkShaderModule fragModule = vk::CreateShaderModule(mDevice, ShaderPath(desc.shaderName + ".fragmentMain.spv"));
 
         if (vertModule == VK_NULL_HANDLE || fragModule == VK_NULL_HANDLE)
         {
@@ -2644,7 +2536,7 @@ namespace mir
         VmaAllocation stagingAllocation = VK_NULL_HANDLE;
         VmaAllocationInfo stagingInfo{};
 
-        if (!CreateBuffer(mAllocator, vertexBytes + indexBytes,
+        if (!vk::CreateBuffer(mAllocator, vertexBytes + indexBytes,
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
             VMA_ALLOCATION_CREATE_MAPPED_BIT,
@@ -2669,10 +2561,10 @@ namespace mir
 
     // No host-access flags on either: that is what puts them in VRAM.
         const bool buffersCreated =
-            CreateBuffer(mAllocator, vertexBytes,
+            vk::CreateBuffer(mAllocator, vertexBytes,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | extraUsage,
                 0, mesh.mVertexBuffer, mesh.mVertexAllocation, nullptr) &&
-            CreateBuffer(mAllocator, indexBytes,
+            vk::CreateBuffer(mAllocator, indexBytes,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | extraUsage,
                 0, mesh.mIndexBuffer, mesh.mIndexAllocation, nullptr);
 
@@ -2831,7 +2723,7 @@ namespace mir
     bool VulkanRenderer::CreateAccelerationStructureObject(VkDeviceSize size, VkAccelerationStructureTypeKHR type,
         VkBuffer &outBuffer, VmaAllocation &outAllocation, VkAccelerationStructureKHR &outAS)
     {
-        if (!CreateBuffer(mAllocator, size,
+        if (!vk::CreateBuffer(mAllocator, size,
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             0, outBuffer, outAllocation, nullptr))
             return false;
@@ -2909,7 +2801,7 @@ namespace mir
             return false;
         }
 
-        if (!CreateBuffer(mAllocator, sizes.buildScratchSize,
+        if (!vk::CreateBuffer(mAllocator, sizes.buildScratchSize,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             0, outScratchBuffer, outScratchAllocation, nullptr))
         {
@@ -2975,7 +2867,7 @@ namespace mir
         VmaAllocation stagingAllocation = VK_NULL_HANDLE;
         VmaAllocationInfo stagingInfo{};
 
-        if (!CreateBuffer(mAllocator, pixels.size(),
+        if (!vk::CreateBuffer(mAllocator, pixels.size(),
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
             VMA_ALLOCATION_CREATE_MAPPED_BIT,
@@ -3041,7 +2933,7 @@ namespace mir
             .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
         vkBeginCommandBuffer(uploadCmd, &beginInfo);
 
-        ImageBarrier(uploadCmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(uploadCmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
             VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, levelCount);
@@ -3050,7 +2942,7 @@ namespace mir
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             static_cast<uint32_t>(regions.size()), regions.data());
 
-        ImageBarrier(uploadCmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(uploadCmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT, levelCount);
@@ -3226,7 +3118,7 @@ namespace mir
     }
     void VulkanRenderer::RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex)
     {
-        const VkRect2D rect = ResolveViewRect(view.rect, mSwapchainExtent);
+        const VkRect2D rect = vk::ResolveViewRect(view.rect, mSwapchainExtent);
 
         const VkViewport viewport{
             .x = static_cast<float>(rect.offset.x),
@@ -3309,7 +3201,7 @@ namespace mir
     {
         const RenderView &view = views[0];
 
-        const VkRect2D rect = ResolveViewRect(view.rect, mSwapchainExtent);
+        const VkRect2D rect = vk::ResolveViewRect(view.rect, mSwapchainExtent);
 
         WriteCameraData(view.viewProj, view.cameraPos, 0);
         const uint32_t cameraOffset = 0;
@@ -3323,7 +3215,7 @@ namespace mir
             vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
         }
 
-        ImageBarrier(cmd, mRtOutputImages[mFrameIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(cmd, mRtOutputImages[mFrameIndex], VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
@@ -3359,12 +3251,12 @@ namespace mir
                 rect.extent.width, rect.extent.height, 1);
         }
 
-        ImageBarrier(cmd, mRtOutputImages[mFrameIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(cmd, mRtOutputImages[mFrameIndex], VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
 
-        ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
@@ -3375,7 +3267,7 @@ namespace mir
         vkCmdClearColorImage(cmd, mSwapchainImages[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             &clearColor, 1, &wholeImage);
 
-        ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
@@ -3400,7 +3292,7 @@ namespace mir
 
         if (mImguiDrawData != nullptr)
         {
-            ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+            vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -3424,14 +3316,14 @@ namespace mir
             ImGui_ImplVulkan_RenderDrawData(mImguiDrawData, cmd);
             vkCmdEndRendering(cmd);
 
-            ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+            vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_NONE, 0);
         }
         else
         {
-            ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+            vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                 VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_NONE, 0);
@@ -3444,14 +3336,14 @@ namespace mir
     void VulkanRenderer::RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views)
     {
         // get image ready
-        ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED,
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
 
-        ImageBarrier(cmd, mDepthImages[mFrameIndex], VK_IMAGE_ASPECT_DEPTH_BIT,
+        vk::ImageBarrier(cmd, mDepthImages[mFrameIndex], VK_IMAGE_ASPECT_DEPTH_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED,
             VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
@@ -3515,7 +3407,7 @@ namespace mir
         const bool captured = RecordCapture(cmd, imageIndex);
 
         // give it back
-        ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
             captured ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
             captured ? VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
