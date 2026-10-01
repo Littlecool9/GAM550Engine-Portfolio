@@ -51,9 +51,10 @@ namespace mir
         PhysicsWorld(PhysicsWorld &&) = delete;
         PhysicsWorld &operator=(PhysicsWorld &&) = delete;
 
-        // Bodies live in the fixed Scene world: a position is a double
-        // WorldPosition all the way into Jolt, never a camera-relative or float
-        // one. Shape sizes, rotations, velocities and forces are bounded floats.
+        // Bodies live in the fixed Scene world: a position is a WorldPosition
+        // all the way into Jolt (JPH::Real matches WorldReal), never a
+        // camera-relative one. Shape sizes, rotations, velocities and forces
+        // are bounded floats.
         BodyHandle CreateStaticBox(WorldPosition position, const glm::vec3 &halfExtent,
                                    const glm::quat &rotation = kIdentityRotation);
         BodyHandle CreateStaticSphere(WorldPosition position, float radius,

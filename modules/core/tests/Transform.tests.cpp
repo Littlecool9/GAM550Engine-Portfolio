@@ -105,9 +105,12 @@ TEST_CASE("Transform applies scale, then rotation, then translation", "[ecs][tra
 
 TEST_CASE("Transform keeps a millimeter step at the map edge", "[ecs][transform][lwc]")
 {
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
     // A float position spaced 1/64 m at 150 km would round the step away.
-    mir::Transform t{glm::dvec3(-150000.125, 250.0, 75000.5)};
-    REQUIRE(t.Translate(glm::dvec3(0.001, -0.002, 0.003)));
+    mir::Transform t{mir::WorldVec3(-150000.125, 250.0, 75000.5)};
+    REQUIRE(t.Translate(mir::WorldVec3(0.001, -0.002, 0.003)));
 
     CHECK(t.Position().x == Approx(-150000.124).margin(1e-9));
     CHECK(t.Position().y == Approx(249.998).margin(1e-9));
@@ -117,19 +120,19 @@ TEST_CASE("Transform keeps a millimeter step at the map edge", "[ecs][transform]
 
 TEST_CASE("Transform refuses a non-finite position without a version bump", "[ecs][transform][lwc]")
 {
-    constexpr double kMax = std::numeric_limits<double>::max();
-    mir::Transform t{glm::dvec3(1.0, 2.0, 3.0)};
+    constexpr mir::WorldReal kMax = std::numeric_limits<mir::WorldReal>::max();
+    mir::Transform t{mir::WorldVec3(1.0, 2.0, 3.0)};
     const uint32_t version = t.Version();
 
-    CHECK_FALSE(t.SetPosition(glm::dvec3(std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0)));
-    CHECK_FALSE(t.SetPosition(glm::dvec3(0.0, std::numeric_limits<double>::infinity(), 0.0)));
+    CHECK_FALSE(t.SetPosition(mir::WorldVec3(std::numeric_limits<mir::WorldReal>::quiet_NaN(), 0.0, 0.0)));
+    CHECK_FALSE(t.SetPosition(mir::WorldVec3(0.0, std::numeric_limits<mir::WorldReal>::infinity(), 0.0)));
     CHECK(t.Version() == version);
-    CHECK(t.Position() == glm::dvec3(1.0, 2.0, 3.0));
+    CHECK(t.Position() == mir::WorldVec3(1.0, 2.0, 3.0));
 
     // an overflowing sum is refused too
-    REQUIRE(t.SetPosition(glm::dvec3(kMax, 0.0, 0.0)));
+    REQUIRE(t.SetPosition(mir::WorldVec3(kMax, 0.0, 0.0)));
     const uint32_t atMax = t.Version();
-    CHECK_FALSE(t.Translate(glm::dvec3(kMax, 0.0, 0.0)));
+    CHECK_FALSE(t.Translate(mir::WorldVec3(kMax, 0.0, 0.0)));
     CHECK(t.Version() == atMax);
     CHECK(t.Position().x == kMax);
 }

@@ -68,8 +68,8 @@ namespace mir::detail
         if (!JPH::VerifyJoltVersionID())
         {
             MIR_LOG_CRITICAL("Jolt was built with a different configuration than engine_physics "
-                             "(version or defines such as JPH_DOUBLE_PRECISION); rebuild it from "
-                             "vcpkg-overlays/joltphysics");
+                             "(version or defines such as JPH_DOUBLE_PRECISION, which follows "
+                             "MIR_LARGE_WORLD); reconfigure so vcpkg rebuilds vcpkg-overlays/joltphysics");
         }
 
         JPH::Factory::sInstance = new JPH::Factory();

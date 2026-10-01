@@ -77,7 +77,7 @@ namespace mir
         MeshHandle mesh;
 
         // Relative to this viewport's camera: the translation is
-        // pose.position - camera, subtracted in double before narrowing.
+        // pose.position - camera, subtracted in world precision before narrowing.
         glm::mat4 model{ 1.0f };
 
         glm::mat3 normalMatrix{ 1.0f };

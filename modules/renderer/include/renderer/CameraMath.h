@@ -38,7 +38,7 @@ namespace mir
 
     std::optional<float> RayIntersectsAABB(const Ray &ray, const glm::vec3 &boxMin, const glm::vec3 &boxMax);
 
-    // A ray in the fixed Scene world: the origin keeps its double position,
+    // A ray in the fixed Scene world: the origin keeps its world-precision position,
     // and only the bounded unit direction is float.
     struct WorldRay
     {
@@ -50,7 +50,7 @@ namespace mir
     WorldRay MakeCameraRay(const WorldPose &camera, const Camera &lens, float aspectRatio, glm::vec2 ndc);
 
     // Distance in meters along the ray to a box given in `box`'s local space.
-    // The box is placed relative to the ray origin in double before anything
+    // The box is placed relative to the ray origin in world precision before anything
     // narrows, so neither end is rounded to a far float position.
     std::optional<float> RayIntersectsBox(const WorldRay &ray, const WorldPose &box,
                                           const glm::vec3 &localMin, const glm::vec3 &localMax);

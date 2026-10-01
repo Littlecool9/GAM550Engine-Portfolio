@@ -293,7 +293,7 @@ namespace mir
                         if (!visible[i] || node.mesh.IsNull())
                             continue;
                         // The node pose is model-local and bounded; only the
-                        // entity's world position needs double.
+                        // entity's world position needs world precision.
                         const auto world = TryComposePose(transform.Pose(), glm::mat3(pose[i].world),
                                                           glm::vec3(pose[i].world[3]));
                         if (!world)

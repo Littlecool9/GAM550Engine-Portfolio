@@ -55,15 +55,15 @@ TEST_CASE("RestoreWorld reverts a Transform mutated after CaptureWorld", "[scene
 
     const Transform *restoredTransform = world.GetComponent<Transform>(restoredEntity);
     REQUIRE(restoredTransform != nullptr);
-    CHECK(restoredTransform->Position() == glm::dvec3(1.0, 2.0, 3.0));
+    CHECK(restoredTransform->Position() == mir::WorldVec3(1.0, 2.0, 3.0));
 }
 
 TEST_CASE("RestoreWorld reverts a far root and its child exactly", "[scene]")
 {
     mir::RegisterCoreComponents();
 
-    const glm::dvec3 rootPosition = glm::dvec3(150000.625, -20.0, -75000.25) + glm::dvec3(0.001, -0.002, 0.003);
-    const glm::dvec3 childLocal{0.001, 0.0, -0.002};
+    const mir::WorldVec3 rootPosition = mir::WorldVec3(150000.625, -20.0, -75000.25) + mir::WorldVec3(0.001, -0.002, 0.003);
+    const mir::WorldVec3 childLocal{0.001, 0.0, -0.002};
 
     World world;
     LoadedScene scene = NewScene("test");
@@ -71,13 +71,13 @@ TEST_CASE("RestoreWorld reverts a far root and its child exactly", "[scene]")
     Entity child = CreateSceneEntity(world, scene, root);
     AddTransform(world, root, Transform{ rootPosition });
     AddTransform(world, child, Transform{ childLocal }, root);
-    const glm::dvec3 childWorld = mir::ResolveWorld(world, child).position.Meters();
+    const mir::WorldVec3 childWorld = mir::ResolveWorld(world, child).position.Meters();
 
     const PlaySnapshot snapshot = CaptureWorld(world);
 
     // "Play" moves both by an amount a float at this distance cannot hold
-    REQUIRE(world.GetComponent<Transform>(root)->Translate(glm::dvec3(0.004)));
-    REQUIRE(world.GetComponent<Transform>(child)->Translate(glm::dvec3(0.004)));
+    REQUIRE(world.GetComponent<Transform>(root)->Translate(mir::WorldVec3(0.004)));
+    REQUIRE(world.GetComponent<Transform>(child)->Translate(mir::WorldVec3(0.004)));
 
     const LoadedScene restored = RestoreWorld(world, snapshot);
     REQUIRE(restored.mEntities.size() == 2);

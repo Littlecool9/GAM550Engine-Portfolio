@@ -28,7 +28,7 @@ namespace
 
     WorldPosition World(double x, double y, double z)
     {
-        return *WorldPosition::FromMeters({x, y, z});
+        return *WorldPosition::FromDoubleMeters({x, y, z});
     }
 
     TileAddress AddressX(const TerrainLayout &layout, double x)
@@ -205,6 +205,9 @@ TEST_CASE("Tile edges agree with SamplePosition for non-binary and non-power-of-
 
 TEST_CASE("A far placement addresses exactly and float world positions would not", "[terrain][address][far]")
 {
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
     const auto layout = TerrainLayout::Create(1.0, 256, {-2048.0, -2048.0, 2048.0, 2048.0});
     REQUIRE(layout);
     const TerrainPlacement placement{MakeAssetId("games/Test/assets/terrain/island.terrain"),
@@ -255,6 +258,9 @@ TEST_CASE("A far placement on the negative Z side keeps negative tiles", "[terra
 
 TEST_CASE("An overflowing world-to-local subtraction is invalid input", "[terrain][address]")
 {
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
     const auto layout = TerrainLayout::Create(1.0, 256, {-2048.0, -2048.0, 2048.0, 2048.0});
     REQUIRE(layout);
     const TerrainPlacement placement{MakeAssetId("games/Test/assets/terrain/island.terrain"),

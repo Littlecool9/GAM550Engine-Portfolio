@@ -166,14 +166,14 @@ TEST_CASE("A field write on Transform goes through the setter, not the bytes")
     REQUIRE(position != nullptr);
 
     // far from the origin, where a float would round the millimetres away
-    CHECK(position->mKind == FieldKind::DVec3);
-    const glm::dvec3 target{-150000.125 + 0.001, 350.5 - 0.002, 75000.5 + 0.003};
+    CHECK(position->mKind == FieldKind::WorldPosition);
+    const mir::WorldVec3 target{-150000.125 + 0.001, 350.5 - 0.002, 75000.5 + 0.003};
     REQUIRE(position->Write(transform, &target));
 
     CHECK(transform->Position() == target);
     CHECK(transform->Version() != before);
 
-    glm::dvec3 readBack{};
+    mir::WorldVec3 readBack{};
     position->Read(transform, &readBack);
     CHECK(readBack == target);
 }
@@ -192,14 +192,14 @@ TEST_CASE("A field with no setter refuses the write")
 
     const FieldDesc *position = ops.FindField("position");
     REQUIRE(position != nullptr);
-    CHECK(position->mKind == FieldKind::DVec3);
+    CHECK(position->mKind == FieldKind::WorldPosition);
     CHECK(position->ReadOnly());
 
     mir::WorldTransform value{};
-    const glm::dvec3 attempt{2.0};
+    const mir::WorldVec3 attempt{2.0};
     CHECK_FALSE(position->Write(&value, &attempt));
     CHECK(value.Linear() == glm::mat3{1.0f});
-    CHECK(value.Position().Meters() == glm::dvec3(0.0));
+    CHECK(value.Position().Meters() == mir::WorldVec3(0.0));
 }
 
 TEST_CASE("A registered tag reports size 0 and works through the erased ops")
@@ -266,27 +266,29 @@ TEST_CASE("A script declares a component and the registry lays it out")
     CHECK(ops.mAlign == 4);
 }
 
-TEST_CASE("A script-declared dvec3 field is 8-aligned and keeps full precision")
+TEST_CASE("A script-declared world_position field is aligned to WorldReal and keeps its precision")
 {
     constexpr RuntimeFieldDecl fields[] = {
         {"flag", FieldKind::Bool},
-        {"anchor", FieldKind::DVec3},
+        {"anchor", FieldKind::WorldPosition},
     };
 
     const ComponentOps &ops = ComponentRegistry::Instance().RegisterRuntime("ScriptAnchor", fields);
 
-    CHECK(ops.FindField("anchor")->mOffset == 8);
-    CHECK(ops.mSize == 32);
-    CHECK(ops.mAlign == 8);
+    // 8 and 32 in a large-world build, 4 and 16 in a float one
+    constexpr uint32_t kAlign = alignof(mir::WorldVec3);
+    CHECK(ops.FindField("anchor")->mOffset == kAlign);
+    CHECK(ops.mSize == kAlign + sizeof(mir::WorldVec3));
+    CHECK(ops.mAlign == kAlign);
 
     World world;
     const Entity entity = world.CreateEntity();
     ops.AddDefault(world, entity);
 
-    const glm::dvec3 anchor{150000.625 + 0.001, -20.0, -75000.25};
+    const mir::WorldVec3 anchor{150000.625 + 0.001, -20.0, -75000.25};
     REQUIRE(ops.FindField("anchor")->Write(ops.GetComponent(world, entity), &anchor));
 
-    glm::dvec3 readBack{};
+    mir::WorldVec3 readBack{};
     ops.FindField("anchor")->Read(ops.GetComponent(world, entity), &readBack);
     CHECK(readBack == anchor);
 }

@@ -74,7 +74,7 @@ namespace mir::audio {
 
             const glm::vec3 u = glm::normalize(ortho);
 
-            const glm::dvec3 pos = position.Meters();
+            const glm::dvec3 pos(position.Meters());
             AkSoundPosition out;
             out.Set(pos.x, pos.y, -pos.z, f.x, f.y, -f.z, u.x, u.y, -u.z);
             return out;

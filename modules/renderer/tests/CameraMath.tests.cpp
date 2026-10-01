@@ -32,7 +32,7 @@ namespace
 
     WorldPosition At(const glm::dvec3 &meters)
     {
-        const std::optional<WorldPosition> position = WorldPosition::FromMeters(meters);
+        const std::optional<WorldPosition> position = WorldPosition::FromDoubleMeters(meters);
         REQUIRE(position);
         return *position;
     }
@@ -134,9 +134,12 @@ TEST_CASE("Reverse-Z depth tells far surfaces apart where the usual mapping cann
 
 TEST_CASE("A camera ray starts at the camera's double position", "[renderer][lwc]")
 {
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
     const WorldRay ray = CenterRayFrom(kEdgeA);
 
-    CHECK(ray.origin.Meters() == kEdgeA);
+    CHECK(glm::dvec3(ray.origin.Meters()) == kEdgeA);
     CHECK(std::abs(glm::length(ray.direction) - 1.0f) <= 1e-6f);
     CHECK(std::abs(ray.direction.x) <= 1e-6f);
     CHECK(std::abs(ray.direction.y) <= 1e-6f);
@@ -167,6 +170,9 @@ TEST_CASE("A camera ray follows the viewport's NDC", "[renderer]")
 
 TEST_CASE("A far ray tells boxes two millimeters apart", "[renderer][lwc]")
 {
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
     const WorldRay ray = CenterRayFrom(kEdgeA);
     const glm::dvec3 ahead = kEdgeA + glm::dvec3(0.0, 0.0, -1.7);
 
@@ -182,6 +188,9 @@ TEST_CASE("A far ray tells boxes two millimeters apart", "[renderer][lwc]")
 
 TEST_CASE("A far pick matches the same pick at the origin", "[renderer][lwc]")
 {
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
     const glm::mat3 turn = glm::mat3_cast(glm::angleAxis(glm::radians(30.0f), glm::vec3(0.0f, 1.0f, 0.0f)));
     const glm::mat3 boxLinear =
         glm::mat3_cast(glm::angleAxis(glm::radians(40.0f), glm::normalize(glm::vec3(1.0f, 1.0f, 0.0f)))) *
@@ -239,6 +248,9 @@ TEST_CASE("The hit distance is meters along the ray for a scaled box", "[rendere
 
 TEST_CASE("A box beyond float range of the ray is not hit", "[renderer][lwc]")
 {
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
     const WorldRay ray = CenterRayFrom(glm::dvec3(0.0));
     const WorldPose unreachable{At(glm::dvec3(0.0, 0.0, -1e300))};
 

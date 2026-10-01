@@ -10,6 +10,7 @@
 #pragma once
 #include "core/ecs/ComponentAsserts.h"
 #include "core/ecs/ComponentFields.h"
+#include "core/math/WorldReal.h"
 
 #include <cmath>
 #include <cstdint>
@@ -24,14 +25,26 @@ namespace mir
     public:
         Transform() = default;
 
-        explicit Transform(const glm::dvec3 &position,
+        explicit Transform(const WorldVec3 &position,
                            const glm::quat &rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
                            const glm::vec3 &scale = glm::vec3(1.0f))
             : mPosition(position), mRotation(rotation), mScale(scale)
         {
         }
 
-        const glm::dvec3 &Position() const { return mPosition; }
+        // glm would narrow a wider vector silently. A double that reaches a
+        // float build goes through TryWorldVec3FromDouble first.
+        template <typename Other>
+            requires(sizeof(Other) > sizeof(WorldReal))
+        explicit Transform(const glm::vec<3, Other> &, const glm::quat & = {}, const glm::vec3 & = {}) = delete;
+        template <typename Other>
+            requires(sizeof(Other) > sizeof(WorldReal))
+        bool SetPosition(const glm::vec<3, Other> &) = delete;
+        template <typename Other>
+            requires(sizeof(Other) > sizeof(WorldReal))
+        bool Translate(const glm::vec<3, Other> &) = delete;
+
+        const WorldVec3 &Position() const { return mPosition; }
         const glm::quat &Rotation() const { return mRotation; }
         const glm::vec3 &Scale() const { return mScale; }
 
@@ -39,7 +52,7 @@ namespace mir
         uint32_t Version() const { return mVersion; }
 
         // Refuses a non-finite position: no write, no version bump.
-        bool SetPosition(const glm::dvec3 &position)
+        bool SetPosition(const WorldVec3 &position)
         {
             if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z))
                 return false;
@@ -61,7 +74,7 @@ namespace mir
         }
 
         // Refuses a non-finite delta or result: no write, no version bump.
-        bool Translate(const glm::dvec3 &delta) { return SetPosition(mPosition + delta); }
+        bool Translate(const WorldVec3 &delta) { return SetPosition(mPosition + delta); }
 
         // Applies `delta` on top of the current rotation, in local space.
         void Rotate(const glm::quat &delta)
@@ -89,7 +102,7 @@ namespace mir
                 mVersion = 1;
         }
 
-        glm::dvec3 mPosition{0.0};
+        WorldVec3 mPosition{0};
         glm::quat mRotation{1.0f, 0.0f, 0.0f, 0.0f}; // w, x, y, z - identity
         glm::vec3 mScale{1.0f};
         uint32_t mVersion = 1;
@@ -101,11 +114,11 @@ namespace mir
     // Accessor thunks
     inline constexpr FieldDesc kTransformFields[] = {
         // Absolute on a root, parent-local on a child.
-        {"position", FieldKind::DVec3, 0,
+        {"position", FieldKind::WorldPosition, 0,
          [](const void *component, void *out)
-         { *static_cast<glm::dvec3 *>(out) = static_cast<const Transform *>(component)->Position(); },
+         { *static_cast<WorldVec3 *>(out) = static_cast<const Transform *>(component)->Position(); },
          [](void *component, const void *in)
-         { static_cast<Transform *>(component)->SetPosition(*static_cast<const glm::dvec3 *>(in)); }},
+         { static_cast<Transform *>(component)->SetPosition(*static_cast<const WorldVec3 *>(in)); }},
 
         {"rotation", FieldKind::Quat, 0,
          [](const void *component, void *out)

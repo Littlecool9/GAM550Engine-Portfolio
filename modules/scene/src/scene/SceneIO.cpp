@@ -14,6 +14,7 @@
 #include "core/ecs/TransformHierarchy.h"
 #include "core/ecs/World.h"
 #include "core/log/Log.h"
+#include "core/math/WorldReal.h"
 
 #include <serial/JsonFile.h>
 
@@ -73,11 +74,16 @@ namespace mir
                     const auto &v = *static_cast<const glm::vec3 *>(bytes);
                     return json::array({ CleanFloat(v.x), CleanFloat(v.y), CleanFloat(v.z) });
                 }
-            case FieldKind::DVec3:
+            case FieldKind::WorldPosition:
                 {
-                    // nlohmann writes the shortest text that parses back to the same double
-                    const auto &v = *static_cast<const glm::dvec3 *>(bytes);
-                    return json::array({ v.x, v.y, v.z });
+                    const auto &v = *static_cast<const WorldVec3 *>(bytes);
+                    // nlohmann writes the shortest text that parses back to the
+                    // same double; a float build writes the float's, as for Vec3.
+                    if constexpr (kLargeWorld)
+                        return json::array({ v.x, v.y, v.z });
+                    else
+                        return json::array({ CleanFloat(static_cast<float>(v.x)), CleanFloat(static_cast<float>(v.y)),
+                                             CleanFloat(static_cast<float>(v.z)) });
                 }
             case FieldKind::Vec4:
                 {
@@ -135,7 +141,7 @@ namespace mir
                     v.z = value.at(2).get<float>();
                     break;
                 }
-            case FieldKind::DVec3:
+            case FieldKind::WorldPosition:
                 {
                     if (!value.is_array() || value.size() != 3)
                         return false;
@@ -147,10 +153,11 @@ namespace mir
                         if (!component.is_number())
                             return false;
                         v[i] = component.get<double>();
-                        if (!std::isfinite(v[i]))
-                            return false;
                     }
-                    *static_cast<glm::dvec3 *>(outBytes) = v;
+                    const std::optional<WorldVec3> position = TryWorldVec3FromDouble(v);
+                    if (!position)
+                        return false;
+                    *static_cast<WorldVec3 *>(outBytes) = *position;
                     break;
                 }
             case FieldKind::Vec4:
@@ -376,7 +383,8 @@ namespace mir
                     FieldBuffer buffer{};
                     if (!JsonToField(field.mKind, *it, buffer.mBytes))
                     {
-                        MIR_LOG_ERROR("LoadScene: entity {} '{}.{}' is not three finite numbers, left at default",
+                        MIR_LOG_ERROR("LoadScene: entity {} '{}.{}' is not three finite numbers a world position "
+                                      "can hold, left at default",
                             id, typeName, field.mName);
                         continue;
                     }

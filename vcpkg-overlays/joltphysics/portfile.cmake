@@ -1,5 +1,5 @@
-# The vcpkg joltphysics 5.5.0 port plus -DDOUBLE_PRECISION=ON: the upstream port
-# has no feature for it. Jolt exports JPH_DOUBLE_PRECISION as a PUBLIC compile
+# The vcpkg joltphysics 5.5.0 port plus a double-precision feature, which the
+# upstream port lacks. Jolt exports JPH_DOUBLE_PRECISION as a PUBLIC compile
 # definition, so every target linking Jolt::Jolt sees the same configuration.
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
@@ -16,6 +16,7 @@ string(COMPARE EQUAL "${VCPKG_CRT_LINKAGE}" "static" USE_STATIC_CRT)
 vcpkg_check_features(OUT_FEATURE_OPTIONS FEATURE_OPTIONS
     FEATURES
         debugrenderer       DEBUG_RENDERER_IN_DEBUG_AND_RELEASE
+        double-precision    DOUBLE_PRECISION
         profiler            PROFILER_IN_DEBUG_AND_RELEASE
         rtti                CPP_RTTI_ENABLED
 )
@@ -33,7 +34,6 @@ vcpkg_cmake_configure(
         -DUSE_STATIC_MSVC_RUNTIME_LIBRARY=${USE_STATIC_CRT}
         -DENABLE_ALL_WARNINGS=OFF
         -DOVERRIDE_CXX_FLAGS=OFF
-        -DDOUBLE_PRECISION=ON
         ${FEATURE_OPTIONS}
     OPTIONS_RELEASE
         -DGENERATE_DEBUG_SYMBOLS=OFF

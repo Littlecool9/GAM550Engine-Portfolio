@@ -15,6 +15,7 @@
 #include <core/ecs/TransformHierarchy.h>
 #include <core/ecs/World.h>
 #include <core/log/Log.h>
+#include <core/math/WorldReal.h>
 
 #include <glm/gtc/type_ptr.hpp>
 
@@ -47,7 +48,7 @@ namespace mir
             int32_t asInt;
             float asFloat;
             glm::vec3 asVec3;
-            glm::dvec3 asDVec3;
+            WorldVec3 asWorldPosition;
             glm::vec4 asVec4;
             glm::quat asQuat;
             glm::mat4 asMat4;
@@ -60,7 +61,7 @@ namespace mir
             }
         };
 
-        sol::table DVec3ToLua(sol::state_view lua, const glm::dvec3 &value)
+        sol::table WorldVec3ToLua(sol::state_view lua, const WorldVec3 &value)
         {
             sol::table out = lua.create_table();
             out["x"] = value.x;
@@ -101,11 +102,11 @@ namespace mir
                 out["z"] = value.z;
                 return out;
             }
-            case FieldKind::DVec3:
+            case FieldKind::WorldPosition:
             {
-                glm::dvec3 value{};
+                WorldVec3 value{};
                 field.Read(component, &value);
-                return DVec3ToLua(lua, value);
+                return WorldVec3ToLua(lua, value);
             }
             case FieldKind::Vec4:
             {
@@ -197,16 +198,17 @@ namespace mir
                 scratch.asVec3 = glm::vec3(t.get_or("x", 0.0f), t.get_or("y", 0.0f), t.get_or("z", 0.0f));
                 return true;
             }
-            case FieldKind::DVec3:
+            case FieldKind::WorldPosition:
             {
                 if (!value.is<sol::table>())
                     return false;
                 const sol::table t = value.as<sol::table>();
                 const glm::dvec3 v(t.get_or("x", 0.0), t.get_or("y", 0.0), t.get_or("z", 0.0));
                 // Pre-examine valid or not cuz Transform is silent about invalid conversion
-                if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z))
+                const std::optional<WorldVec3> position = TryWorldVec3FromDouble(v);
+                if (!position)
                     return false;
-                scratch.asDVec3 = v;
+                scratch.asWorldPosition = *position;
                 return true;
             }
             case FieldKind::Vec4:
@@ -288,8 +290,8 @@ namespace mir
                 return FieldKind::Float;
             if (kind == "vec3")
                 return FieldKind::Vec3;
-            if (kind == "dvec3")
-                return FieldKind::DVec3;
+            if (kind == "world_position")
+                return FieldKind::WorldPosition;
             if (kind == "vec4")
                 return FieldKind::Vec4;
             if (kind == "quat")
@@ -379,7 +381,7 @@ namespace mir
             if (world.GetComponent<Transform>(entity) == nullptr)
                 return sol::nil; // dead entity or no Transform
 
-            return DVec3ToLua(sol::state_view(state), ResolveWorld(world, entity).position.Meters());
+            return WorldVec3ToLua(sol::state_view(state), ResolveWorld(world, entity).position.Meters());
         }
 
         // Resolved now, like world_position. linear is world rotation * scale,
@@ -398,7 +400,7 @@ namespace mir
                 linear[i + 1] = m[i];
 
             sol::table out = lua.create_table();
-            out["position"] = DVec3ToLua(lua, pose.position.Meters());
+            out["position"] = WorldVec3ToLua(lua, pose.position.Meters());
             out["linear"] = linear;
             return out;
         }

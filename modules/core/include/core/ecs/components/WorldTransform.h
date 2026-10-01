@@ -24,14 +24,14 @@ namespace mir
         struct TransformResolver;
     }
 
-    // position is in double precision while the other are stored in float as it was
+    // position is in world precision (WorldReal); rotation and scale stay float
     struct WorldPose
     {
         WorldPosition position;
         glm::mat3 linear{1.0f};
 
         // The only way to a float 4x4: the translation is position - origin,
-        // subtracted in double. nullopt if that offset does not fit a float.
+        // subtracted in world precision. nullopt if that offset does not fit a float.
         [[nodiscard]] std::optional<glm::mat4> TryMatrixRelativeTo(WorldPosition origin) const
         {
             const std::optional<glm::vec3> translation = TryCameraRelativeFloat(position, origin);
@@ -44,14 +44,14 @@ namespace mir
         }
     };
 
-    // It fails when the result is out of precision range or being placed at an invalid place
+    // nullopt when the translation or the result is not a finite world position.
     [[nodiscard]] inline std::optional<WorldPose> TryComposePose(
-        const WorldPose &parent, const glm::mat3 &localLinear, const glm::vec3 &localTranslation)
+        const WorldPose &parent, const glm::mat3 &localLinear, const WorldVec3 &localTranslation)
     {
         const std::optional<ParentLocalTranslation> translation =
-            ParentLocalTranslation::FromMeters(glm::dvec3(localTranslation));
+            ParentLocalTranslation::FromMeters(localTranslation);
         const std::optional<WorldOffset> offset =
-            translation ? TryParentLocalToWorldOffset(glm::dmat3(parent.linear), *translation) : std::nullopt;
+            translation ? TryParentLocalToWorldOffset(WorldMat3(parent.linear), *translation) : std::nullopt;
         const std::optional<WorldPosition> position =
             offset ? TryTranslateWorld(parent.position, *offset) : std::nullopt;
         if (!position)
@@ -65,7 +65,7 @@ namespace mir
         const WorldPose &parent, WorldPosition world)
     {
         const std::optional<WorldOffset> offset = TryWorldDifference(world, parent.position);
-        return offset ? TryWorldOffsetToParentLocal(glm::dmat3(parent.linear), *offset) : std::nullopt;
+        return offset ? TryWorldOffsetToParentLocal(WorldMat3(parent.linear), *offset) : std::nullopt;
     }
 
     // Read it through ResolveWorld (core/ecs/TransformHierarchy.h)
@@ -104,9 +104,9 @@ namespace mir
 
     // only getter, set is only to be done by Hierarchy System
     inline constexpr FieldDesc kWorldTransformFields[] = {
-        {"position", FieldKind::DVec3, 0,
+        {"position", FieldKind::WorldPosition, 0,
          [](const void *component, void *out)
-         { *static_cast<glm::dvec3 *>(out) = static_cast<const WorldTransform *>(component)->Position().Meters(); },
+         { *static_cast<WorldVec3 *>(out) = static_cast<const WorldTransform *>(component)->Position().Meters(); },
          nullptr},
     };
 }

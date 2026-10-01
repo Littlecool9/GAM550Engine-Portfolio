@@ -1,8 +1,8 @@
 {
   "name": "joltphysics",
   "version": "5.5.0",
-  "port-version": 1,
-  "description": "A multi core friendly rigid body physics and collision detection library suitable for games and VR applications. Mjolnir overlay: built with double-precision world positions (JPH_DOUBLE_PRECISION).",
+  "port-version": 2,
+  "description": "A multi core friendly rigid body physics and collision detection library suitable for games and VR applications. Mjolnir overlay: adds the double-precision feature.",
   "homepage": "https://github.com/jrouwe/JoltPhysics",
   "license": "MIT",
   "dependencies": [
@@ -18,6 +18,9 @@
   "features": {
     "debugrenderer": {
       "description": "Enable debug renderer in Debug and Release builds"
+    },
+    "double-precision": {
+      "description": "Double-precision world positions (JPH_DOUBLE_PRECISION)"
     },
     "profiler": {
       "description": "Enable the profiler in Debug and Release builds"

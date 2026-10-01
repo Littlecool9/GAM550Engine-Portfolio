@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.26)
 
+
+option(MIR_LARGE_WORLD "Double-precision world positions and Jolt" ON)
+if(MIR_LARGE_WORLD)
+    list(APPEND VCPKG_MANIFEST_FEATURES large-world)
+endif()
+
 project(Mjolnir
     VERSION 0.1.0
     DESCRIPTION "A modular 3D engine"
@@ -113,13 +119,21 @@ foreach(manifest IN LISTS game_manifests)
         set(assets_root "assets")
     endif()
 
-    # skip missing roots (AssetCooker fails on them); ABSOLUTE normalizes "./"
-    get_filename_component(assets_abs "${game_dir}/${assets_root}" ABSOLUTE)
-    if(IS_DIRECTORY "${assets_abs}")
-        file(RELATIVE_PATH assets_rel "${CMAKE_SOURCE_DIR}" "${assets_abs}")
-        list(APPEND game_asset_roots "${assets_rel}")
-        list(APPEND game_copy_commands COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
-             "${assets_abs}" "$<TARGET_FILE_DIR:MjolnirEngine>/games/${game_name}/${assets_root}")
+    # The id root LoadGameProject builds: "games/<dir>/" + assetsRoot normalized on
+    # its own, so a root it refuses (outside the game, ".", absolute) is not cooked.
+    cmake_path(SET assets_norm NORMALIZE "${assets_root}")
+    string(REGEX REPLACE "/+$" "" assets_norm "${assets_norm}")
+    if(assets_norm STREQUAL "" OR assets_norm STREQUAL "." OR assets_norm MATCHES "^\\.\\.(/|$)"
+       OR IS_ABSOLUTE "${assets_root}" OR assets_root MATCHES "^[/\\\\]|:")
+        message(WARNING "${manifest}: assetsRoot \"${assets_root}\" is not a relative path inside the game; not cooked")
+    else()
+        set(assets_rel "games/${game_name}/${assets_norm}")
+        # skip missing roots (AssetCooker fails on them)
+        if(IS_DIRECTORY "${CMAKE_SOURCE_DIR}/${assets_rel}")
+            list(APPEND game_asset_roots "${assets_rel}")
+            list(APPEND game_copy_commands COMMAND "${CMAKE_COMMAND}" -E copy_directory_if_different
+                 "${CMAKE_SOURCE_DIR}/${assets_rel}" "$<TARGET_FILE_DIR:MjolnirEngine>/${assets_rel}")
+        endif()
     endif()
 
     list(APPEND game_copy_commands COMMAND "${CMAKE_COMMAND}" -E copy_if_different

@@ -31,7 +31,7 @@ namespace
 
     WorldPosition World(double x, double y, double z)
     {
-        return *WorldPosition::FromMeters({x, y, z});
+        return *WorldPosition::FromDoubleMeters({x, y, z});
     }
 
     MockTerrainSource MakeSource(const TerrainPlacement &placement, MockHeightFunction height = Plane)
@@ -73,10 +73,10 @@ TEST_CASE("MockTerrainSource maps a far world position to key, release and world
     // Corner = placement + (sample X, local height, sample Z), all binary-exact here.
     REQUIRE(lookup.cornerWorldPositions);
     const auto &corners = *lookup.cornerWorldPositions;
-    CHECK(corners[0].Meters() == glm::dvec3(-150001.125, Plane(-1.0, 511.0) + 350.5, 150510.875));
-    CHECK(corners[1].Meters() == glm::dvec3(-150000.125, Plane(0.0, 511.0) + 350.5, 150510.875));
-    CHECK(corners[2].Meters() == glm::dvec3(-150001.125, Plane(-1.0, 512.0) + 350.5, 150511.875));
-    CHECK(corners[3].Meters() == glm::dvec3(-150000.125, Plane(0.0, 512.0) + 350.5, 150511.875));
+    CHECK(glm::dvec3(corners[0].Meters()) == glm::dvec3(-150001.125, Plane(-1.0, 511.0) + 350.5, 150510.875));
+    CHECK(glm::dvec3(corners[1].Meters()) == glm::dvec3(-150000.125, Plane(0.0, 511.0) + 350.5, 150510.875));
+    CHECK(glm::dvec3(corners[2].Meters()) == glm::dvec3(-150001.125, Plane(-1.0, 512.0) + 350.5, 150511.875));
+    CHECK(glm::dvec3(corners[3].Meters()) == glm::dvec3(-150000.125, Plane(0.0, 512.0) + 350.5, 150511.875));
 }
 
 TEST_CASE("MockTerrainSource neighbours agree on shared edge and corner samples", "[terrain][mock]")
@@ -94,7 +94,7 @@ TEST_CASE("MockTerrainSource neighbours agree on shared edge and corner samples"
     CHECK((*left.cornerWorldPositions)[3].Meters() == (*right.cornerWorldPositions)[2].Meters());
 
     // The four tiles around the origin all reach sample (0, 0).
-    const glm::dvec3 atOrigin(0.0, source.SampleHeightGlobal({0, 0})->localHeight, 0.0);
+    const mir::WorldVec3 atOrigin(0.0, source.SampleHeightGlobal({0, 0})->localHeight, 0.0);
     CHECK((*source.Lookup(World(-0.5, 0.0, -0.5)).cornerWorldPositions)[3].Meters() == atOrigin);
     CHECK((*source.Lookup(World(0.5, 0.0, -0.5)).cornerWorldPositions)[2].Meters() == atOrigin);
     CHECK((*source.Lookup(World(-0.5, 0.0, 0.5)).cornerWorldPositions)[1].Meters() == atOrigin);
@@ -131,13 +131,19 @@ TEST_CASE("MockTerrainSource never reports a height it does not have", "[terrain
     CHECK_FALSE(outside.release);
     CHECK_FALSE(outside.cornerWorldPositions);
 
-    const MockTerrainSource far = MakeSource(TerrainPlacement{kAsset, World(-1.0e308, 0.0, 0.0)});
-    const MockLookup invalid = far.Lookup(World(1.0e308, 0.0, 0.0));
-    CHECK(invalid.address.status == TileAddressStatus::InvalidInput);
-    CHECK_FALSE(invalid.cornerWorldPositions);
+    // Only a large-world build holds positions whose difference overflows a double.
+    if constexpr (mir::kLargeWorld)
+    {
+        const MockTerrainSource far = MakeSource(TerrainPlacement{kAsset, World(-1.0e308, 0.0, 0.0)});
+        const MockLookup invalid = far.Lookup(World(1.0e308, 0.0, 0.0));
+        CHECK(invalid.address.status == TileAddressStatus::InvalidInput);
+        CHECK_FALSE(invalid.cornerWorldPositions);
+    }
 
-    // Local height + placement Y overflows: TryTerrainLocalToWorld refuses it, no inf corner.
-    const MockTerrainSource high = MakeSource(TerrainPlacement{kAsset, World(0.0, 1.0e308, 0.0)},
+    // Local height + placement Y does not fit a world position: TryTerrainLocalToWorld
+    // refuses it, no inf corner.
+    const double maxWorld = std::numeric_limits<mir::WorldReal>::max();
+    const MockTerrainSource high = MakeSource(TerrainPlacement{kAsset, World(0.0, maxWorld, 0.0)},
                                               [](double, double) { return 1.0e308; });
     const MockLookup overflow = high.Lookup(World(0.5, 0.0, 0.5));
     REQUIRE(overflow.address.IsInside());

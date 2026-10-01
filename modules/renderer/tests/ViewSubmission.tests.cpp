@@ -32,7 +32,7 @@ namespace
 
     WorldPosition At(const glm::dvec3 &meters)
     {
-        const std::optional<WorldPosition> position = WorldPosition::FromMeters(meters);
+        const std::optional<WorldPosition> position = WorldPosition::FromDoubleMeters(meters);
         REQUIRE(position);
         return *position;
     }
@@ -64,6 +64,9 @@ namespace
 
 TEST_CASE("A far draw keeps a millimeter offset from its viewport camera", "[renderer][lwc]")
 {
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
     const std::vector<WorldDrawItem> world{ItemAt(kEdgeA + kStep)};
     std::vector<DrawItem> view;
 
@@ -123,6 +126,9 @@ TEST_CASE("A far camera projects like the same camera at the origin", "[renderer
 
 TEST_CASE("Far transparent draws sort back to front after the opaque ones", "[renderer][lwc]")
 {
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
     // camera at A looking down -Z; two transparent draws 1 cm apart in depth,
     // well inside float's 1/64 m spacing at this X
     const WorldPose camera{At(kEdgeA)};
@@ -151,6 +157,9 @@ TEST_CASE("Far transparent draws sort back to front after the opaque ones", "[re
 
 TEST_CASE("A draw beyond float range of the camera is left out", "[renderer][lwc]")
 {
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
     const std::vector<WorldDrawItem> world{ItemAt(glm::dvec3(1e300, 0.0, 0.0)), ItemAt(kStep)};
     std::vector<DrawItem> view{DrawItem{}, DrawItem{}, DrawItem{}};
 

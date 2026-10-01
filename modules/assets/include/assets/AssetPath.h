@@ -33,13 +33,11 @@ namespace mir
 
     std::string_view Describe(AssetPathError error);
 
-    // Purely lexical, never touches the disk: '\' becomes '/', empty and "."
-    // segments drop, ".." pops one segment and fails with EscapesRoot when
-    // there is none. Case sensitive
+    // Lexical only: '\' to '/', drops empty and "." segments, ".." pops one
+    // (EscapesRoot past the start). Case sensitive.
     AssetPathResult NormalizeAssetPath(std::string_view path);
 
-    // The string MakeAssetId hashes: normalized idRoot (e.g. "games/HelloWorld/assets")
-    // + '/' + normalized relative. relative may not climb out of idRoot. Renaming
-    // or moving the source changes the id; references must be updated explicitly.
+    // The string MakeAssetId hashes: idRoot + '/' + relative, both normalized;
+    // relative may not climb out of idRoot.
     AssetPathResult MakeLogicalAssetPath(std::string_view idRoot, std::string_view relative);
 }

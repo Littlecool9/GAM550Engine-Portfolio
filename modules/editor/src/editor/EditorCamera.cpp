@@ -41,7 +41,7 @@ namespace mir
         return WorldPose{ mPosition, glm::mat3(right, up, -forward) };
     }
 
-    bool EditorCamera::Translate(const glm::dvec3 &meters)
+    bool EditorCamera::Translate(const WorldVec3 &meters)
     {
         const std::optional<WorldOffset> offset = WorldOffset::FromMeters(meters);
         const std::optional<WorldPosition> moved = offset ? TryTranslateWorld(mPosition, *offset) : std::nullopt;
@@ -60,9 +60,9 @@ namespace mir
         const float halfFov = glm::radians(std::clamp(mLens.mFovYDegrees, 1.0f, 179.0f)) * 0.5f;
         const float fit = std::max(radius, kMinRadius) / std::sin(halfFov) * kMargin;
         // stay outside the near plane whatever the lens says
-        const double distance = std::max(fit, mLens.mNearZ * 2.0f);
+        const WorldReal distance = std::max(fit, mLens.mNearZ * 2.0f);
 
-        const std::optional<WorldOffset> back = WorldOffset::FromMeters(glm::dvec3(Forward()) * -distance);
+        const std::optional<WorldOffset> back = WorldOffset::FromMeters(WorldVec3(Forward()) * -distance);
         const std::optional<WorldPosition> eye = back ? TryTranslateWorld(target, *back) : std::nullopt;
         if (!eye)
             return false;
@@ -99,7 +99,7 @@ namespace mir
         const glm::vec3 right = Right();
 
         // The frame's step is small and float; it meets the far position only
-        // in the double add, so a millimeter of travel is not rounded away.
+        // in the world-precision add, so a millimeter of travel is not rounded away.
         glm::vec3 step{ 0.0f };
         if (input.IsDown(Key::W))
             step += forward * speed;
@@ -114,6 +114,6 @@ namespace mir
         if (input.IsDown(Key::Q))
             step -= Up() * speed;
 
-        Translate(glm::dvec3(step));
+        Translate(WorldVec3(step));
     }
 }

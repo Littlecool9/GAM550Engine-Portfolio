@@ -111,20 +111,21 @@ namespace
         return glm::vec3(v.GetX(), v.GetY(), v.GetZ());
     }
 
-    // A float Jolt would round every world position on the way in. CMake and
-    // JoltRuntime check the package; this checks what this file compiled against.
-    static_assert(sizeof(JPH::Real) == sizeof(double),
-        "PhysicsWorld needs Jolt built with JPH_DOUBLE_PRECISION (vcpkg-overlays/joltphysics)");
+    // A Jolt of another precision would round or widen every world position on
+    // the way in. CMake and JoltRuntime check the package; this checks what this
+    // file compiled against.
+    static_assert(sizeof(JPH::Real) == sizeof(mir::WorldReal),
+        "JPH_DOUBLE_PRECISION must match MIR_LARGE_WORLD (the large-world vcpkg feature)");
 
     JPH::RVec3 ToJolt(mir::WorldPosition position)
     {
-        const glm::dvec3 meters = position.Meters();
+        const mir::WorldVec3 meters = position.Meters();
         return JPH::RVec3(meters.x, meters.y, meters.z);
     }
 
     std::optional<mir::WorldPosition> PositionFromJolt(JPH::RVec3Arg v)
     {
-        return mir::WorldPosition::FromMeters(glm::dvec3(v.GetX(), v.GetY(), v.GetZ()));
+        return mir::WorldPosition::FromMeters(mir::WorldVec3(v.GetX(), v.GetY(), v.GetZ()));
     }
 
     JPH::BodyID ToBodyId(mir::BodyHandle handle)

@@ -12,6 +12,7 @@
 
 #include <core/ecs/ComponentFields.h>
 #include <core/ecs/ComponentRegistry.h>
+#include <core/math/WorldReal.h>
 #include <editor/Selection.h>
 
 #include <glm/gtc/quaternion.hpp>
@@ -50,10 +51,11 @@ namespace mir
                 return ImGui::DragFloat(label, static_cast<float *>(bytes), 0.1f);
             case FieldKind::Vec3:
                 return ImGui::DragFloat3(label, glm::value_ptr(*static_cast<glm::vec3 *>(bytes)), 0.1f);
-            case FieldKind::DVec3: {
+            case FieldKind::WorldPosition: {
                 // NoRoundToFormat: a drag must not snap a far position to the 4 shown decimals
-                glm::dvec3 &value = *static_cast<glm::dvec3 *>(bytes);
-                if (!ImGui::DragScalarN(label, ImGuiDataType_Double, glm::value_ptr(value), 3, 0.1f, nullptr,
+                WorldVec3 &value = *static_cast<WorldVec3 *>(bytes);
+                constexpr ImGuiDataType kWorldDataType = kLargeWorld ? ImGuiDataType_Double : ImGuiDataType_Float;
+                if (!ImGui::DragScalarN(label, kWorldDataType, glm::value_ptr(value), 3, 0.1f, nullptr,
                                         nullptr, "%.4f", ImGuiSliderFlags_NoRoundToFormat))
                     return false;
                 // typed text such as 1e400 parses to inf, which Transform's setter drops silently

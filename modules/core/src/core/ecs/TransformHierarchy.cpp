@@ -84,30 +84,15 @@ namespace mir
         }
 
         // A root composes under the identity pose at the origin, which is exact
-        // in double, so one path serves roots and children.
+        // in either precision, so one path serves roots and children.
         WorldPose Compose(const WorldPose &parent, const Transform &local, Entity entity)
         {
-            WorldPose pose;
-            pose.linear = parent.linear * local.LinearMatrix();
+            if (const std::optional<WorldPose> pose = TryComposePose(parent, local.LinearMatrix(), local.Position()))
+                return *pose;
 
-            const std::optional<ParentLocalTranslation> translation =
-                ParentLocalTranslation::FromMeters(local.Position());
-            const std::optional<WorldOffset> offset =
-                translation ? TryParentLocalToWorldOffset(glm::dmat3(parent.linear), *translation) : std::nullopt;
-            const std::optional<WorldPosition> position =
-                offset ? TryTranslateWorld(parent.position, *offset) : std::nullopt;
-
-            if (position)
-            {
-                pose.position = *position;
-            }
-            else
-            {
-                MIR_LOG_WARN("ResolveWorld: entity {} leaves the finite world; kept at its parent's position",
-                             entity.mIndex);
-                pose.position = parent.position;
-            }
-            return pose;
+            MIR_LOG_WARN("ResolveWorld: entity {} leaves the finite world; kept at its parent's position",
+                         entity.mIndex);
+            return WorldPose{ parent.position, parent.linear * local.LinearMatrix() };
         }
 
         // destroy all destroyed entity's children

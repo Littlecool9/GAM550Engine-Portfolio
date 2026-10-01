@@ -362,7 +362,7 @@ namespace mir
         if (mGizmoOperation == GizmoOperation::Translate)
         {
             const std::optional<WorldOffset> fromCamera =
-                WorldOffset::FromMeters(glm::dvec3(glm::vec3(gizmoMatrix[3])));
+                WorldOffset::FromMeters(WorldVec3(glm::vec3(gizmoMatrix[3])));
             const std::optional<WorldPosition> moved =
                 fromCamera ? TryTranslateWorld(camera.position, *fromCamera) : std::nullopt;
             const std::optional<ParentLocalTranslation> local =

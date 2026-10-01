@@ -22,29 +22,29 @@ namespace
     constexpr float kStep = 1.0f / 60.0f;
 
     // Map-edge coordinates shared with the terrain ADRs.
-    const glm::dvec3 kEdgeA{-150000.125, 350.5, 75000.5};
-    const glm::dvec3 kEdgeB{150000.625, -20.0, -75000.25};
-    const glm::dvec3 kNudge{0.001, -0.002, 0.003};
+    const mir::WorldVec3 kEdgeA{-150000.125, 350.5, 75000.5};
+    const mir::WorldVec3 kEdgeB{150000.625, -20.0, -75000.25};
+    const mir::WorldVec3 kNudge{0.001, -0.002, 0.003};
 
-    mir::WorldPosition At(const glm::dvec3 &meters)
+    mir::WorldPosition At(const mir::WorldVec3 &meters)
     {
         const std::optional<mir::WorldPosition> position = mir::WorldPosition::FromMeters(meters);
         REQUIRE(position);
         return *position;
     }
 
-    mir::WorldPosition At(double x, double y, double z) { return At(glm::dvec3(x, y, z)); }
+    mir::WorldPosition At(mir::WorldReal x, mir::WorldReal y, mir::WorldReal z) { return At(mir::WorldVec3(x, y, z)); }
 
-    glm::dvec3 MetersOf(const mir::PhysicsWorld &world, mir::BodyHandle body)
+    mir::WorldVec3 MetersOf(const mir::PhysicsWorld &world, mir::BodyHandle body)
     {
         const std::optional<mir::WorldPosition> position = world.BodyPosition(body);
         REQUIRE(position);
         return position->Meters();
     }
 
-    double MaxError(const glm::dvec3 &actual, const glm::dvec3 &expected)
+    double MaxError(const mir::WorldVec3 &actual, const mir::WorldVec3 &expected)
     {
-        const glm::dvec3 error = glm::abs(actual - expected);
+        const mir::WorldVec3 error = glm::abs(actual - expected);
         return std::max({error.x, error.y, error.z});
     }
 
@@ -55,7 +55,7 @@ namespace
     }
 
     // A wide, thin slab centred on `center`; its top surface is 0.5 above it.
-    mir::BodyHandle AddFloor(mir::PhysicsWorld &world, const glm::dvec3 &center = glm::dvec3(0.0))
+    mir::BodyHandle AddFloor(mir::PhysicsWorld &world, const mir::WorldVec3 &center = mir::WorldVec3(0.0))
     {
         return world.CreateStaticBox(At(center), glm::vec3(10.0f, 0.5f, 10.0f));
     }
@@ -207,7 +207,10 @@ TEST_CASE("Several worlds can exist at once", "[physics]")
 
 TEST_CASE("A body keeps a millimeter at the map edge", "[physics][lwc]")
 {
-    for (const glm::dvec3 &edge : {kEdgeA, kEdgeB})
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
+    for (const mir::WorldVec3 &edge : {kEdgeA, kEdgeB})
     {
         mir::PhysicsWorld world;
 
@@ -215,11 +218,11 @@ TEST_CASE("A body keeps a millimeter at the map edge", "[physics][lwc]")
         const mir::BodyHandle body = world.CreateStaticSphere(At(edge + kNudge), 0.5f);
         CHECK(MetersOf(world, body) == edge + kNudge);
 
-        world.SetBodyTransform(body, At(edge + 2.0 * kNudge), mir::kIdentityRotation);
-        CHECK(MetersOf(world, body) == edge + 2.0 * kNudge);
+        world.SetBodyTransform(body, At(edge + kNudge + kNudge), mir::kIdentityRotation);
+        CHECK(MetersOf(world, body) == edge + kNudge + kNudge);
 
         world.Step(kStep);
-        CHECK(MetersOf(world, body) == edge + 2.0 * kNudge);
+        CHECK(MetersOf(world, body) == edge + kNudge + kNudge);
 
         // as a float world position the nudge is gone
         CHECK(static_cast<float>(edge.x + kNudge.x) == static_cast<float>(edge.x));
@@ -228,9 +231,12 @@ TEST_CASE("A body keeps a millimeter at the map edge", "[physics][lwc]")
 
 TEST_CASE("A slow body at the map edge moves as it does at the origin", "[physics][lwc]")
 {
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
     // 0.05 m/s is 0.83 mm a step, far below the 1/64 m spacing of a float out here
-    glm::dvec3 travelled[3];
-    const glm::dvec3 starts[3] = {glm::dvec3(0.0), kEdgeA, kEdgeB};
+    mir::WorldVec3 travelled[3];
+    const mir::WorldVec3 starts[3] = {mir::WorldVec3(0.0), kEdgeA, kEdgeB};
     for (int i = 0; i < 3; ++i)
     {
         mir::PhysicsWorldDesc desc;
@@ -252,17 +258,20 @@ TEST_CASE("A slow body at the map edge moves as it does at the origin", "[physic
 
 TEST_CASE("Bodies collide at the map edge as they do at the origin", "[physics][lwc]")
 {
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
     double restHeight[3];
-    const glm::dvec3 floors[3] = {glm::dvec3(0.0), kEdgeA, kEdgeB};
+    const mir::WorldVec3 floors[3] = {mir::WorldVec3(0.0), kEdgeA, kEdgeB};
     for (int i = 0; i < 3; ++i)
     {
         mir::PhysicsWorld world;
 
         AddFloor(world, floors[i]);
-        const mir::BodyHandle sphere = world.CreateDynamicSphere(At(floors[i] + glm::dvec3(0.0, 3.0, 0.0)), 0.5f);
+        const mir::BodyHandle sphere = world.CreateDynamicSphere(At(floors[i] + mir::WorldVec3(0.0, 3.0, 0.0)), 0.5f);
         StepFor(world, 180);
 
-        const glm::dvec3 rest = MetersOf(world, sphere) - floors[i];
+        const mir::WorldVec3 rest = MetersOf(world, sphere) - floors[i];
         restHeight[i] = rest.y;
 
         // landed on the floor, and did not drift sideways

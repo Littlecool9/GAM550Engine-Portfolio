@@ -38,7 +38,7 @@ namespace mir
         void SetPosition(WorldPosition position) { mPosition = position; }
 
         // Refuses a move that would leave the finite world.
-        bool Translate(const glm::dvec3 &meters);
+        bool Translate(const WorldVec3 &meters);
 
         // Backs away from `target` along the current view direction until a
         // sphere of `radius` meters around it fits the view.
