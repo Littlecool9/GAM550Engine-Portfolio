@@ -20,6 +20,7 @@
 #include <terrain/TerrainRelease.h>
 
 #include <catch2/catch_test_macros.hpp>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -249,5 +250,51 @@ namespace mir::terrainbake::test
                 found.push_back(d);
         }
         return found;
+    }
+
+    inline TerrainReleaseId BakeCandidate(const fs::path &dir, std::optional<uint64_t> nonce = std::nullopt,
+                                          const fs::path &recipe = ExampleRecipePath())
+    {
+        TerrainBakeRequest request = ExampleRequest(dir, nonce);
+        request.recipePath = recipe;
+        const TerrainReport report = RunTerrainBake(request);
+        for (const TerrainDiagnostic &d : report.diagnostics)
+            UNSCOPED_INFO(FormatDiagnostic(d));
+        REQUIRE(report.Ok());
+        return report.release->release;
+    }
+
+    // Same asset path, new fingerprint and heights.
+    inline fs::path WriteSeedRecipe(const fs::path &dir, uint64_t seed,
+                                    const std::string &name = "relief-2x2.terrain.json")
+    {
+        const std::optional<std::string> text = ReadText(ExampleRecipePath());
+        REQUIRE(text);
+        nlohmann::json recipe = nlohmann::json::parse(*text);
+        recipe["seed"] = seed;
+        fs::create_directories(dir);
+        REQUIRE(WriteText(dir / name, recipe.dump(2)));
+        return dir / name;
+    }
+
+    inline std::vector<TileHeights> ReadAllTiles(const TerrainReleaseHandle &handle)
+    {
+        std::vector<TileHeights> tiles;
+        for (const TerrainTileRecord &record : handle.Index().tiles)
+        {
+            TerrainResult<TileHeights> tile = handle.ReadTile({handle.Info().asset, record.tile});
+            REQUIRE(tile);
+            tiles.push_back(std::move(*tile.value));
+        }
+        return tiles;
+    }
+
+    inline std::vector<std::string> ReleaseDirNames(const fs::path &assetDir)
+    {
+        std::vector<std::string> names;
+        for (const std::string &name : FileNames(assetDir))
+            if (name.size() == 16 && fs::is_directory(assetDir / name))
+                names.push_back(name);
+        return names;
     }
 }

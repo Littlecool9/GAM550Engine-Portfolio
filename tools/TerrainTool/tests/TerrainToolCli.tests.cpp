@@ -8,7 +8,10 @@
  */
 #include "TerrainBakeTestSupport.h"
 
+#include <TerrainPublish.h>
+
 #include <core/platform/Process.h>
+#include <terrain/TerrainAssetPath.h>
 #include <terrain/TerrainPackWriter.h>
 #include <terrain/TerrainRelease.h>
 #include <terrain/TerrainSurface.h>
@@ -395,4 +398,119 @@ TEST_CASE("Bad command lines exit 2 and still leave a report", "[terraintool][cl
     CHECK(Run(ValidateArgs(good, good / "v.json")) == 2);
     CHECK_FALSE(fs::exists(good / "v.json"));
     CHECK(Run(ValidateArgs(good, report)) == 0);
+}
+
+TEST_CASE("TerrainTool publish and sync report what they did, with exit codes", "[terraintool][cli][publish]")
+{
+    ScratchDir scratch("cli_publish");
+    const fs::path candidate = scratch.path / "build" / "candidate";
+    const fs::path releases = scratch.path / "releases";
+    const fs::path reportPath = scratch.path / "reports" / "publish.json";
+    const AssetId asset = MakeAssetId(ExampleAssetPath());
+    REQUIRE(Run(BakeArgs(candidate, scratch.path / "reports" / "bake.json")) == 0);
+    const std::vector<std::string> publish{"publish",  "--candidate", candidate.string(), "--releases",
+                                           releases.string(), "--report", reportPath.string(), "--recipe",
+                                           ExampleRecipePath().string()};
+
+    REQUIRE(Run(publish) == 0);
+    const Json report = ReadJson(reportPath);
+    CHECK(report.at("command") == "publish");
+    CHECK(report.at("ok") == true);
+    const std::string id = report.at("release").at("id").get<std::string>();
+    const Json &summary = report.at("publish");
+    CHECK(summary.at("releases") == releases.generic_string());
+    CHECK(summary.at("previous").is_null());
+    CHECK(summary.at("current") == id);
+    CHECK(summary.at("published") == true);
+    for (const char *name : {"recipe", "identity", "lock", "target", "copy", "verify", "rename", "pointer"})
+    {
+        INFO(name);
+        CHECK(CheckStatusOf(report, name) == "passed");
+    }
+    CHECK(ReadText(TerrainCurrentPointerPath(releases, asset)) == id);
+
+    const auto tree = Snapshot(releases);
+    CHECK(Run(publish) == 1);
+    const Json again = ReadJson(reportPath);
+    CHECK(again.at("ok") == false);
+    CHECK(DiagnosticsOf(again, "target").size() == 1);
+    CHECK(again.at("publish").at("current") == id);
+    CHECK(again.at("publish").at("published") == false);
+    CHECK(Snapshot(releases) == tree);
+
+    // Another process holds the asset lock: fails at once.
+    const fs::path second = scratch.path / "build" / "second";
+    REQUIRE(Run(BakeArgs(second, scratch.path / "reports" / "bake2.json")) == 0);
+    {
+        std::string error;
+        const std::optional<TerrainPublishLock> held =
+            TerrainPublishLock::Acquire(TerrainAssetReleasesDir(releases, asset), std::chrono::milliseconds(0), error);
+        REQUIRE(held);
+        CHECK(Run({"publish", "--candidate", second.string(), "--releases", releases.string(), "--report",
+                   reportPath.string()}) == 1);
+        CHECK(CheckStatusOf(ReadJson(reportPath), "lock") == "failed");
+    }
+    CHECK(Snapshot(releases) == tree);
+
+    // Usage errors exit 2 and never leave a report inside the release tree.
+    CHECK(Run({"publish", "--candidate", second.string(), "--report", reportPath.string()}) == 2);
+    CHECK(Run({"publish", "--candidate", second.string(), "--releases", releases.string(), "--report",
+               (releases / "report.json").string()}) == 2);
+    CHECK(Run({"publish", "--candidate", second.string(), "--releases", releases.string(), "--report",
+               (second / "report.json").string()}) == 2);
+    CHECK(Snapshot(releases) == tree);
+}
+
+TEST_CASE("TerrainTool sync publishes into the game's releases once per recipe change", "[terraintool][cli][sync]")
+{
+    ScratchDir scratch("cli_sync");
+    const fs::path gameDir = scratch.path / "games" / "G";
+    const fs::path recipe = gameDir / "assets" / "terrain" / "relief-2x2.terrain.json";
+    fs::create_directories(recipe.parent_path());
+    fs::copy_file(ExampleRecipePath(), recipe);
+    const fs::path reportPath = scratch.path / "build" / "terrain" / "relief-2x2.sync.json";
+    const std::vector<std::string> sync{"sync",          "--recipe",     recipe.string(),
+                                        "--id-root",     std::string(kIdRoot), "--source-path",
+                                        std::string(kSourcePath), "--game-dir", gameDir.string(),
+                                        "--candidate",   (scratch.path / "build" / "terrain" / "relief-2x2").string(),
+                                        "--report",      reportPath.string()};
+    const fs::path releases = TerrainReleasesRoot(gameDir);
+    const fs::path assetDir = TerrainAssetReleasesDir(releases, MakeAssetId(ExampleAssetPath()));
+
+    REQUIRE(Run(sync) == 0);
+    const Json first = ReadJson(reportPath);
+    CHECK(first.at("command") == "sync");
+    CHECK(first.at("publish").at("published") == true);
+    CHECK(first.at("publish").at("releases") == releases.generic_string());
+    CHECK(first.at("asset").at("logicalPath") == ExampleAssetPath());
+    const std::string id = first.at("publish").at("current").get<std::string>();
+    const auto tree = Snapshot(releases);
+
+    REQUIRE(Run(sync) == 0);
+    const Json second = ReadJson(reportPath);
+    CHECK(second.at("ok") == true);
+    CHECK(second.at("publish").at("published") == false);
+    CHECK(second.at("publish").at("current") == id);
+    CHECK(second.at("release").at("id") == id);
+    CHECK(second.at("asset").at("id") == TerrainIdHex(MakeAssetId(ExampleAssetPath()).value));
+    CHECK(CheckStatusOf(second, "current") == "passed");
+    CHECK(CheckStatusOf(second, "generate") == "skipped");
+    CHECK(Snapshot(releases) == tree);
+    CHECK(ReleaseDirNames(assetDir) == std::vector<std::string>{id});
+
+    WriteSeedRecipe(recipe.parent_path(), 11, recipe.filename().string());
+    REQUIRE(Run(sync) == 0);
+    const Json changed = ReadJson(reportPath);
+    CHECK(changed.at("publish").at("published") == true);
+    CHECK(changed.at("publish").at("previous") == id);
+    CHECK(ReleaseDirNames(assetDir).size() == 2);
+
+    std::vector<std::string> broken = sync;
+    broken[2] = (recipe.parent_path() / "absent.terrain.json").string();
+    CHECK(Run(broken) == 1);
+    CHECK(CheckStatusOf(ReadJson(reportPath), "recipe") == "failed");
+    std::vector<std::string> missing(sync.begin(), sync.begin() + 7);
+    missing.insert(missing.end(), {"--report", reportPath.string()});
+    CHECK(Run(missing) == 2);
+    CHECK(ReleaseDirNames(assetDir).size() == 2);
 }

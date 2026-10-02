@@ -184,6 +184,19 @@ namespace mir::terrainbake
         for (const TerrainFileSummary &f : r.files)
             j["files"].push_back({{"name", f.name}, {"bytes", f.bytes}, {"fnv1a64", TerrainIdHex(f.checksum)}});
 
+        if (r.publish)
+        {
+            auto id = [](const std::optional<TerrainReleaseId> &v) {
+                return v ? Json(TerrainIdHex(v->value)) : Json(nullptr);
+            };
+            j["publish"] = {{"releases", r.publish->releasesRoot.generic_string()},
+                            {"previous", id(r.publish->previous)},
+                            {"current", id(r.publish->current)},
+                            {"published", r.publish->published}};
+        }
+        else
+            j["publish"] = nullptr;
+
         j["checks"] = Json::array();
         for (const TerrainCheck &c : r.checks)
             j["checks"].push_back({{"name", c.name}, {"status", CheckStatusName(c.status)}, {"detail", c.detail}});

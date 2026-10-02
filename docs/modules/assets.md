@@ -14,7 +14,10 @@ container format rather than one per source format.
 `tools/AssetCooker` walks every configured source root, writes one blob per file
 named by its id, and writes one binary manifest. `engine_cook_assets` wires that
 into a target and copies the output next to the executable, so a moved build
-folder still runs.
+folder still runs. Terrain is not cooked: recipes (`*.terrain.json`) and
+release files (`.tindex`, `.tpack`, anything under `terrain/releases`) are
+TerrainTool's, and the cooker skips them by the rule in
+`terrain/TerrainAssetPath.h` (see [terrain.md](terrain.md)).
 
 ```cpp
 if (AssetCache *cache = app.Assets())
@@ -106,6 +109,13 @@ logical paths for any root spelling").
    at the cost of a file per asset and a registry to keep in sync.
 
 ## Changed
+
+*2026-10-02* — **Terrain files are no longer cooked (#116).** Was: a terrain
+recipe under an assetsRoot became a raw blob like any other file. Now:
+AssetCooker skips `*.terrain.json` (any case), `.tindex`, `.tpack` and anything
+under `terrain/releases`, and `engine_cook_assets` leaves them out of the
+cook's dependencies, so a terrain id is never also a raw asset's and editing a
+recipe does not rerun the cook. No change to this module.
 
 *2026-10-02* — **A standalone image cooks to a `TextureAsset`.** Was: every
 `.png` and `.jpg` outside a glTF import cooked as a raw blob, so the runtime

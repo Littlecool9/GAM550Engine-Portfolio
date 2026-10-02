@@ -531,6 +531,55 @@ TEST_CASE("Cooked package contents reach the import cache", "[gltf][cooker][cont
     CHECK(animation);
 }
 
+TEST_CASE("A full cook leaves terrain recipes and release files to TerrainTool", "[cooker][terrain]")
+{
+    const auto root = fs::current_path() /
+                      ("terrain-cook-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto source = root / "assets";
+    const auto out = root / "cooked";
+    const std::vector<std::string> terrainFiles{
+        "terrain/hills.terrain.json",
+        "terrain/HILLS2.TERRAIN.JSON",
+        // Even misplaced inside assetsRoot, a releases tree is not cooked.
+        "terrain/releases/5ada0b9d43f41166/current",
+        "terrain/releases/5ada0b9d43f41166/00c0ffee12345678/release.tindex",
+        "terrain/releases/5ada0b9d43f41166/00c0ffee12345678/chunk_0_0.tpack",
+        "loose/stray.tpack",
+    };
+    for (const auto &relative : terrainFiles)
+    {
+        fs::create_directories((source / relative).parent_path());
+        REQUIRE(WriteText(source / relative, "terrain " + relative));
+    }
+    fs::create_directories(source / "data");
+    REQUIRE(WriteText(source / "data" / "a.txt", "raw"));
+
+    const std::vector<std::string> args{"--source-dir", source.string(), "--id-root", "games/T/assets",
+                                        "--out",        out.string()};
+    for (int run = 0; run < 2; ++run)
+    {
+        INFO("run " << run);
+        REQUIRE(LaunchProcess(GLTF_COOKER_EXE, args, true) == 0);
+        const auto manifest = AssetManifest::LoadFile(out / "manifest.blob");
+        REQUIRE(manifest);
+        CHECK(manifest->Count() == 1);
+        CHECK(manifest->Find(MakeAssetId("games/T/assets/data/a.txt")) != nullptr);
+        for (const auto &relative : terrainFiles)
+        {
+            INFO(relative);
+            CHECK(manifest->Find(MakeAssetId("games/T/assets/" + relative)) == nullptr);
+            CHECK(ReadText(source / relative) == "terrain " + relative);
+        }
+        size_t blobs = 0;
+        for (const auto &entry : fs::directory_iterator(out))
+            if (entry.path().extension() == ".blob" && !entry.path().filename().string().starts_with("manifest"))
+                ++blobs;
+        CHECK(blobs == 1);
+    }
+    std::error_code ec;
+    fs::remove_all(root, ec);
+}
+
 TEST_CASE("A standalone image cooks to a texture, and an image a glTF references stays its import's",
           "[cooker][texture]")
 {

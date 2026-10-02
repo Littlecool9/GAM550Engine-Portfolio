@@ -1,6 +1,7 @@
 ﻿engine_add_module(terrain)
 
 target_sources(engine_terrain PRIVATE
+    src/terrain/TerrainAssetPath.cpp
     src/terrain/TerrainByteSource.cpp
     src/terrain/TerrainHeightQuery.cpp
     src/terrain/TerrainLayout.cpp
