@@ -87,7 +87,7 @@ TEST_CASE("SaveScene then LoadScene round-trips a Transform", "[scene]")
 
     const Transform *transform = loadedWorld.GetComponent<Transform>(loadedEntity);
     REQUIRE(transform != nullptr);
-    CHECK(transform->Position() == glm::vec3(1.0f, 2.0f, 3.0f));
+    CHECK(transform->Position() == mir::WorldVec3(1.0, 2.0, 3.0));
     CHECK(transform->Rotation() == glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
     CHECK(transform->Scale() == glm::vec3(1.0f));
 }
@@ -99,7 +99,10 @@ TEST_CASE("SaveScene writes a clean decimal for a float that isn't exactly repre
     World world;
     LoadedScene scene = NewScene("test");
     Entity entity = CreateSceneEntity(world, scene);
-    mir::AddTransform(world, entity, Transform{ glm::vec3(1.8f, 0.0f, 0.0f) });
+    // scale is still a float field; a large-world position skips CleanFloat
+    Transform transform;
+    transform.SetScale(glm::vec3(1.8f, 1.0f, 1.0f));
+    mir::AddTransform(world, entity, transform);
 
     TempSceneDir dir("clean_float");
     REQUIRE(mir::SaveScene(world, dir.mPath, scene));
@@ -115,6 +118,155 @@ TEST_CASE("SaveScene writes a clean decimal for a float that isn't exactly repre
     // is for.
     CHECK(text.find("1.7999999") == std::string::npos);
     CHECK(text.find("1.8") != std::string::npos);
+}
+
+TEST_CASE("SaveScene writes a position as its shortest exact decimal", "[scene]")
+{
+    mir::RegisterCoreComponents();
+
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity entity = CreateSceneEntity(world, scene);
+    mir::AddTransform(world, entity, Transform{ mir::WorldVec3(1.8, -150000.126, 0.0) });
+
+    TempSceneDir dir("double_position_text");
+    REQUIRE(mir::SaveScene(world, dir.mPath, scene));
+
+    std::ifstream file(dir.mPath / "entities" / "1.json");
+    REQUIRE(file);
+    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+
+    // a float build writes the float's shortest decimal, not 1.8f widened to
+    // 1.7999999523162842; only a double holds the far millimetre
+    CHECK(text.find("1.8,") != std::string::npos);
+    CHECK(text.find("1.7999999") == std::string::npos);
+    if constexpr (mir::kLargeWorld)
+        CHECK(text.find("-150000.126") != std::string::npos);
+}
+
+TEST_CASE("SaveScene then LoadScene keeps a far root and its child exact", "[scene]")
+{
+    mir::RegisterCoreComponents();
+
+    // map-edge root nudged by a sub-millimetre-scale step a float would drop
+    const mir::WorldVec3 rootPosition = mir::WorldVec3(-150000.125, 350.5, 75000.5) + mir::WorldVec3(0.001, -0.002, 0.003);
+    const mir::WorldVec3 childLocal{0.5 + 0.001, 0.0, -0.25};
+
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity root = CreateSceneEntity(world, scene);
+    Entity child = CreateSceneEntity(world, scene, root);
+    mir::AddTransform(world, root, Transform{ rootPosition });
+    mir::AddTransform(world, child, Transform{ childLocal }, root);
+    const mir::WorldVec3 childWorld = mir::ResolveWorld(world, child).position.Meters();
+
+    TempSceneDir dir("far_world_roundtrip");
+    REQUIRE(mir::SaveScene(world, dir.mPath, scene));
+
+    World loadedWorld;
+    LoadedScene loaded = mir::LoadScene(loadedWorld, dir.mPath);
+    Entity loadedRoot = loaded.mEntities.at(1);
+    Entity loadedChild = loaded.mEntities.at(2);
+
+    CHECK(loadedWorld.GetComponent<Transform>(loadedRoot)->Position() == rootPosition);
+    CHECK(loadedWorld.GetComponent<Transform>(loadedChild)->Position() == childLocal);
+    CHECK(mir::ResolveWorld(loadedWorld, loadedRoot).position.Meters() == rootPosition);
+    CHECK(mir::ResolveWorld(loadedWorld, loadedChild).position.Meters() == childWorld);
+}
+
+TEST_CASE("LoadScene reads a float-era position exactly as written", "[scene]")
+{
+    mir::RegisterCoreComponents();
+
+    TempSceneDir dir("legacy_float_position");
+    std::filesystem::create_directories(dir.mPath / "entities");
+    {
+        std::ofstream manifest(dir.mPath / "scene.json");
+        manifest << R"({"name":"test","nextId":2,"entities":[1]})";
+    }
+    {
+        // a pre-#105 save: float-promoted digits and a WorldTransform matrix
+        // the current field table no longer names
+        std::ofstream entityFile(dir.mPath / "entities" / "1.json");
+        entityFile << R"({"id":1,"parent":0,"components":[
+            {"type":"Transform","fields":{"position":[1.7999999523162842,0.0,0.0],"scale":[0.5,0.5,0.5]}},
+            {"type":"WorldTransform","fields":{"matrix":[1,0,0,0,0,1,0,0,0,0,1,0,9,9,9,1]}}]})";
+    }
+
+    World loadedWorld;
+    LoadedScene loaded = mir::LoadScene(loadedWorld, dir.mPath);
+    REQUIRE(loaded.mEntities.size() == 1);
+
+    const Transform *transform = loadedWorld.GetComponent<Transform>(loaded.mEntities.at(1));
+    REQUIRE(transform != nullptr);
+    CHECK(transform->Position() == mir::WorldVec3(1.7999999523162842, 0.0, 0.0));
+    CHECK(transform->Scale() == glm::vec3(0.5f));
+}
+
+// nlohmann throws out_of_range (not parse_error) for 1e400, which used to
+// escape ParseJson and LoadScene.
+TEST_CASE("LoadScene skips an entity file whose position overflows a double", "[scene]")
+{
+    mir::RegisterCoreComponents();
+
+    TempSceneDir dir("overflow_position");
+    std::filesystem::create_directories(dir.mPath / "entities");
+    {
+        std::ofstream manifest(dir.mPath / "scene.json");
+        manifest << R"({"name":"test","nextId":3,"entities":[1,2]})";
+    }
+    {
+        std::ofstream entityFile(dir.mPath / "entities" / "1.json");
+        entityFile << R"({"id":1,"parent":0,"components":[
+            {"type":"Transform","fields":{"position":[1e400,2.0,3.0]}}]})";
+    }
+    {
+        std::ofstream entityFile(dir.mPath / "entities" / "2.json");
+        entityFile << R"({"id":2,"parent":0,"components":[
+            {"type":"Transform","fields":{"position":[1.0,2.0,3.0]}}]})";
+    }
+
+    World loadedWorld;
+    LoadedScene loaded = mir::LoadScene(loadedWorld, dir.mPath);
+
+    REQUIRE(loaded.mEntities.size() == 1);
+    const Transform *transform = loadedWorld.GetComponent<Transform>(loaded.mEntities.at(2));
+    REQUIRE(transform != nullptr);
+    CHECK(transform->Position() == mir::WorldVec3(1.0, 2.0, 3.0));
+}
+
+TEST_CASE("LoadScene leaves a malformed position at its default", "[scene]")
+{
+    mir::RegisterCoreComponents();
+
+    TempSceneDir dir("bad_position");
+    std::filesystem::create_directories(dir.mPath / "entities");
+    {
+        std::ofstream manifest(dir.mPath / "scene.json");
+        manifest << R"({"name":"test","nextId":4,"entities":[2,3]})";
+    }
+    {
+        std::ofstream entityFile(dir.mPath / "entities" / "2.json");
+        entityFile << R"({"id":2,"parent":0,"components":[
+            {"type":"Transform","fields":{"position":["far",2.0,3.0],"scale":[2.0,2.0,2.0]}}]})";
+    }
+    {
+        std::ofstream entityFile(dir.mPath / "entities" / "3.json");
+        entityFile << R"({"id":3,"parent":0,"components":[
+            {"type":"Transform","fields":{"position":[1.0,2.0],"scale":[2.0,2.0,2.0]}}]})";
+    }
+
+    World loadedWorld;
+    LoadedScene loaded = mir::LoadScene(loadedWorld, dir.mPath);
+    REQUIRE(loaded.mEntities.size() == 2);
+
+    for (const auto &[id, entity] : loaded.mEntities)
+    {
+        const Transform *transform = loadedWorld.GetComponent<Transform>(entity);
+        REQUIRE(transform != nullptr);
+        CHECK(transform->Position() == mir::WorldVec3(0.0));
+        CHECK(transform->Scale() == glm::vec3(2.0f)); // the rest of the component still loads
+    }
 }
 
 TEST_CASE("SaveScene then LoadScene round-trips parent/child structure", "[scene]")
@@ -219,7 +371,7 @@ TEST_CASE("LoadScene skips a component name it does not recognise", "[scene]")
     Entity loadedEntity = loaded.mEntities.at(1);
     const Transform *transform = loadedWorld.GetComponent<Transform>(loadedEntity);
     REQUIRE(transform != nullptr);
-    CHECK(transform->Position() == glm::vec3(4.0f, 5.0f, 6.0f));
+    CHECK(transform->Position() == mir::WorldVec3(4.0, 5.0, 6.0));
 }
 
 // A malformed scene.json used to reach nlohmann's operator>> with no try/catch,
@@ -269,7 +421,7 @@ TEST_CASE("LoadScene skips a malformed entity file instead of throwing", "[scene
     REQUIRE(loaded.mEntities.size() == 1);
     const Transform *transform = loadedWorld.GetComponent<Transform>(loaded.mEntities.at(2));
     REQUIRE(transform != nullptr);
-    CHECK(transform->Position() == glm::vec3(1.0f, 2.0f, 3.0f));
+    CHECK(transform->Position() == mir::WorldVec3(1.0, 2.0, 3.0));
 }
 
 TEST_CASE("UnloadScene destroys exactly the entities it loaded", "[scene]")

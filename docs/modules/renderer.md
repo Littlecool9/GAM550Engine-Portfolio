@@ -90,9 +90,9 @@ void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera
 | `DrawItem` | `renderer/Renderer.h` | `{mesh, model, normalMatrix, tint, material}` — `model` is the world transform, not premultiplied by any camera |
 | `RenderView` | `renderer/VulkanRenderer.h` | `{rect, items, viewProj, cameraPos}` — one camera's `DrawItem`s, clipped to a screen rect; `cameraPos` only the sky pass reads |
 | `Viewport`, `ViewportId` | `renderer/RenderSystem.h` | `RenderSystem`'s per-viewport state: rect plus a World `Entity`, an external camera, or neither (fallback) |
-| `MeshRenderer`, `Camera` | `renderer/components/` | Handles, and `fovY`/`near`/`far`, declared here rather than in `core` |
+| `MeshRenderer`, `Camera` | `renderer/components/` | Handles, and `fovY`/`near`/`far` (`far` 0 = no far plane), declared here rather than in `core` |
 | `MeshBounds` | `renderer/components/MeshBounds.h` | `{mLocalMin, mLocalMax}`, a mesh's own local-space AABB; attached by `ResolveSceneMeshes` (see [app.md](app.md)), read by the editor's viewport click-picking (see [editor.md](editor.md)) — not used for rendering at all |
-| `Ray`, `MakeCameraRay`, `RayIntersectsAABB` | `renderer/CameraMath.h` | World-space camera ray from a click, and a ray/AABB slab test — the same file `MakeViewProjection` lives in, so both stay in the same Vulkan-convention math |
+| `Ray`, `RayIntersectsAABB`, `WorldRay`, `MakeCameraRay`, `RayIntersectsBox` | `renderer/CameraMath.h` | `WorldRay` is a camera ray with a double `WorldPosition` origin and a float direction; `RayIntersectsBox` places a `WorldPose` box relative to that origin in double, then runs the local ray/AABB slab test — the same file `MakeViewProjection` lives in, so both stay in the same Vulkan-convention math |
 | `RenderSystem` | `renderer/RenderSystem.h` | The ECS-to-renderer bridge, `SystemPhase::Render` |
 | `Shapes.h` | `renderer/Shapes.h` | `MakeCube()` and friends — plain vectors, no Vulkan |
 | `RenderSettings` | `renderer/RenderSettings.h` | Project Settings' `"rendering"` section (`rayTracing: bool`, `fog: bool`); `LoadFile`/`SaveFile`, a World resource loaded in `App::Initialize` |
@@ -481,6 +481,33 @@ No tests. Everything here needs a device, and the module is verified by running.
    raster/RT, and RT inherits that gap rather than fixing it.
 
 ## Changed
+
+*2026-09-30* — **Depth is reverse-Z, and a lens can have no far plane.** Was:
+`MakeViewProjection(cameraWorld, fov, near, far, aspect)` mapped near to depth 0
+and far to 1, the depth buffer cleared to 1 and tested `LESS` (sky `LEQUAL` at
+depth 1), transparent draws sorted by `z / w`, and ray tracing stopped at a
+hard-coded `TMax` of 10 km whatever the camera said. With a far plane of 120 km
+that mapping could not separate surfaces a meter apart beyond about 1 km. Now:
+`MakeViewProjection(cameraWorld, lens, aspect)` maps near to 1 and far to 0 on
+the same D32F buffer, which clears to 0 and tests `GREATER` (sky `GEQUAL` at
+depth 0). `Camera::mFarZ == 0` (`HasFarPlane()` false) means no far plane:
+depth is `near / distance`. The transparent sort uses clip w, the view depth.
+`RenderView` carries `nearZ`/`farZ` into a new `CameraData::clipPlanes`, and
+`raytrace.slang` ends its rays at the far plane, or not at all without one.
+The sky and ray-generation shaders unproject at depth 1, now the near plane.
+
+*2026-09-29* — **Camera rays keep a double origin, and the projection names
+its clip convention.** Was: `MakeCameraRay(cameraWorld, viewProj, ndc)` returned
+a float `Ray` whose origin was the camera's float world position, and
+`MakeViewProjection` called `glm::perspective` under a file-local
+`GLM_FORCE_DEPTH_ZERO_TO_ONE`. `Editor.cpp` instantiated the same inline
+template without the macro, and in the Debug `MjolnirEngine.exe` the linker kept
+that -1..1 copy for both, so the renderer's near plane sat at about twice
+`nearZ`. Now: `MakeCameraRay(cameraPose, lens, aspect, ndc)` returns a
+`WorldRay` (double `WorldPosition` origin, float direction) and
+`RayIntersectsBox` subtracts that origin from the box's `WorldPose` in double
+before the slab test; `MakeViewProjection` calls `glm::perspectiveRH_ZO`
+outright and the macro is gone.
 
 *2026-09-27* — **RT gets the Point/Spot/Area light list too, and the
 Inspector edits a `Light`'s color as a color instead of three raw floats

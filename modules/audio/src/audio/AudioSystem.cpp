@@ -56,7 +56,7 @@ namespace mir::audio {
 
         constexpr float kMinUpLengthSq = 1e-8f;
 
-        AkSoundPosition MakeSoundPosition(const glm::vec3 &pos, const glm::vec3 &front, const glm::vec3 &up)
+        AkSoundPosition MakeSoundPosition(WorldPosition position, const glm::vec3 &front, const glm::vec3 &up)
         {
             const bool d = glm::dot(front, front) <= 0.0f || glm::dot(up, up) <= 0.0f;
             const glm::vec3 f = d ? glm::vec3(0.0f, 0.0f, -1.0f) : glm::normalize(front);
@@ -74,6 +74,7 @@ namespace mir::audio {
 
             const glm::vec3 u = glm::normalize(ortho);
 
+            const glm::dvec3 pos(position.Meters());
             AkSoundPosition out;
             out.Set(pos.x, pos.y, -pos.z, f.x, f.y, -f.z, u.x, u.y, -u.z);
             return out;
@@ -229,7 +230,7 @@ namespace mir::audio {
         AK::SoundEngine::UnregisterGameObj(static_cast<AkGameObjectID>(gameObj));
     }
 
-    void SetEmitterPosition(uint64_t gameObject, const glm::vec3 &position, const glm::vec3 &front,
+    void SetEmitterPosition(uint64_t gameObject, WorldPosition position, const glm::vec3 &front,
                             const glm::vec3 &up)
     {
         if (!g_Initialized || gameObject == 0)
@@ -238,7 +239,7 @@ namespace mir::audio {
         ApplyPosition(static_cast<AkGameObjectID>(gameObject), MakeSoundPosition(position, front, up), "emitter");
     }
 
-    void SetListenerPosition(const glm::vec3 &position, const glm::vec3 &front, const glm::vec3 &up)
+    void SetListenerPosition(WorldPosition position, const glm::vec3 &front, const glm::vec3 &up)
     {
         if (!g_Initialized)
             return;

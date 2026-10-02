@@ -42,6 +42,7 @@ target_sources(engine_renderer PRIVATE
     src/renderer/Renderer.cpp
     src/renderer/RenderSettings.cpp
     src/renderer/Shapes.cpp
+    src/renderer/ViewSubmission.cpp
     src/renderer/VulkanRenderer.cpp
     src/renderer/VulkanModel.cpp
     src/renderer/vulkan/VmaImpl.cpp

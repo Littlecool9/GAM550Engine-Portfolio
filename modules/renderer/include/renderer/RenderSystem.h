@@ -7,7 +7,7 @@
  *
  */
 #pragma once
-#include "renderer/CameraMath.h"
+#include "renderer/ViewSubmission.h"
 #include "renderer/VulkanRenderer.h"
 
 #include <core/ecs/Query.h>
@@ -22,8 +22,6 @@
 
 #include <glm/gtc/matrix_inverse.hpp>
 
-#include <algorithm>
-#include <cmath>
 #include <vector>
 
 namespace mir
@@ -39,7 +37,7 @@ namespace mir
 
         Entity mCameraEntity = kNullEntity;
 
-        glm::mat4 mExternalCameraWorld{ 1.0f };
+        WorldPose mExternalCameraPose;
         Camera mExternalCamera{};
         bool mUseExternalCamera = false;
     };
@@ -90,11 +88,11 @@ namespace mir
             }
         }
 
-        void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera &camera)
+        void SetExternalCamera(ViewportId id, const WorldPose &cameraPose, const Camera &camera)
         {
             if (id < mViewports.size())
             {
-                mViewports[id].mExternalCameraWorld = cameraWorld;
+                mViewports[id].mExternalCameraPose = cameraPose;
                 mViewports[id].mExternalCamera = camera;
                 mViewports[id].mUseExternalCamera = true;
             }
@@ -116,22 +114,20 @@ namespace mir
                     {
                         if (haveSunLight)
                             return;
-                        const glm::vec3 sunDirWS =
-                            glm::vec3(world.Matrix() * glm::vec4(kSunReferenceLocalDirection, 0.0f));
+                        const glm::vec3 sunDirWS = world.Linear() * kSunReferenceLocalDirection;
                         mRenderer.SetDirectionalLight(sunDirWS, light.mColor * light.mIntensity);
                         haveSunLight = true;
                         return;
                     }
 
                     LightItem item{};
-                    item.positionAndRange = glm::vec4(glm::vec3(world.Matrix()[3]), light.mRange);
-                    const glm::vec3 dirWS =
-                        glm::normalize(glm::vec3(world.Matrix() * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f)));
-                    const float cosSpot = light.mType == LightType::Spot
+                    item.position = world.Position();
+                    item.range = light.mRange;
+                    item.direction = glm::normalize(world.Linear() * glm::vec3(0.0f, 0.0f, -1.0f));
+                    item.spotCos = light.mType == LightType::Spot
                         ? std::cos(glm::radians(light.mSpotAngleDegrees * 0.5f))
                         : -1.0f;
-                    item.directionAndSpotCos = glm::vec4(dirWS, cosSpot);
-                    item.color = glm::vec4(light.mColor * light.mIntensity, 0.0f);
+                    item.color = light.mColor * light.mIntensity;
                     mLightItems.push_back(item);
                 });
             mRenderer.SetLights(mLightItems);
@@ -143,8 +139,7 @@ namespace mir
                         return;
                     if (!haveSunLight)
                     {
-                        const glm::vec3 sunDirWS =
-                            glm::vec3(world.Matrix() * glm::vec4(kSunReferenceLocalDirection, 0.0f));
+                        const glm::vec3 sunDirWS = world.Linear() * kSunReferenceLocalDirection;
                         mRenderer.SetDirectionalLight(sunDirWS, kDefaultLightColor);
                     }
                     mRenderer.SetAtmosphere(sky);
@@ -153,14 +148,14 @@ namespace mir
             mRenderer.SetSkyVisible(haveSky);
 
             bool haveDefaultCamera = false;
-            glm::mat4 defaultCameraWorld{ 1.0f };
+            WorldPose defaultCameraPose;
             Camera defaultCamera{};
 
             mCameraQuery->ForEach([&](Entity, const WorldTransform &world, const Camera &camera)
                 {
                     if (haveDefaultCamera)
                         return;
-                    defaultCameraWorld = world.Matrix();
+                    defaultCameraPose = world.Pose();
                     defaultCamera = camera;
                     haveDefaultCamera = true;
                 });
@@ -170,8 +165,9 @@ namespace mir
             mDrawItems.clear();
             mMeshQuery->ForEach([this](Entity, const WorldTransform &world, const MeshRenderer &renderer)
                 {
-                    const glm::mat3 normalMatrix = glm::inverseTranspose(glm::mat3(world.Matrix()));
-                    mDrawItems.push_back(DrawItem{ renderer.mesh, world.Matrix(), normalMatrix, renderer.tint, renderer.material });
+                    const glm::mat3 normalMatrix = glm::inverseTranspose(world.Linear());
+                    mDrawItems.push_back(
+                        WorldDrawItem{ renderer.mesh, world.Pose(), normalMatrix, renderer.tint, renderer.material });
                 });
 
             // ModelSystem builds its own items (meshes that came from a model
@@ -183,18 +179,19 @@ namespace mir
             mRenderViews.clear();
 
             bool warnNoCamera = false;
+            size_t skippedItems = 0;
 
             for (size_t i = 0; i < mViewports.size(); ++i)
             {
                 const Viewport &viewport = mViewports[i];
 
-                glm::mat4 cameraWorld{ 1.0f };
+                WorldPose cameraPose;
                 Camera camera{};
                 bool haveCamera = false;
 
                 if (viewport.mUseExternalCamera)
                 {
-                    cameraWorld = viewport.mExternalCameraWorld;
+                    cameraPose = viewport.mExternalCameraPose;
                     camera = viewport.mExternalCamera;
                     haveCamera = true;
                 }
@@ -202,17 +199,16 @@ namespace mir
                 {
                     mCameraQuery->ForEach([&](Entity e, const WorldTransform &world, const Camera &cam)
                         {
-                            if (e == viewport.mCameraEntity)
-                            {
-                                cameraWorld = world.Matrix();
-                                camera = cam;
-                                haveCamera = true;
-                            }
+                            if (e != viewport.mCameraEntity)
+                                return;
+                            cameraPose = world.Pose();
+                            camera = cam;
+                            haveCamera = true;
                         });
                 }
                 else if (haveDefaultCamera)
                 {
-                    cameraWorld = defaultCameraWorld;
+                    cameraPose = defaultCameraPose;
                     camera = defaultCamera;
                     haveCamera = true;
                 }
@@ -230,27 +226,15 @@ namespace mir
                     ? 1.0f
                     : static_cast<float>(viewExtent.width) / static_cast<float>(viewExtent.height);
 
-                const glm::mat4 viewProj = MakeViewProjection(cameraWorld, camera.mFovYDegrees,
-                    camera.mNearZ, camera.mFarZ, aspect);
+                const glm::mat4 viewProj = MakeCameraRelativeViewProjection(cameraPose, camera, aspect);
 
+                // Each viewport narrows against its own camera, so the same
+                // world item gets a different model matrix per view.
                 std::vector<DrawItem> &items = mDrawItemsPerViewport[i];
-                items = mDrawItems;
+                skippedItems += BuildViewDrawItems(mDrawItems, cameraPose.position, viewProj, items);
 
-                std::stable_sort(items.begin(), items.end(),
-                    [&viewProj](const DrawItem &a, const DrawItem &b)
-                    {
-                        if (a.transparent != b.transparent)
-                            return !a.transparent;
-                        if (!a.transparent)
-                            return false;
-                        const glm::vec4 pa = viewProj * a.model * glm::vec4(0, 0, 0, 1);
-                        const glm::vec4 pb = viewProj * b.model * glm::vec4(0, 0, 0, 1);
-                        return pa.z / (std::abs(pa.w) > 1e-8f ? pa.w : 1e-8f) >
-                            pb.z / (std::abs(pb.w) > 1e-8f ? pb.w : 1e-8f);
-                    });
-
-                mRenderViews.push_back(
-                    RenderView{ viewport.mRect, items, viewProj, glm::vec3(cameraWorld[3]) });
+                mRenderViews.push_back(RenderView{ viewport.mRect, items, viewProj, cameraPose.position,
+                    camera.mNearZ, camera.HasFarPlane() ? camera.mFarZ : 0.0f });
             }
 
             if (warnNoCamera && !mWarnedNoCamera)
@@ -259,17 +243,31 @@ namespace mir
                 mWarnedNoCamera = true;
             }
 
-            if (renderSettings.rayTracing && mRenderer.RayTracingSupported())
+            if (skippedItems > 0 && !mWarnedSkippedItems)
+            {
+                MIR_LOG_WARN("RenderSystem: {} draw(s) are too far from a viewport camera for float and were not drawn",
+                    skippedItems);
+                mWarnedSkippedItems = true;
+            }
+
+            const bool traceable = renderSettings.rayTracing && mRenderer.RayTracingSupported();
+            if (traceable && mRenderViews.size() == 1)
             {
                 mRenderer.TraceFrame(mRenderViews);
             }
             else
             {
-                if (renderSettings.rayTracing && !mWarnedNoRayTracing)
+                if (renderSettings.rayTracing && !traceable && !mWarnedNoRayTracing)
                 {
                     MIR_LOG_WARN("RenderSystem: Ray Tracing is on in Project Settings but this device/driver "
                         "doesn't support it; falling back to raster");
                     mWarnedNoRayTracing = true;
+                }
+                if (traceable && mRenderViews.size() > 1 && !mWarnedMultiViewRayTracing)
+                {
+                    MIR_LOG_WARN("RenderSystem: Ray Tracing draws a single viewport; {} viewports are "
+                        "falling back to raster", mRenderViews.size());
+                    mWarnedMultiViewRayTracing = true;
                 }
                 mRenderer.DrawFrame(mRenderViews);
             }
@@ -285,11 +283,13 @@ namespace mir
         std::vector<Viewport> mViewports;
 
         std::vector<LightItem> mLightItems;
-        std::vector<DrawItem> mDrawItems;
+        std::vector<WorldDrawItem> mDrawItems;
         std::vector<std::vector<DrawItem>> mDrawItemsPerViewport;
         std::vector<RenderView> mRenderViews;
 
         bool mWarnedNoCamera = false;
         bool mWarnedNoRayTracing = false;
+        bool mWarnedMultiViewRayTracing = false;
+        bool mWarnedSkippedItems = false;
     };
 }

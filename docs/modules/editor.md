@@ -25,7 +25,7 @@ mRenderSystem.SetViewportRect(0, mEditor.SceneViewportRect());
 if (IsEditing(world))                                   // Play shows the World's own camera instead
 {
     mEditor.UpdateCamera(dt);
-    mRenderSystem.SetExternalCamera(0, mEditor.SceneCamera().Matrix(), mEditor.SceneCamera().mLens);
+    mRenderSystem.SetExternalCamera(0, mEditor.SceneCamera().Pose(), mEditor.SceneCamera().mLens);
 }
 ```
 
@@ -55,8 +55,8 @@ Passing `false` skips all of that and resets `SceneViewportRect()` to zero
 extent, which the renderer reads as "use the full swapchain". An ImGui context
 still runs, so a caller can draw its own UI.
 
-`EditorCamera` is a free-fly camera for the scene viewport — position plus
-yaw/pitch, not a `WorldTransform` (that type's matrix is resolver-only,
+`EditorCamera` is a free-fly camera for the scene viewport — a double-precision
+`WorldPosition` plus yaw/pitch, handed out as a `WorldPose`, not a `WorldTransform` (that type's matrix is resolver-only,
 unconstructable outside the ECS hierarchy resolve, and this camera is
 deliberately outside the `World`: it must survive a Play session's
 snapshot/restore untouched). `Update` reads `Window::RawInput()` directly
@@ -89,7 +89,7 @@ EditorCamera &SceneCamera();
 | `SceneMenuAction` | `editor/Editor.h` | `None`/`New`/`Save`/`Load`/`Play`/`TogglePause`/`Stop` |
 | `ProjectMenuEntry` | `editor/Editor.h` | `{mDir, mName}` for one game in Open Project |
 | `EditorActions` | `editor/Editor.h` | `{mScene, mOpenProject}`, what the menus and toolbar asked for this frame |
-| `EditorCamera` | `editor/EditorCamera.h` | Free-fly scene camera, position + yaw/pitch, outside the `World` |
+| `EditorCamera` | `editor/EditorCamera.h` | Free-fly scene camera, `WorldPosition` + yaw/pitch (`Pose()`, `Translate`, `FocusOn`), outside the `World` |
 | `Selection` | `editor/Selection.h` | `{mSelected}` (a `vector<Entity>`, ordered by selection - `.back()` is primary), the `World` resource `Hierarchy` and viewport picking write and `Inspector`/the gizmo read |
 
 `LogPanel`, in `src/editor/panels/LogPanel.cpp`, renders `core`'s `LogHistory`
@@ -245,6 +245,25 @@ Open Project asks for, but not the menu or the dialog themselves.
    CPU-side mesh geometry after upload.
 
 ## Changed
+
+*2026-09-30* — **The scene camera has no far plane.** Was: `EditorCamera::mLens`
+kept the default `farZ` of 100 m, so the scene view clipped everything beyond
+it. Now: its `farZ` is 0, which the reverse-Z projection reads as no far plane
+(see [renderer.md](renderer.md)). ImGuizmo still needs a finite one, so
+`DrawViewportGizmo` gives it a plane a few times farther than the entity.
+
+*2026-09-29* — **The scene camera, picking, highlights and gizmo became
+large-world safe; F frames the selection.** Was: `EditorCamera::mPosition` was a
+`glm::vec3` and `Matrix()` a float world matrix; picking, the selection
+outlines and ImGuizmo all narrowed entities against the Scene origin, so at the
+map edge everything snapped to float's 1/64 m grid. Now: the camera keeps a
+`WorldPosition` and exposes `Pose()`; those three paths work in the scene
+viewport's camera-relative space (`TryMatrixRelativeTo(camera.position)`,
+`MakeCameraRay`, `RayIntersectsBox`). The gizmo writes back one channel per
+operation: Translate turns `camera + offset` into a root position or, through
+`TryWorldToParentLocal`, a child's parent-local translation; Rotate and Scale
+never touch the position. `FocusSelection` (F, Edit only, not while typing)
+moves the camera next to `Selection::Primary()` with `EditorCamera::FocusOn`.
 
 *2026-09-26* — **The ImGui context's lifetime moved to `imguiruntime`.** Was:
 `Initialize` created the context, loaded the fonts and initialised both

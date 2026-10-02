@@ -8,6 +8,8 @@
  */
 #pragma once
 
+#include <core/ecs/components/WorldTransform.h>
+#include <core/math/WorldCoordinates.h>
 #include <core/platform/Surface.h>
 #include <renderer/Material.h>
 #include <renderer/Mesh.h>
@@ -43,15 +45,16 @@ namespace mir
         bool enableValidation;
     };
 
-    // One draw call's worth of data, built by RenderSystem from a
-    // WorldTransform + MeshRenderer pair
-    struct DrawItem
+    // One draw in the fixed Scene world, built by RenderSystem from a
+    // WorldTransform + MeshRenderer pair or by ModelSystem. BuildViewDrawItems
+    // (renderer/ViewSubmission.h) turns it into a DrawItem per viewport.
+    struct WorldDrawItem
     {
         MeshHandle mesh;
 
-        glm::mat4 model{ 1.0f };
+        WorldPose pose;
 
-        // transpose(inverse(mat3(model)))
+        // transpose(inverse(pose.linear))
         glm::mat3 normalMatrix{ 1.0f };
 
         glm::vec4 tint{ 1.0f, 1.0f, 1.0f, 1.0f };
@@ -64,28 +67,60 @@ namespace mir
         // renderer writes in - see BindModelDescriptors.
         std::span<const glm::vec4> deformation;
 
-        // Drawn after the opaque items, back to front. RenderSystem sorts.
+        // Drawn after the opaque items, back to front. BuildViewDrawItems sorts.
+        bool transparent = false;
+    };
+
+    // One draw call's worth of data for one viewport. Temporary: it lives only
+    // for the frame's submission and is never written back to the Scene.
+    struct DrawItem
+    {
+        MeshHandle mesh;
+
+        // Relative to this viewport's camera: the translation is
+        // pose.position - camera, subtracted in world precision before narrowing.
+        glm::mat4 model{ 1.0f };
+
+        glm::mat3 normalMatrix{ 1.0f };
+
+        glm::vec4 tint{ 1.0f, 1.0f, 1.0f, 1.0f };
+
+        MaterialHandle material;
+
+        std::span<const glm::vec4> deformation;
+
         bool transparent = false;
     };
 
     // Draw items produced outside the MeshRenderer query (by ModelSystem),
     // picked up by RenderSystem as a World resource.
-    struct ModelDrawItems { std::vector<DrawItem> items; };
+    struct ModelDrawItems { std::vector<WorldDrawItem> items; };
 
+    // A Point/Spot/Area light in world space; the renderer narrows it against
+    // each view's camera, as it does draw items.
     struct LightItem
     {
-        glm::vec4 positionAndRange{ 0.0f };       // xyz = world position, w = range
-        glm::vec4 directionAndSpotCos{ 0.0f, -1.0f, 0.0f, -1.0f }; // xyz = normalized aim direction, w = cos(half-angle); -1 = no cone (Point/Area)
-        glm::vec4 color{ 0.0f };                  // rgb = color * intensity
+        WorldPosition position;
+        float range = 0.0f;
+        glm::vec3 direction{ 0.0f, -1.0f, 0.0f };
+        float spotCos = -1.0f; // cos(half-angle); -1 = no cone (Point/Area)
+        glm::vec3 color{ 0.0f }; // color * intensity
     };
 
-    // One camera's worth of draw items, clipped to a screen-space rect
+    // One camera's worth of draw items, clipped to a screen-space rect.
+    // Render space has world axes and this camera at the origin: viewProj holds
+    // only its rotation, and every item's model is relative to it.
     struct RenderView
     {
         VkRect2D rect{};
         std::span<const DrawItem> items;
         glm::mat4 viewProj{ 1.0f };
-        glm::vec3 cameraPos{ 0.0f };
+        WorldPosition cameraPosition;
+
+        // The planes viewProj was built with; farZ 0 = no far plane. Ray
+        // tracing has no depth buffer, so it clips its rays to these.
+        float nearZ = 0.1f;
+        float farZ = 0.0f;
     };
 
     class VulkanRenderer
@@ -211,8 +246,8 @@ namespace mir
         void NameObject(VkObjectType type, uint64_t handle, const char *name);
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
         void RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex);
-        void WriteCameraData(const glm::mat4 &viewProj, const glm::vec3 &cameraPosWS, uint32_t viewIndex);
-        void UploadLights();
+        void WriteCameraData(const RenderView &view, uint32_t viewIndex);
+        uint32_t WriteViewLights(const RenderView &view, uint32_t viewIndex);
 
     private:
         constexpr static uint32_t VulkanVersion{ VK_API_VERSION_1_4 };
@@ -289,12 +324,12 @@ namespace mir
         std::byte *mCameraMapped[kFramesInFlight]{};
         VkDeviceSize mCameraAlignedSize = 0;
 
+        // Per view; each view writes its own kMaxLights slice, narrowed against its camera.
         constexpr static uint32_t kMaxLights = 64;
         VkBuffer mLightBuffers[kFramesInFlight]{};
         VmaAllocation mLightAllocations[kFramesInFlight]{};
         std::byte *mLightMapped[kFramesInFlight]{};
-        uint32_t mActiveLightCount = 0;
-        std::vector<LightItem> mPendingLights;
+        std::vector<LightItem> mLights;
 
         VkDescriptorSetLayout mModelSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool mModelPools[kFramesInFlight]{};
@@ -327,6 +362,7 @@ namespace mir
         VkStridedDeviceAddressRegionKHR mSbtCallableRegion{};
 
         constexpr static uint32_t kMaxRtInstances = 256;
+        bool mWarnedRtInstanceCap = false;
 
         VkImage mRtOutputImages[kFramesInFlight]{};
         VmaAllocation mRtOutputAllocations[kFramesInFlight]{};

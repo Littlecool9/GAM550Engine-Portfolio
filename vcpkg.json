@@ -22,5 +22,18 @@
         "sol2",
         "catch2"
     ],
+    "features": {
+        "large-world": {
+            "description": "Double-precision Jolt to match double world positions; the root CMakeLists.txt selects it from MIR_LARGE_WORLD",
+            "dependencies": [
+                {
+                    "name": "joltphysics",
+                    "features": [
+                        "double-precision"
+                    ]
+                }
+            ]
+        }
+    },
     "$comment": "builtin-baseline = SHA of vcpkg"
 }

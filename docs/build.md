@@ -109,6 +109,23 @@ rather than making a second one.
 Dependencies are declared in `vcpkg.json` and installed during configure. They
 resolve against a pinned `builtin-baseline`, so everyone gets the same versions.
 
+Jolt is the one package that does not come from the registry as is:
+`vcpkg-overlays/joltphysics`, registered by `vcpkg-configuration.json`, replaces
+the port to add a `double-precision` feature (`JPH_DOUBLE_PRECISION`), which
+the upstream port lacks. vcpkg builds it from source on the first configure
+after it changes. A build directory whose cache has `VCPKG_MANIFEST_INSTALL=OFF`
+needs one configure with `-DVCPKG_MANIFEST_INSTALL=ON` to pick it up.
+
+**World precision.** The CMake option `MIR_LARGE_WORLD` (default ON) stores
+world positions as double and builds Jolt with double precision. OFF stores
+them as float: smaller and faster, but only for small maps. Before `project()`,
+the root `CMakeLists.txt` turns ON into the `large-world` vcpkg feature, so the
+C++ setting and the Jolt binary always agree; `modules/physics/CMakeLists.txt`
+stops the configure if they do not. The `windows-msvc-debug-float` preset
+builds with it OFF, into its own `builds/windows-msvc-debug-float/`. Tests that
+need double positions far from the origin report Skipped there. After changing
+code that handles positions, build and test both presets.
+
 **Reconfigure** every time a `CMakeLists.txt` or `vcpkg.json` changes.
 
 Ninja does it for you at build time, and cmake-tools can do it on save — see
@@ -223,6 +240,14 @@ More info: [extending.md](extending.md).
 | `cl.exe` not found in a plain terminal | MSVC environment not loaded. Use a Developer PowerShell or prefix with `vcvars64.bat`. |
 
 ## Changed
+
+*2026-10-01* — **World precision is a compile-time option.** `MIR_LARGE_WORLD`
+picks double or float world positions (`WorldReal`) and, through the vcpkg
+`large-world` feature, the matching Jolt. A runtime switch, or templating every
+module on precision, was rejected: either would cost hot loops or spread
+templates through every module's headers. A float build pays nothing for
+doubles. Terrain addressing, audio (Wwise takes double) and camera-relative
+rendering keep the same code in both builds.
 
 *2026-09-11* — **`toolchainFile` in presets, not a wrapper `.cmake`.** vcpkg
 resolution moved from `cmake/VcpkgToolchain.cmake` into each preset's

@@ -51,6 +51,16 @@
                 "lhs": "${hostSystemName}",
                 "rhs": "Windows"
             }
+        },
+        {
+            "name": "windows-msvc-debug-float",
+            "displayName": "Debug (float world)",
+            "inherits": [
+                "windows-msvc-debug"
+            ],
+            "cacheVariables": {
+                "MIR_LARGE_WORLD": false
+            }
         }
     ],
     "buildPresets": [
@@ -63,6 +73,11 @@
             "name": "windows-msvc-release",
             "displayName": "Release",
             "configurePreset": "windows-msvc-release"
+        },
+        {
+            "name": "windows-msvc-debug-float",
+            "displayName": "Debug (float world)",
+            "configurePreset": "windows-msvc-debug-float"
         }
     ]
 }
