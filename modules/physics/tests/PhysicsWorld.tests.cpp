@@ -139,6 +139,73 @@ TEST_CASE("DestroyBody drops the body", "[physics]")
     REQUIRE(MetersOf(world, floor).y == 0.0);
 }
 
+TEST_CASE("Destroying a body wakes what slept on it", "[physics]")
+{
+    mir::PhysicsWorld world;
+
+    const mir::BodyHandle floor = AddFloor(world);
+    const mir::BodyHandle box = world.CreateDynamicBox(At(0.0, 1.0, 0.0), glm::vec3(0.5f, 0.25f, 0.5f));
+
+    // Jolt puts a body to sleep after half a second at rest.
+    StepFor(world, 120);
+    const double restY = MetersOf(world, box).y;
+    REQUIRE(world.BodyLinearVelocity(box) == glm::vec3(0.0f));
+
+    // Jolt's own removal leaves a sleeping body where it was, in the air.
+    world.DestroyBody(floor);
+    StepFor(world, 30);
+    CHECK(MetersOf(world, box).y < restY - 0.5);
+}
+
+TEST_CASE("RayCast reports the closest hit", "[physics]")
+{
+    mir::PhysicsWorld world;
+
+    const mir::BodyHandle floor = AddFloor(world);
+    const glm::vec3 down(0.0f, -2.0f, 0.0f);
+    const std::optional<mir::RayHit> hit = world.RayCast(At(1.0, 5.0, 2.0), down, 10.0f);
+    REQUIRE(hit);
+    CHECK(hit->mBody == floor);
+    CHECK(MaxError(hit->mPoint.Meters(), mir::WorldVec3(1.0, 0.5, 2.0)) <= 1e-5);
+    CHECK(glm::length(hit->mNormal - glm::vec3(0.0f, 1.0f, 0.0f)) <= 1e-5f);
+    CHECK(std::abs(hit->mDistance - 4.5f) <= 1e-5f);
+
+    // A body in the way is hit first.
+    const mir::BodyHandle sphere = world.CreateDynamicSphere(At(1.0, 2.0, 2.0), 0.5f);
+    const std::optional<mir::RayHit> first = world.RayCast(At(1.0, 5.0, 2.0), down, 10.0f);
+    REQUIRE(first);
+    CHECK(first->mBody == sphere);
+    CHECK(std::abs(first->mPoint.Meters().y - 2.5) <= 1e-5);
+
+    // Short of everything, pointing away, or malformed: no hit.
+    CHECK_FALSE(world.RayCast(At(1.0, 5.0, 2.0), down, 2.0f));
+    CHECK_FALSE(world.RayCast(At(1.0, 5.0, 2.0), -down, 10.0f));
+    CHECK_FALSE(world.RayCast(At(1.0, 5.0, 2.0), glm::vec3(0.0f), 10.0f));
+    CHECK_FALSE(world.RayCast(At(1.0, 5.0, 2.0), glm::vec3(std::nanf(""), -1.0f, 0.0f), 10.0f));
+    CHECK_FALSE(world.RayCast(At(1.0, 5.0, 2.0), down, 0.0f));
+    CHECK_FALSE(world.RayCast(At(1.0, 5.0, 2.0), down, -1.0f));
+}
+
+TEST_CASE("RayCast keeps a millimeter at the map edge", "[physics][lwc]")
+{
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
+    for (const mir::WorldVec3 &edge : {kEdgeA, kEdgeB})
+    {
+        mir::PhysicsWorld world;
+        AddFloor(world, edge);
+
+        const mir::WorldVec3 from = edge + kNudge + mir::WorldVec3(0.0, 5.0, 0.0);
+        const std::optional<mir::RayHit> hit = world.RayCast(At(from), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+        REQUIRE(hit);
+        // straight down, so x and z come back bit for bit
+        CHECK(hit->mPoint.Meters().x == from.x);
+        CHECK(hit->mPoint.Meters().z == from.z);
+        CHECK(std::abs(hit->mPoint.Meters().y - (edge.y + 0.5)) <= 1e-5);
+    }
+}
+
 TEST_CASE("A bad handle has no position instead of crashing", "[physics]")
 {
     mir::PhysicsWorld world;

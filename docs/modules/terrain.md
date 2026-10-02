@@ -258,6 +258,16 @@ terrain), and alternating diagonals because Jolt cannot express them. The cost
 is a directional bias: narrow ridges running along (1, -1) show more sawtooth
 than along (1, 1). See ADR 0012 (local, `docs/terrain/adr/`).
 
+**The collider is the same surface, quantized by Jolt.** Physics never links
+this module: a caller gathers a release's samples into one block and hands it
+to `PhysicsWorld::CreateStaticHeightField` with the block's first sample as the
+shape origin, so Jolt's triangles are `TriangulateCell`'s. Jolt stores heights
+in 8 bits per 2 x 2 block, which puts the collider up to 3.2 cm from this
+surface on the twisty test terrain and under 5 mm on gentle ground. P1 builds
+one shape over the whole 2x2 area: per-tile shapes quantize their shared edge
+differently (up to 3.3 cm apart) and snag sliding boxes at the seam. See ADR
+0017 (local).
+
 **Edges and corners give one height.** On a cell edge the height depends only
 on the edge's two samples, and both sides reduce to the same expression, so a
 shared tile edge or four-tile corner evaluates to the same bits from every
@@ -393,15 +403,23 @@ camera-relative narrowing, sizes for 65 and 257 samples a side).
 4. Measure the index at full map scale. Format 1 keeps 88 bytes per tile in one
    index, about 30 MB for 586 x 586 tiles of a 150 km map; if opening it is too
    slow, a later major can move tile tables into the packs.
-6. Streaming meshes (P3): an edge tile needs its neighbour's samples for its
+5. Streaming meshes (P3): an edge tile needs its neighbour's samples for its
    edge normals, so residency must load one ring further, or rebuild an edge
    when the neighbour arrives. Runtime building versus prebaked mesh caches is
    still open (C13), as is a compact terrain vertex: the shared renderer
    `Vertex` costs 64 bytes where position and normal need 24.
-7. Render LOD and Region meshes (P2/P3) build on the same builder: a coarser
+6. Render LOD and Region meshes (P2/P3) build on the same builder: a coarser
    step over the same samples, never finer than the tile's spacing.
+7. Colliders over more than one shape (maps past Jolt's 32768 samples a side,
+   P3 residency) bring the per-tile seam back; measure overlap or a compound
+   shape before choosing.
 
 ## Changed
+
+*2026-10-02* — **Static height fields (#16).** Physics builds a Jolt height
+field from a block of these samples (`PhysicsWorld::CreateStaticHeightField`).
+No change to the module itself; the physics tests use it to compute the
+expected surface.
 
 *2026-10-02* — **Resident height query (#117).** Was: heights came only from
 `EvaluateSurface` over samples a caller supplied, and a temporary analytic mock
