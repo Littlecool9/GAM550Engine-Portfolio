@@ -7,6 +7,7 @@
  *
  */
 #pragma once
+#include "renderer/RenderPath.h"
 #include "renderer/ViewSubmission.h"
 #include "renderer/VulkanRenderer.h"
 
@@ -98,6 +99,16 @@ namespace mir
             }
         }
 
+        // Rasters every frame while on, even when ray tracing is available. Not persisted.
+        void SetForceRaster(bool force)
+        {
+            if (!force)
+                mWarnedForcedRaster = false;
+            mForceRaster = force;
+        }
+
+        bool ForceRaster() const { return mForceRaster; }
+
         void OnUpdate(SystemContext &context) override
         {
             constexpr glm::vec3 kDefaultFogColor{ 0.5f, 0.6f, 0.7f };
@@ -174,6 +185,8 @@ namespace mir
             // asset, with their morph/skin data attached).
             if (const ModelDrawItems *models = context.world.TryResource<ModelDrawItems>())
                 mDrawItems.insert(mDrawItems.end(), models->items.begin(), models->items.end());
+            if (const TerrainDrawItems *terrain = context.world.TryResource<TerrainDrawItems>())
+                mDrawItems.insert(mDrawItems.end(), terrain->items.begin(), terrain->items.end());
 
             mDrawItemsPerViewport.resize(mViewports.size());
             mRenderViews.clear();
@@ -250,20 +263,27 @@ namespace mir
                 mWarnedSkippedItems = true;
             }
 
-            const bool traceable = renderSettings.rayTracing && mRenderer.RayTracingSupported();
-            if (traceable && mRenderViews.size() == 1)
+            const RenderPathChoice choice = ChooseRenderPath(renderSettings.rayTracing,
+                mRenderer.RayTracingSupported(), mForceRaster, mRenderViews.size());
+            if (choice.path == RenderPath::RayTraced)
             {
                 mRenderer.TraceFrame(mRenderViews);
             }
             else
             {
-                if (renderSettings.rayTracing && !traceable && !mWarnedNoRayTracing)
+                if (choice.fallback == RasterFallback::Unsupported && !mWarnedNoRayTracing)
                 {
                     MIR_LOG_WARN("RenderSystem: Ray Tracing is on in Project Settings but this device/driver "
                         "doesn't support it; falling back to raster");
                     mWarnedNoRayTracing = true;
                 }
-                if (traceable && mRenderViews.size() > 1 && !mWarnedMultiViewRayTracing)
+                if (choice.fallback == RasterFallback::ForcedRaster && !mWarnedForcedRaster)
+                {
+                    MIR_LOG_WARN("RenderSystem: Ray Tracing is on, but this scene has terrain, which ray tracing "
+                        "cannot draw yet; the whole scene renders with raster");
+                    mWarnedForcedRaster = true;
+                }
+                if (choice.fallback == RasterFallback::MultipleViews && !mWarnedMultiViewRayTracing)
                 {
                     MIR_LOG_WARN("RenderSystem: Ray Tracing draws a single viewport; {} viewports are "
                         "falling back to raster", mRenderViews.size());
@@ -291,5 +311,8 @@ namespace mir
         bool mWarnedNoRayTracing = false;
         bool mWarnedMultiViewRayTracing = false;
         bool mWarnedSkippedItems = false;
+
+        bool mForceRaster = false;
+        bool mWarnedForcedRaster = false;
     };
 }

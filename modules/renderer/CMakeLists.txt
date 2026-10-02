@@ -40,6 +40,7 @@ target_sources(engine_renderer PRIVATE
     src/renderer/CameraMath.cpp
     src/renderer/ComponentRegistration.cpp
     src/renderer/Renderer.cpp
+    src/renderer/RenderPath.cpp
     src/renderer/RenderSettings.cpp
     src/renderer/Shapes.cpp
     src/renderer/ViewSubmission.cpp
