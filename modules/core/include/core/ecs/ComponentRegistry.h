@@ -11,10 +11,13 @@
 #include "CommandBuffer.h"
 #include "ComponentAsserts.h"
 #include "ComponentFields.h"
+#include "ComponentGizmo.h"
 #include "Entity.h"
 #include "Signature.h"
 #include "TypeId.h"
 #include "World.h"
+
+#include <glm/mat4x4.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -48,6 +51,12 @@ namespace mir
 
         // byes for new component
         std::span<const std::byte> mDefaultValue;
+
+        // Editor-only viewport decoration; null for components with no gizmo.
+        // A world-space pick-sphere radius around the entity's transform origin.
+        float (*mPickRadius)(const void *component) = nullptr;
+        void (*mDrawGizmo)(const void *component, const glm::mat4 &worldMatrix, bool selected,
+            const GizmoCanvas &canvas) = nullptr;
 
         void *GetComponent(World &world, Entity entity) const { return mGet(*this, world, entity); }
 
@@ -96,7 +105,9 @@ namespace mir
 
         // Registers a C++ component. Idempotent
         template <typename T>
-        const ComponentOps &Register(std::span<const FieldDesc> fields = {})
+        const ComponentOps &Register(std::span<const FieldDesc> fields = {},
+            float (*pickRadius)(const void *) = nullptr,
+            void (*drawGizmo)(const void *, const glm::mat4 &, bool, const GizmoCanvas &) = nullptr)
         {
             MIR_ASSERT_COMPONENT(T);
             static_assert(std::is_default_constructible_v<T>,
@@ -109,6 +120,8 @@ namespace mir
             ops.mAlign = kIsTagComponent<T> ? 0 : alignof(T);
             ops.mRuntime = false;
             ops.mFields = fields;
+            ops.mPickRadius = pickRadius;
+            ops.mDrawGizmo = drawGizmo;
 
             ops.mHas = [](const ComponentOps &, const World &world, Entity entity)
                 {

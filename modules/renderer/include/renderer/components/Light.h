@@ -10,7 +10,9 @@
 #include "core/ecs/ComponentAsserts.h"
 #include "core/ecs/ComponentFields.h"
 
+#include <cfloat>
 #include <cstddef>
+#include <iterator>
 #include <glm/geometric.hpp>
 #include <glm/vec3.hpp>
 
@@ -28,21 +30,14 @@ namespace mir
 
     inline const glm::vec3 kSunReferenceLocalDirection = glm::normalize(glm::vec3(0.4f, 0.7f, 0.5f));
 
-    // Shared by the Inspector's type combo and the default name given to new light entities.
+    // Index == underlying LightType value. Shared by the Inspector's type combo
+    // (kLightFields' "type" field) and the default name given to new light entities.
+    inline constexpr std::string_view kLightTypeNames[] = { "Sun", "Point", "Spot", "Area" };
+
     inline const char *LightTypeName(LightType type)
     {
-        switch (type)
-        {
-        case LightType::Sun:
-            return "Sun";
-        case LightType::Point:
-            return "Point";
-        case LightType::Spot:
-            return "Spot";
-        case LightType::Area:
-            return "Area";
-        }
-        return "?";
+        const auto index = static_cast<std::size_t>(type);
+        return index < std::size(kLightTypeNames) ? kLightTypeNames[index].data() : "?";
     }
 
     struct Light
@@ -58,11 +53,17 @@ namespace mir
     MIR_ASSERT_COMPONENT(Light);
 
     inline constexpr FieldDesc kLightFields[] = {
-        { "type", FieldKind::Int, offsetof(Light, mType) },
-        { "color", FieldKind::Vec3, offsetof(Light, mColor) },
-        { "intensity", FieldKind::Float, offsetof(Light, mIntensity) },
-        { "range", FieldKind::Float, offsetof(Light, mRange) },
-        { "spotAngleDegrees", FieldKind::Float, offsetof(Light, mSpotAngleDegrees) },
-        { "areaSize", FieldKind::Float, offsetof(Light, mAreaSize) },
+        { .mName = "type", .mKind = FieldKind::Int, .mOffset = offsetof(Light, mType),
+          .mWidget = FieldWidget::Enum, .mEnumNames = kLightTypeNames },
+        { .mName = "color", .mKind = FieldKind::Vec3, .mOffset = offsetof(Light, mColor),
+          .mWidget = FieldWidget::Color },
+        { .mName = "intensity", .mKind = FieldKind::Float, .mOffset = offsetof(Light, mIntensity),
+          .mClamped = true, .mMin = 0.0f, .mMax = FLT_MAX }, // 0 is a legitimate "off"/degenerate value
+        { .mName = "range", .mKind = FieldKind::Float, .mOffset = offsetof(Light, mRange),
+          .mClamped = true, .mMin = 0.01f, .mMax = FLT_MAX }, // 0 would mean "affects nothing, ever"
+        { .mName = "spotAngleDegrees", .mKind = FieldKind::Float, .mOffset = offsetof(Light, mSpotAngleDegrees),
+          .mClamped = true, .mMin = 1.0f, .mMax = 179.0f }, // full cone angle; >=180 or <=0 isn't a cone
+        { .mName = "areaSize", .mKind = FieldKind::Float, .mOffset = offsetof(Light, mAreaSize),
+          .mClamped = true, .mMin = 0.0f, .mMax = FLT_MAX }, // 0 is a legitimate "off"/degenerate value
     };
 }
