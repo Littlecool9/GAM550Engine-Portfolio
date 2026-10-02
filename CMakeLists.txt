@@ -66,6 +66,7 @@ add_subdirectory(modules/terrain)
 add_subdirectory(modules/window)
 
 add_subdirectory(tools/AssetCooker)
+add_subdirectory(tools/TerrainTool)
 
 add_executable(MjolnirEngine WIN32)
 target_sources(MjolnirEngine PRIVATE main.cpp)
