@@ -11,6 +11,7 @@
 #include "core/log/Log.h"
 
 #include <fstream>
+#include <limits>
 #include <system_error>
 
 namespace mir
@@ -86,6 +87,67 @@ namespace mir
             return std::nullopt; // shorter than requested
 
         return bytes;
+    }
+
+    std::optional<std::vector<std::byte>> ReadByteRange(const std::filesystem::path &path, std::uint64_t offset,
+                                                        std::size_t length)
+    {
+        // seekg takes a signed streamoff, so the end must fit it, not just uint64.
+        constexpr std::uint64_t kMaxEnd = static_cast<std::uint64_t>(std::numeric_limits<std::streamoff>::max());
+        if (length > kMaxEnd || offset > kMaxEnd - length)
+        {
+            MIR_LOG_ERROR("ReadByteRange: range at offset {} of {} bytes overflows on {}", offset, length,
+                          path.string());
+            return std::nullopt;
+        }
+
+        std::ifstream file(path, std::ios::binary | std::ios::ate);
+        if (!file)
+        {
+            MIR_LOG_ERROR("ReadByteRange: cannot open {}", path.string());
+            return std::nullopt;
+        }
+
+        const std::streamoff size = file.tellg();
+        if (size < 0)
+        {
+            MIR_LOG_ERROR("ReadByteRange: cannot determine size of {}", path.string());
+            return std::nullopt;
+        }
+        if (offset + length > static_cast<std::uint64_t>(size))
+        {
+            MIR_LOG_ERROR("ReadByteRange: range [{}, {}) is past the end of {} ({} bytes)", offset, offset + length,
+                          path.string(), size);
+            return std::nullopt;
+        }
+
+        std::vector<std::byte> bytes(length);
+        file.seekg(static_cast<std::streamoff>(offset));
+        if (length != 0 && !file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(length)))
+        {
+            MIR_LOG_ERROR("ReadByteRange: short read of [{}, {}) on {}", offset, offset + length, path.string());
+            return std::nullopt;
+        }
+
+        return bytes;
+    }
+
+    std::optional<std::uint64_t> FileSize(const std::filesystem::path &path)
+    {
+        // MSVC's file_size reports a size for a directory instead of failing.
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(path, ec))
+        {
+            MIR_LOG_ERROR("FileSize: {} is missing or not a regular file", path.string());
+            return std::nullopt;
+        }
+        const std::uintmax_t size = std::filesystem::file_size(path, ec);
+        if (ec)
+        {
+            MIR_LOG_ERROR("FileSize: cannot stat {} ({})", path.string(), ec.message());
+            return std::nullopt;
+        }
+        return static_cast<std::uint64_t>(size);
     }
 
     std::optional<std::string> ReadText(const std::filesystem::path &path)

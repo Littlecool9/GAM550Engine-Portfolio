@@ -107,6 +107,57 @@ TEST_CASE("ReadFirstBytes returns nullopt for a missing file", "[core][fileio]")
     CHECK_FALSE(mir::ReadFirstBytes(MakeScratchFile(), 4).has_value());
 }
 
+TEST_CASE("ReadByteRange returns exactly the requested range", "[core][fileio]")
+{
+    const std::filesystem::path path = MakeScratchFile();
+    REQUIRE(mir::WriteBytes(path, MakeContent("HEADERpayloadTAIL")));
+
+    const std::optional<std::vector<std::byte>> middle = mir::ReadByteRange(path, 6, 7);
+    REQUIRE(middle.has_value());
+    REQUIRE(middle->size() == 7);
+    CHECK(std::memcmp(middle->data(), "payload", 7) == 0);
+
+    const std::optional<std::vector<std::byte>> tail = mir::ReadByteRange(path, 13, 4);
+    REQUIRE(tail.has_value());
+    CHECK(std::memcmp(tail->data(), "TAIL", 4) == 0);
+
+    // An empty range at the very end is inside the file.
+    const std::optional<std::vector<std::byte>> empty = mir::ReadByteRange(path, 17, 0);
+    REQUIRE(empty.has_value());
+    CHECK(empty->empty());
+
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("ReadByteRange fails past the end, on overflow and for a missing file", "[core][fileio]")
+{
+    const std::filesystem::path path = MakeScratchFile();
+    REQUIRE(mir::WriteBytes(path, MakeContent("0123456789")));
+
+    CHECK_FALSE(mir::ReadByteRange(path, 8, 3).has_value());
+    CHECK_FALSE(mir::ReadByteRange(path, 11, 0).has_value());
+    CHECK_FALSE(mir::ReadByteRange(path, UINT64_MAX - 1, 4).has_value());
+    CHECK_FALSE(mir::ReadByteRange(path, 0, SIZE_MAX).has_value());
+    CHECK_FALSE(mir::ReadByteRange(MakeScratchFile(), 0, 1).has_value());
+
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("FileSize reports the byte count of a file only", "[core][fileio]")
+{
+    const std::filesystem::path path = MakeScratchFile();
+    REQUIRE(mir::WriteBytes(path, MakeContent("0123456789")));
+
+    const std::optional<std::uint64_t> size = mir::FileSize(path);
+    REQUIRE(size.has_value());
+    CHECK(*size == 10);
+
+    CHECK_FALSE(mir::FileSize(MakeScratchFile()).has_value());
+    CHECK_FALSE(mir::FileSize(std::filesystem::temp_directory_path()).has_value());
+
+    std::filesystem::remove(path);
+}
+
 TEST_CASE("WriteText and ReadText round trip", "[core][fileio]")
 {
     const std::filesystem::path path = MakeScratchFile();
