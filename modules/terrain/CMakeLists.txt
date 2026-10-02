@@ -7,6 +7,7 @@ target_sources(engine_terrain PRIVATE
     src/terrain/TerrainPackFormat.cpp
     src/terrain/TerrainPackWriter.cpp
     src/terrain/TerrainRelease.cpp
+    src/terrain/TerrainSurface.cpp
     src/terrain/TileAddressing.cpp
     src/terrain/TileHeights.cpp
 )

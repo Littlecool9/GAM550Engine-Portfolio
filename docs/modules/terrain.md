@@ -1,13 +1,14 @@
 # terrain
 
 Terrain data that does not depend on a GPU or a physics engine: tile addresses,
-the shared sample grid, finite map bounds, placement in the Scene world, and
-the identities of a terrain's source, baked format and release, and the
-versioned files a baked release is stored in, with a reader that fetches one
-tile by byte range. It does not bake, publish, stream, mesh or collide terrain
-yet; those are later P1 issues and P3. Generating heights is offline work: the
-`terrain_bake` library in `tools/TerrainTool/` reads a source recipe and
-produces source heights on this module's grid; the engine never links it.
+the shared sample grid, finite map bounds, placement in the Scene world, the
+identities of a terrain's source, baked format and release, the versioned files
+a baked release is stored in, with a reader that fetches one tile by byte
+range, and the canonical surface over a release's final samples. It does not
+bake, publish, stream, mesh or collide terrain yet; those are later P1 issues
+and P3. Generating heights is offline work: the `terrain_bake` library in
+`tools/TerrainTool/` reads a source recipe and produces source heights on this
+module's grid; the engine never links it.
 
 `mir::terrain` · depends `mir::assets`, `mir::core` (public) · API `modules/terrain/include/terrain/` · maintainer Jackey Cen · reviewed 2026-10-01
 
@@ -34,6 +35,19 @@ if (address.IsInside())
 
 A `TileKey` (asset id plus signed tile coordinates) names shared tile data, so
 two placements of one asset use the same keys.
+
+Inside a cell the height comes from one surface that the query, the mesh and
+the collision shape all share. Every cell is cut into two triangles along the
+diagonal from sample `(i, k)` to `(i + 1, k + 1)`, and the height is the plane
+of the triangle holding the point. `EvaluateSurface` addresses the point, asks
+a lookup for the owning tile's samples (not owned; the block layout of the
+release) and returns a status with the height:
+
+```cpp
+const SurfaceSample s = EvaluateSurface(*layout, local, [&](TileCoord tile) { return resident.Samples(tile); });
+if (s.IsOk())
+    Use(s.height, s.normal);
+```
 
 ### Releases and tile packs
 
@@ -74,6 +88,10 @@ never changed after publication.
 | `EncodeTerrainRelease`, `MintTerrainReleaseId` | `terrain/TerrainPackWriter.h` | index and pack bytes from `TileHeights`, in memory; `TerrainHeightsHash`, `MakeTerrainReleaseNonce` |
 | `TerrainByteSource`, `TerrainFileSource`, `TerrainMemorySource` | `terrain/TerrainByteSource.h` | where a release's files come from, with read and byte counters |
 | `TerrainReleaseHandle`, `OpenTerrainRelease`, `OpenCurrentTerrainRelease` | `terrain/TerrainRelease.h` | one opened release; `ReadTile`, `VerifyAllPacks`; release directory and `current` pointer naming |
+| `TileSamplesView`, `TileSampleLookup` | `terrain/TerrainSurface.h` | one tile's final float32 samples, not owned, in the release block layout |
+| `CellTriangulation`, `TriangulateCell` | `terrain/TerrainSurface.h` | a cell's diagonal and two triangles as global sample indices, counter-clockwise from +Y |
+| `SurfaceSample`, `SurfaceStatus` | `terrain/TerrainSurface.h` | `EvaluateSurface` (owner tile), `EvaluateSurfaceInCell` (a chosen cell): status, height, normal, tile, cell, triangle |
+| `SurfaceTolerance`, `kTerrainSurfaceVersion` | `terrain/TerrainSurface.h` | agreement bound between two evaluations at one point; the surface contract version derived data records |
 
 ## Rules
 
@@ -172,17 +190,50 @@ infinite coordinate. Adding `translation.Meters()` by hand skips that check.
 interpolation, no residency and no files; it exists to prove the coordinate and
 identity chain (#111). Only tests and #111's checks may use it. Once the query
 service (#117) lands and #111 moves to it, the class and its tests are deleted.
-Inside a cell, interpolation and triangulation are the canonical surface's
-decision (#114), which the query service and the mesh consume.
+Heights inside a cell come from `TerrainSurface`, not from the mock.
+
+**One surface for query, mesh and collision.** Every cell is split along
+`(i, k)`–`(i + 1, k + 1)` whatever its tile, parity or origin: the diagonal Jolt's
+`HeightFieldShape` always uses, so a Jolt shape over any sub-rectangle of the
+samples has the same triangles. A mesh builds its indices from
+`TriangulateCell` rather than deriving them. Bilinear interpolation was
+rejected because no triangle mesh matches it (up to 1.4 m off on the test
+terrain), and alternating diagonals because Jolt cannot express them. The cost
+is a directional bias: narrow ridges running along (1, -1) show more sawtooth
+than along (1, 1). See ADR 0012 (local, `docs/terrain/adr/`).
+
+**Edges and corners give one height.** On a cell edge the height depends only
+on the edge's two samples, and both sides reduce to the same expression, so a
+shared tile edge or four-tile corner evaluates to the same bits from every
+cell that holds it (`EvaluateSurfaceInCell` checks the non-owning sides).
+`EvaluateSurface` reads only the owning tile, chosen as by `AddressLocal`; when
+that tile is missing it reports `MissingTile` rather than falling back to the
+neighbour's copy of the edge. Points on the cell diagonal take triangle 0, as
+Jolt does.
+
+**Missing or bad data is a status, never a height.** `OutsideMap`,
+`InvalidInput`, `MissingTile` and `InvalidSamples` leave `height` and `normal`
+NaN. Padding samples take part in the cells along the map edge, but a point
+past the bounds is `OutsideMap` even if its cell has samples.
+
+**The tolerance is the storage quantum.** `SurfaceTolerance` is half a float32
+ulp of the largest height involved (at least 2^-24 m); double evaluation stays
+around 1e-13 m below that. It holds while the spacing is at least 2^25 ulps of
+the coordinates (about 1 mm at 150 km).
+
+**Bump `kTerrainSurfaceVersion` only when the rule changes.** New sample values,
+including a P2 border band the baker rewrites so fine edge samples lie on the
+coarse edge, keep the version; a different diagonal, tie rule, ownership or
+formula changes it.
 
 ## State
 
-*As of 2026-10-01.* Layout, addressing, placement, identities, the mock
-source, the release format, its in-memory encoder and the synchronous range
-reader work. Nothing in the engine loads terrain; the module is linked into
-`MjolnirEngine` but has no runtime caller yet. Its first non-test caller is the
-offline `terrain_bake` library (#113: recipe, fingerprint, "mir.relief"
-generator), tested by `terrain_tool_tests`.
+*As of 2026-10-01.* Layout, addressing, placement, identities, the canonical
+surface, the mock source, the release format, its in-memory encoder and the
+synchronous range reader work. Nothing in the engine loads terrain; the module
+is linked into `MjolnirEngine` but has no runtime caller yet. Its first
+non-test caller is the offline `terrain_bake` library (#113: recipe,
+fingerprint, "mir.relief" generator), tested by `terrain_tool_tests`.
 
 Tests in `modules/terrain/tests/`: `TerrainLayout` (validation, clipped edge
 tiles, shared edge samples, padding), `TileAddressing` (floor on both sides of
@@ -194,23 +245,31 @@ reads, negative and clipped edge tiles, chunk-size independence, writer
 refusals, a newer minor, release-id minting), `TerrainPackIntegrity` (malformed,
 truncated, overlapping, duplicate, overflowing and corrupt indexes and packs),
 `TerrainRelease` (naming, pointer parsing, disk reads, a handle kept across a
-pointer switch, the committed fixture in `tests/fixtures/releases/`).
+pointer switch, the committed fixture in `tests/fixtures/releases/`),
+`TerrainSurface` (2x2 tiles of 256 m at 4 m around the origin, at mixed signs
+and about 150 km out: every sample, dense shared-edge probes from all sides and
+their neighbouring doubles, four-tile corners, random points against explicit
+mesh-triangle planes, closed max edges, a partial boundary tile with padding,
+missing and invalid samples).
 
 ## Backlog
 
 1. P3 asynchronous range reads, caching and eviction over the same files: read
    a record's range, then hand the bytes to `DecodeTerrainTile`.
-2. The canonical baked surface (#114): cell triangulation, interpolation and
-   tolerance, over the cells this module addresses.
-3. `TerrainInstance` scene data and overlap checks between placements (#118).
-4. Per-tile source precision (P2), under the nesting rule above.
-5. Delete `MockTerrainSource` and its tests once #117 lands and #111 uses the
+2. `TerrainInstance` scene data and overlap checks between placements (#118).
+3. Per-tile source precision (P2), under the nesting rule above; the surface
+   rule stays, the views will carry their spacing.
+4. Delete `MockTerrainSource` and its tests once #117 lands and #111 uses the
    real query.
-6. Measure the index at full map scale. Format 1 keeps 88 bytes per tile in one
+5. Measure the index at full map scale. Format 1 keeps 88 bytes per tile in one
    index, about 30 MB for 586 x 586 tiles of a 150 km map; if opening it is too
    slow, a later major can move tile tables into the packs.
 
 ## Changed
+
+*2026-10-01* — **Canonical surface (#114).** `TerrainSurface`: fixed-diagonal
+triangles over final samples, shared by query, mesh and collision, with
+`kTerrainSurfaceVersion` 1 and a tolerance of half a float32 ulp.
 
 *2026-10-01* — **Source recipe and generator (#113).** `tools/TerrainTool/`
 adds `terrain_bake`: recipe validation that names every bad field, the source
