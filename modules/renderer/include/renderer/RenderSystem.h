@@ -7,6 +7,7 @@
  *
  */
 #pragma once
+#include "renderer/CameraMath.h"
 #include "renderer/ViewSubmission.h"
 #include "renderer/VulkanRenderer.h"
 
@@ -22,6 +23,12 @@
 
 #include <glm/gtc/matrix_inverse.hpp>
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+#include <optional>
+#include <utility>
 #include <vector>
 
 namespace mir
@@ -107,6 +114,7 @@ namespace mir
             mRenderer.SetFog(kDefaultFogColor, renderSettings.fog ? kDefaultFogDensity : 0.0f);
 
             bool haveSunLight = false;
+            glm::vec3 sunDirWS{ 0.0f, 1.0f, 0.0f };
             mLightItems.clear();
             mLightQuery->ForEach([&](Entity, const WorldTransform &world, const Light &light)
                 {
@@ -114,7 +122,7 @@ namespace mir
                     {
                         if (haveSunLight)
                             return;
-                        const glm::vec3 sunDirWS = world.Linear() * kSunReferenceLocalDirection;
+                        sunDirWS = world.Linear() * kSunReferenceLocalDirection;
                         mRenderer.SetDirectionalLight(sunDirWS, light.mColor * light.mIntensity);
                         haveSunLight = true;
                         return;
@@ -128,9 +136,9 @@ namespace mir
                         ? std::cos(glm::radians(light.mSpotAngleDegrees * 0.5f))
                         : -1.0f;
                     item.color = light.mColor * light.mIntensity;
+                    item.shadowSlot = light.mType == LightType::Area ? -2 : -1;
                     mLightItems.push_back(item);
                 });
-            mRenderer.SetLights(mLightItems);
 
             bool haveSky = false;
             mSkyQuery->ForEach([&](Entity, const WorldTransform &world, const Sky &sky)
@@ -139,7 +147,7 @@ namespace mir
                         return;
                     if (!haveSunLight)
                     {
-                        const glm::vec3 sunDirWS = world.Linear() * kSunReferenceLocalDirection;
+                        sunDirWS = world.Linear() * kSunReferenceLocalDirection;
                         mRenderer.SetDirectionalLight(sunDirWS, kDefaultLightColor);
                     }
                     mRenderer.SetAtmosphere(sky);
@@ -160,6 +168,34 @@ namespace mir
                     haveDefaultCamera = true;
                 });
 
+            if (haveDefaultCamera)
+            {
+                const auto assignNearest = [&](bool wantSpot, uint32_t cap)
+                    {
+                        std::vector<std::pair<float, LightItem *>> candidates;
+                        for (LightItem &item : mLightItems)
+                        {
+                            const bool isSpot = item.spotCos != -1.0f;
+                            if (isSpot != wantSpot || item.shadowSlot == -2)
+                                continue;
+                            const std::optional<glm::vec3> relative =
+                                TryCameraRelativeFloat(item.position, defaultCameraPose.position);
+                            candidates.emplace_back(
+                                relative ? glm::length(*relative) : std::numeric_limits<float>::max(), &item);
+                        }
+                        std::sort(candidates.begin(), candidates.end(),
+                            [](const auto &a, const auto &b) { return a.first < b.first; });
+                        for (uint32_t slot = 0; slot < cap && slot < candidates.size(); ++slot)
+                            candidates[slot].second->shadowSlot = static_cast<int32_t>(slot);
+                    };
+                assignNearest(/*wantSpot*/ true, VulkanRenderer::kMaxSpotShadows);
+                assignNearest(/*wantSpot*/ false, VulkanRenderer::kMaxPointShadows);
+            }
+            for (LightItem &item : mLightItems)
+                if (item.shadowSlot == -2)
+                    item.shadowSlot = -1;
+            mRenderer.SetLights(mLightItems);
+
             const VkExtent2D swapchainExtent = mRenderer.SwapchainExtent();
 
             mDrawItems.clear();
@@ -174,6 +210,79 @@ namespace mir
             // asset, with their morph/skin data attached).
             if (const ModelDrawItems *models = context.world.TryResource<ModelDrawItems>())
                 mDrawItems.insert(mDrawItems.end(), models->items.begin(), models->items.end());
+
+            const bool haveDirectionalLight = haveSunLight || haveSky;
+            mSunShadowItems.clear();
+            if (haveDirectionalLight && haveDefaultCamera)
+            {
+                const glm::mat4 sunShadowViewProj = MakeOrthographicViewProjection(
+                    -sunDirWS, VulkanRenderer::kSunShadowHalfExtent, VulkanRenderer::kSunShadowNearZ);
+                BuildViewDrawItems(mDrawItems, defaultCameraPose.position, sunShadowViewProj, mSunShadowItems);
+                mRenderer.SetSunShadowCaster(true, sunShadowViewProj, defaultCameraPose.position, mSunShadowItems);
+            }
+            else
+            {
+                mRenderer.SetSunShadowCaster(false, glm::mat4{ 1.0f }, WorldPosition{}, mSunShadowItems);
+            }
+
+            {
+                constexpr std::array<glm::vec3, 6> kPointFaceForward{ {
+                    { 1, 0, 0 },{ -1, 0, 0 },{ 0, 1, 0 },{ 0, -1, 0 },{ 0, 0, 1 },{ 0, 0, -1 } } };
+                constexpr std::array<glm::vec3, 6> kPointFaceUp{ {
+                    { 0, -1, 0 },{ 0, -1, 0 },{ 0, 0, 1 },{ 0, 0, -1 },{ 0, -1, 0 },{ 0, -1, 0 } } };
+
+                std::array<bool, VulkanRenderer::kMaxSpotShadows> spotSlotFilled{};
+                std::array<bool, VulkanRenderer::kMaxPointShadows> pointSlotFilled{};
+
+                for (LightItem &item : mLightItems)
+                {
+                    if (item.shadowSlot < 0)
+                        continue;
+                    const uint32_t slot = static_cast<uint32_t>(item.shadowSlot);
+
+                    if (item.spotCos != -1.0f) // Spot
+                    {
+                        if (slot >= VulkanRenderer::kMaxSpotShadows)
+                            continue;
+                        const float fovYDegrees = 2.0f * glm::degrees(std::acos(item.spotCos));
+                        const glm::vec3 upHint =
+                            std::abs(item.direction.y) > 0.99f ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
+                        const glm::mat4 spotViewProj = MakeForwardZPerspectiveViewProjection(
+                            item.direction, upHint, fovYDegrees, VulkanRenderer::kSpotShadowNearZ, item.range);
+
+                        mSpotShadowItems[slot].clear();
+                        BuildViewDrawItems(mDrawItems, item.position, spotViewProj, mSpotShadowItems[slot]);
+                        mRenderer.SetSpotShadowCaster(slot, true, spotViewProj, item.position, mSpotShadowItems[slot]);
+                        spotSlotFilled[slot] = true;
+                    }
+                    else // Point (Area never reaches here - it's never assigned a shadowSlot)
+                    {
+                        if (slot >= VulkanRenderer::kMaxPointShadows)
+                            continue;
+                        std::array<PointShadowFace, 6> faces{};
+                        for (int face = 0; face < 6; ++face)
+                        {
+                            const glm::mat4 faceViewProj = MakeForwardZPerspectiveViewProjection(
+                                kPointFaceForward[face], kPointFaceUp[face], 90.0f,
+                                VulkanRenderer::kPointShadowNearZ, item.range);
+
+                            mPointShadowItems[slot][face].clear();
+                            BuildViewDrawItems(mDrawItems, item.position, faceViewProj, mPointShadowItems[slot][face]);
+                            faces[face] = PointShadowFace{ faceViewProj, mPointShadowItems[slot][face] };
+                        }
+                        mRenderer.SetPointShadowCaster(slot, true, item.position, item.range, faces);
+                        pointSlotFilled[slot] = true;
+                    }
+                }
+
+                for (uint32_t slot = 0; slot < VulkanRenderer::kMaxSpotShadows; ++slot)
+                    if (!spotSlotFilled[slot])
+                        mRenderer.SetSpotShadowCaster(slot, false, glm::mat4{ 1.0f }, WorldPosition{}, {});
+                for (uint32_t slot = 0; slot < VulkanRenderer::kMaxPointShadows; ++slot)
+                    if (!pointSlotFilled[slot])
+                        mRenderer.SetPointShadowCaster(
+                            slot, false, WorldPosition{}, 0.0f, std::array<PointShadowFace, 6>{});
+            }
 
             mDrawItemsPerViewport.resize(mViewports.size());
             mRenderViews.clear();
@@ -286,6 +395,9 @@ namespace mir
         std::vector<WorldDrawItem> mDrawItems;
         std::vector<std::vector<DrawItem>> mDrawItemsPerViewport;
         std::vector<RenderView> mRenderViews;
+        std::vector<DrawItem> mSunShadowItems;
+        std::array<std::vector<DrawItem>, VulkanRenderer::kMaxSpotShadows> mSpotShadowItems;
+        std::array<std::array<std::vector<DrawItem>, 6>, VulkanRenderer::kMaxPointShadows> mPointShadowItems;
 
         bool mWarnedNoCamera = false;
         bool mWarnedNoRayTracing = false;

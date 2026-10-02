@@ -99,8 +99,60 @@ namespace mir
         return WorldRay{ camera.position, glm::normalize(nearPoint) };
     }
 
+    glm::mat4 MakeOrthographicViewProjection(const glm::vec3 &direction, float halfExtent, float nearZ)
+    {
+        const glm::vec3 fwd = glm::normalize(direction);
+        const glm::vec3 upHint = std::abs(fwd.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
+        const glm::vec3 right = glm::normalize(glm::cross(upHint, -fwd));
+        const glm::vec3 up = glm::cross(-fwd, right);
+
+        glm::mat4 cameraWorld{ 1.0f };
+        cameraWorld[0] = glm::vec4(right, 0.0f);
+        cameraWorld[1] = glm::vec4(up, 0.0f);
+        cameraWorld[2] = glm::vec4(-fwd, 0.0f);
+        cameraWorld[3] = glm::vec4(-fwd * (halfExtent + nearZ), 1.0f);
+
+        const glm::mat4 view = glm::inverse(cameraWorld);
+        const float farZ = nearZ + 2.0f * halfExtent;
+
+        glm::mat4 proj{ 0.0f };
+        proj[0][0] = 1.0f / halfExtent;
+        proj[1][1] = -1.0f / halfExtent; // glm is Y up, Vulkan clip space is Y down
+        proj[2][2] = -1.0f / (farZ - nearZ);
+        proj[3][2] = -nearZ / (farZ - nearZ);
+        proj[3][3] = 1.0f;
+
+        return proj * view;
+    }
+
+    glm::mat4 MakeForwardZPerspectiveViewProjection(const glm::vec3 &forward, const glm::vec3 &up,
+        float fovYDegrees, float nearZ, float farZ)
+    {
+        const glm::vec3 fwd = glm::normalize(forward);
+        const glm::vec3 right = glm::normalize(glm::cross(up, -fwd));
+        const glm::vec3 trueUp = glm::cross(-fwd, right);
+
+        glm::mat4 cameraWorld{ 1.0f };
+        cameraWorld[0] = glm::vec4(right, 0.0f);
+        cameraWorld[1] = glm::vec4(trueUp, 0.0f);
+        cameraWorld[2] = glm::vec4(-fwd, 0.0f);
+
+        const glm::mat4 view = glm::inverse(cameraWorld);
+        const float focal = 1.0f / std::tan(glm::radians(fovYDegrees) * 0.5f);
+
+        glm::mat4 proj{ 0.0f };
+        proj[0][0] = focal; // aspect is always 1: every shadow face is square
+        proj[1][1] = -focal; // glm is Y up, Vulkan clip space is Y down
+        proj[2][3] = -1.0f;  // clip w is the view depth
+        // Forward Z (0=nearZ, 1=farZ)
+        proj[2][2] = -farZ / (farZ - nearZ);
+        proj[3][2] = -(farZ * nearZ) / (farZ - nearZ);
+
+        return proj * view;
+    }
+
     std::optional<float> RayIntersectsBox(const WorldRay &ray, const WorldPose &box,
-                                          const glm::vec3 &localMin, const glm::vec3 &localMax)
+        const glm::vec3 &localMin, const glm::vec3 &localMax)
     {
         const std::optional<glm::mat4> boxFromRay = box.TryMatrixRelativeTo(ray.origin);
         if (!boxFromRay)
