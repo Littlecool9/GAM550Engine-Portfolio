@@ -13,6 +13,7 @@
 #include <core/ecs/ComponentFields.h>
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/components/Name.h>
+#include <core/math/WorldReal.h>
 #include <editor/Selection.h>
 
 #include <glm/gtc/quaternion.hpp>
@@ -20,6 +21,7 @@
 
 #include <imgui.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -51,6 +53,16 @@ namespace mir
                 return ImGui::DragFloat(label, static_cast<float *>(bytes), 0.1f);
             case FieldKind::Vec3:
                 return ImGui::DragFloat3(label, glm::value_ptr(*static_cast<glm::vec3 *>(bytes)), 0.1f);
+            case FieldKind::WorldPosition: {
+                // NoRoundToFormat: a drag must not snap a far position to the 4 shown decimals
+                WorldVec3 &value = *static_cast<WorldVec3 *>(bytes);
+                constexpr ImGuiDataType kWorldDataType = kLargeWorld ? ImGuiDataType_Double : ImGuiDataType_Float;
+                if (!ImGui::DragScalarN(label, kWorldDataType, glm::value_ptr(value), 3, 0.1f, nullptr,
+                                        nullptr, "%.4f", ImGuiSliderFlags_NoRoundToFormat))
+                    return false;
+                // typed text such as 1e400 parses to inf, which Transform's setter drops silently
+                return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+            }
             case FieldKind::Vec4:
                 return ImGui::DragFloat4(label, glm::value_ptr(*static_cast<glm::vec4 *>(bytes)), 0.1f);
             case FieldKind::Quat:

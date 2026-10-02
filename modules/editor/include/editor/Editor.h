@@ -106,6 +106,8 @@ namespace mir
         void DrawOpenProjectConfirm(EditorActions &actions);
         void DrawViewportGizmo(const EngineModeState &mode, World &world);
         void UpdateViewportPicking(const EngineModeState &mode, World &world);
+        // F moves the scene camera next to the primary selection.
+        void FocusSelection(const EngineModeState &mode, World &world);
         void DrawSelectionHighlights(const EngineModeState &mode, World &world);
         void DrawComponentGizmos(const EngineModeState &mode, World &world);
         void DrawNewProjectModal(EditorActions &actions, std::span<const ProjectMenuEntry> projects);

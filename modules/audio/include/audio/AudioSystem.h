@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <glm/vec3.hpp>
+#include <core/math/WorldCoordinates.h>
 namespace mir::audio
 {
 
@@ -25,12 +26,13 @@ namespace mir::audio
     
     void UnregisterEmitter(uint64_t gameObject);
 
+    // Wwise positions are double, so world positions go in unnarrowed.
     void SetEmitterPosition(uint64_t gameObject,
-                            const glm::vec3 &position,
+                            WorldPosition position,
                             const glm::vec3 &front,
                             const glm::vec3 &up);
 
-    void SetListenerPosition(const glm::vec3 &position,
+    void SetListenerPosition(WorldPosition position,
                             const glm::vec3 &front,
                             const glm::vec3 &up);
 

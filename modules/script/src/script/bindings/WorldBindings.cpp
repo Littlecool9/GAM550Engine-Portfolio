@@ -12,14 +12,17 @@
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/DeferredAccess.h>
 #include <core/ecs/RuntimeQuery.h>
+#include <core/ecs/TransformHierarchy.h>
 #include <core/ecs/World.h>
 #include <core/log/Log.h>
+#include <core/math/WorldReal.h>
 
 #include <glm/gtc/type_ptr.hpp>
 
 #include <sol/sol.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -45,6 +48,7 @@ namespace mir
             int32_t asInt;
             float asFloat;
             glm::vec3 asVec3;
+            WorldVec3 asWorldPosition;
             glm::vec4 asVec4;
             glm::quat asQuat;
             glm::mat4 asMat4;
@@ -56,6 +60,15 @@ namespace mir
             {
             }
         };
+
+        sol::table WorldVec3ToLua(sol::state_view lua, const WorldVec3 &value)
+        {
+            sol::table out = lua.create_table();
+            out["x"] = value.x;
+            out["y"] = value.y;
+            out["z"] = value.z;
+            return out;
+        }
 
         sol::object FieldToLua(sol::state_view lua, const FieldDesc &field, const void *component)
         {
@@ -88,6 +101,12 @@ namespace mir
                 out["y"] = value.y;
                 out["z"] = value.z;
                 return out;
+            }
+            case FieldKind::WorldPosition:
+            {
+                WorldVec3 value{};
+                field.Read(component, &value);
+                return WorldVec3ToLua(lua, value);
             }
             case FieldKind::Vec4:
             {
@@ -179,6 +198,19 @@ namespace mir
                 scratch.asVec3 = glm::vec3(t.get_or("x", 0.0f), t.get_or("y", 0.0f), t.get_or("z", 0.0f));
                 return true;
             }
+            case FieldKind::WorldPosition:
+            {
+                if (!value.is<sol::table>())
+                    return false;
+                const sol::table t = value.as<sol::table>();
+                const glm::dvec3 v(t.get_or("x", 0.0), t.get_or("y", 0.0), t.get_or("z", 0.0));
+                // Pre-examine valid or not cuz Transform is silent about invalid conversion
+                const std::optional<WorldVec3> position = TryWorldVec3FromDouble(v);
+                if (!position)
+                    return false;
+                scratch.asWorldPosition = *position;
+                return true;
+            }
             case FieldKind::Vec4:
             {
                 if (!value.is<sol::table>())
@@ -258,6 +290,8 @@ namespace mir
                 return FieldKind::Float;
             if (kind == "vec3")
                 return FieldKind::Vec3;
+            if (kind == "world_position")
+                return FieldKind::WorldPosition;
             if (kind == "vec4")
                 return FieldKind::Vec4;
             if (kind == "quat")
@@ -327,8 +361,8 @@ namespace mir
             FieldScratch scratch;
             if (!LuaValueToField(*field, value, scratch))
             {
-                MIR_LOG_ERROR("script: world:set '{}.{}' - value has wrong shape for a {}", componentName, fieldName,
-                              FieldKindName(field->mKind));
+                MIR_LOG_ERROR("script: world:set '{}.{}' - value is the wrong shape or non-finite for a {}",
+                              componentName, fieldName, FieldKindName(field->mKind));
                 return false;
             }
 
@@ -338,6 +372,37 @@ namespace mir
                 return false;
             }
             return true;
+        }
+
+        // Immidiate resolve, unlike WorldTransform's field, which lags until PostUpdate.
+        // Transform.position is this only on a root; on a child it is parent-local.
+        sol::object WorldWorldPosition(World &world, Entity entity, sol::this_state state)
+        {
+            if (world.GetComponent<Transform>(entity) == nullptr)
+                return sol::nil; // dead entity or no Transform
+
+            return WorldVec3ToLua(sol::state_view(state), ResolveWorld(world, entity).position.Meters());
+        }
+
+        // Resolved now, like world_position. linear is world rotation * scale,
+        // column-major as glm stores it: linear[c * 3 + r + 1] = m[c][r].
+        sol::object WorldWorldPose(World &world, Entity entity, sol::this_state state)
+        {
+            if (world.GetComponent<Transform>(entity) == nullptr)
+                return sol::nil; // dead entity or no Transform
+
+            sol::state_view lua(state);
+            const WorldPose pose = ResolveWorld(world, entity);
+
+            sol::table linear = lua.create_table(9, 0);
+            const float *m = glm::value_ptr(pose.linear);
+            for (int i = 0; i < 9; ++i)
+                linear[i + 1] = m[i];
+
+            sol::table out = lua.create_table();
+            out["position"] = WorldVec3ToLua(lua, pose.position.Meters());
+            out["linear"] = linear;
+            return out;
         }
 
         Entity WorldSpawn(World &world)
@@ -373,8 +438,8 @@ namespace mir
                     FieldScratch scratch;
                     if (!LuaValueToField(field, value, scratch))
                     {
-                        MIR_LOG_ERROR("script: world:add '{}.{}' - value has wrong shape for a {}", componentName,
-                                      field.mName, FieldKindName(field.mKind));
+                        MIR_LOG_ERROR("script: world:add '{}.{}' - value is the wrong shape or non-finite for a {}",
+                                      componentName, field.mName, FieldKindName(field.mKind));
                         continue;
                     }
                     field.Write(buffer.data(), &scratch);
@@ -558,6 +623,8 @@ namespace mir
                                 "has", &WorldHas,
                                 "get", &WorldGet,
                                 "set", &WorldSet,
+                                "world_position", &WorldWorldPosition,
+                                "world_pose", &WorldWorldPose,
                                 "spawn", &WorldSpawn,
                                 "destroy", &WorldDestroy,
                                 "add", &WorldAdd,

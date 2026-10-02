@@ -15,6 +15,8 @@
 #include "core/log/Assert.h"
 #include "core/log/Log.h"
 
+#include <optional>
+
 namespace mir
 {
     namespace detail
@@ -23,11 +25,11 @@ namespace mir
         struct TransformResolver
         {
             static void Store(WorldTransform &target,
-                              const glm::mat4 &matrix,
+                              const WorldPose &pose,
                               uint32_t localVersion,
                               uint32_t parentVersion)
             {
-                target.mMatrix = matrix;
+                target.mPose = pose;
                 target.mLocalVersion = localVersion;
                 target.mParentVersion = parentVersion;
                 target.mDirty = false;
@@ -81,6 +83,18 @@ namespace mir
                 detail::TransformResolver::Invalidate(*cache);
         }
 
+        // A root composes under the identity pose at the origin, which is exact
+        // in either precision, so one path serves roots and children.
+        WorldPose Compose(const WorldPose &parent, const Transform &local, Entity entity)
+        {
+            if (const std::optional<WorldPose> pose = TryComposePose(parent, local.LinearMatrix(), local.Position()))
+                return *pose;
+
+            MIR_LOG_WARN("ResolveWorld: entity {} leaves the finite world; kept at its parent's position",
+                         entity.mIndex);
+            return WorldPose{ parent.position, parent.linear * local.LinearMatrix() };
+        }
+
         // destroy all destroyed entity's children
         void OnEntityDestroyed(World &world, Entity entity, void *)
         {
@@ -130,11 +144,11 @@ namespace mir
         return index != nullptr && index->IsAncestorOf(ancestor, entity);
     }
 
-    glm::mat4 ResolveWorld(World &world, Entity entity)
+    WorldPose ResolveWorld(World &world, Entity entity)
     {
         // if dead, identity
         if (!world.IsAlive(entity))
-            return glm::mat4(1.0f);
+            return WorldPose{};
 
         const HierarchyIndex *index = world.TryResource<HierarchyIndex>();
 
@@ -153,7 +167,7 @@ namespace mir
             chain[depth++] = cursor;
         }
 
-        glm::mat4 accumulated(1.0f);
+        WorldPose accumulated;
 
         uint32_t parentVersion = 0;
 
@@ -171,19 +185,19 @@ namespace mir
 
             if (cache == nullptr)
             {
-                accumulated = local ? accumulated * local->Matrix() : accumulated;
+                accumulated = local ? Compose(accumulated, *local, current) : accumulated;
                 cacheable = false;
                 continue;
             }
 
             if (cacheable && detail::TransformResolver::IsClean(*cache, localVersion, parentVersion))
             {
-                accumulated = cache->Matrix();
+                accumulated = cache->Pose();
                 parentVersion = cache->Version();
                 continue;
             }
 
-            accumulated = local ? accumulated * local->Matrix() : accumulated;
+            accumulated = local ? Compose(accumulated, *local, current) : accumulated;
             detail::TransformResolver::Store(*cache, accumulated, localVersion, parentVersion);
             parentVersion = cache->Version();
             cacheable = true;

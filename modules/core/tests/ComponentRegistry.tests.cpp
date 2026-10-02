@@ -165,29 +165,41 @@ TEST_CASE("A field write on Transform goes through the setter, not the bytes")
     const FieldDesc *position = ops.FindField("position");
     REQUIRE(position != nullptr);
 
-    const glm::vec3 target{1.0f, 2.0f, 3.0f};
+    // far from the origin, where a float would round the millimetres away
+    CHECK(position->mKind == FieldKind::WorldPosition);
+    const mir::WorldVec3 target{-150000.125 + 0.001, 350.5 - 0.002, 75000.5 + 0.003};
     REQUIRE(position->Write(transform, &target));
 
     CHECK(transform->Position() == target);
     CHECK(transform->Version() != before);
 
-    glm::vec3 readBack{};
+    mir::WorldVec3 readBack{};
     position->Read(transform, &readBack);
     CHECK(readBack == target);
+}
+
+TEST_CASE("Transform keeps scale and rotation as float fields")
+{
+    const ComponentOps &ops = ComponentRegistry::Instance().Register<Transform>(mir::kTransformFields);
+
+    CHECK(ops.FindField("scale")->mKind == FieldKind::Vec3);
+    CHECK(ops.FindField("rotation")->mKind == FieldKind::Quat);
 }
 
 TEST_CASE("A field with no setter refuses the write")
 {
     const ComponentOps &ops = ComponentRegistry::Instance().Register<mir::WorldTransform>(mir::kWorldTransformFields);
 
-    const FieldDesc *matrix = ops.FindField("matrix");
-    REQUIRE(matrix != nullptr);
-    CHECK(matrix->ReadOnly());
+    const FieldDesc *position = ops.FindField("position");
+    REQUIRE(position != nullptr);
+    CHECK(position->mKind == FieldKind::WorldPosition);
+    CHECK(position->ReadOnly());
 
     mir::WorldTransform value{};
-    const glm::mat4 attempt{2.0f};
-    CHECK_FALSE(matrix->Write(&value, &attempt));
-    CHECK(value.Matrix() == glm::mat4{1.0f});
+    const mir::WorldVec3 attempt{2.0};
+    CHECK_FALSE(position->Write(&value, &attempt));
+    CHECK(value.Linear() == glm::mat3{1.0f});
+    CHECK(value.Position().Meters() == mir::WorldVec3(0.0));
 }
 
 TEST_CASE("A registered tag reports size 0 and works through the erased ops")
@@ -252,6 +264,33 @@ TEST_CASE("A script declares a component and the registry lays it out")
     CHECK(ops.FindField("target")->mOffset == 8);
     CHECK(ops.mSize == 16);
     CHECK(ops.mAlign == 4);
+}
+
+TEST_CASE("A script-declared world_position field is aligned to WorldReal and keeps its precision")
+{
+    constexpr RuntimeFieldDecl fields[] = {
+        {"flag", FieldKind::Bool},
+        {"anchor", FieldKind::WorldPosition},
+    };
+
+    const ComponentOps &ops = ComponentRegistry::Instance().RegisterRuntime("ScriptAnchor", fields);
+
+    // 8 and 32 in a large-world build, 4 and 16 in a float one
+    constexpr uint32_t kAlign = alignof(mir::WorldVec3);
+    CHECK(ops.FindField("anchor")->mOffset == kAlign);
+    CHECK(ops.mSize == kAlign + sizeof(mir::WorldVec3));
+    CHECK(ops.mAlign == kAlign);
+
+    World world;
+    const Entity entity = world.CreateEntity();
+    ops.AddDefault(world, entity);
+
+    const mir::WorldVec3 anchor{150000.625 + 0.001, -20.0, -75000.25};
+    REQUIRE(ops.FindField("anchor")->Write(ops.GetComponent(world, entity), &anchor));
+
+    mir::WorldVec3 readBack{};
+    ops.FindField("anchor")->Read(ops.GetComponent(world, entity), &readBack);
+    CHECK(readBack == anchor);
 }
 
 TEST_CASE("A script component round-trips through the world")

@@ -55,7 +55,42 @@ TEST_CASE("RestoreWorld reverts a Transform mutated after CaptureWorld", "[scene
 
     const Transform *restoredTransform = world.GetComponent<Transform>(restoredEntity);
     REQUIRE(restoredTransform != nullptr);
-    CHECK(restoredTransform->Position() == glm::vec3(1.0f, 2.0f, 3.0f));
+    CHECK(restoredTransform->Position() == mir::WorldVec3(1.0, 2.0, 3.0));
+}
+
+TEST_CASE("RestoreWorld reverts a far root and its child exactly", "[scene]")
+{
+    mir::RegisterCoreComponents();
+
+    const mir::WorldVec3 rootPosition = mir::WorldVec3(150000.625, -20.0, -75000.25) + mir::WorldVec3(0.001, -0.002, 0.003);
+    const mir::WorldVec3 childLocal{0.001, 0.0, -0.002};
+
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity root = CreateSceneEntity(world, scene);
+    Entity child = CreateSceneEntity(world, scene, root);
+    AddTransform(world, root, Transform{ rootPosition });
+    AddTransform(world, child, Transform{ childLocal }, root);
+    const mir::WorldVec3 childWorld = mir::ResolveWorld(world, child).position.Meters();
+
+    const PlaySnapshot snapshot = CaptureWorld(world);
+
+    // "Play" moves both by an amount a float at this distance cannot hold
+    REQUIRE(world.GetComponent<Transform>(root)->Translate(mir::WorldVec3(0.004)));
+    REQUIRE(world.GetComponent<Transform>(child)->Translate(mir::WorldVec3(0.004)));
+
+    const LoadedScene restored = RestoreWorld(world, snapshot);
+    REQUIRE(restored.mEntities.size() == 2);
+
+    Entity restoredRoot{};
+    Entity restoredChild{};
+    for (const auto &[id, entity] : restored.mEntities)
+        (mir::ParentOf(world, entity).IsNull() ? restoredRoot : restoredChild) = entity;
+    REQUIRE(mir::ParentOf(world, restoredChild) == restoredRoot);
+
+    CHECK(world.GetComponent<Transform>(restoredRoot)->Position() == rootPosition);
+    CHECK(world.GetComponent<Transform>(restoredChild)->Position() == childLocal);
+    CHECK(mir::ResolveWorld(world, restoredChild).position.Meters() == childWorld);
 }
 
 TEST_CASE("RestoreWorld destroys an entity Play spawned that CaptureWorld never saw", "[scene]")
