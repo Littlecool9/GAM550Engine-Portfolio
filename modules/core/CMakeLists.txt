@@ -5,6 +5,10 @@ configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/include/core/EngineVersion.h.in
     ${CMAKE_CURRENT_BINARY_DIR}/generated_include/core/EngineVersion.h
     @ONLY)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/core/WorldConfig.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/generated_include/core/WorldConfig.h
+    @ONLY)
 target_include_directories(engine_core PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/generated_include)
 
 target_sources(engine_core PRIVATE
@@ -16,6 +20,7 @@ target_sources(engine_core PRIVATE
     src/core/ecs/TransformHierarchy.cpp
     src/core/ecs/HierarchyIndex.cpp
     src/core/ecs/ComponentRegistry.cpp
+    src/core/ecs/EntityPresetRegistry.cpp
     src/core/ecs/RuntimeQuery.cpp
     src/core/ecs/DeferredAccess.cpp)
 

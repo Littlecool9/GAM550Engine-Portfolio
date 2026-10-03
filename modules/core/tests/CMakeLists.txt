@@ -9,9 +9,11 @@ engine_add_module_tests(core
     System.tests.cpp
     FixedTimestep.tests.cpp
     Transform.tests.cpp
+    WorldCoordinates.tests.cpp
     TransformHierarchy.tests.cpp
     Resources.tests.cpp
     Entity.tests.cpp
     ComponentRegistry.tests.cpp
+    EntityPresetRegistry.tests.cpp
     RuntimeQuery.tests.cpp
 )

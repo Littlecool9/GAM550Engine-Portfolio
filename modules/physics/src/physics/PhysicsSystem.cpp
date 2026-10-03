@@ -19,20 +19,29 @@ namespace mir
 {
     namespace
     {
+        // A RigidBody belongs on a root, whose Transform position is the
+        // absolute world position. The setters keep it finite, so the origin
+        // fallback is never taken.
+        WorldPosition BodyWorldPosition(const Transform &transform)
+        {
+            return WorldPosition::FromMeters(transform.Position()).value_or(WorldPosition{});
+        }
+
         BodyHandle CreateBodyFor(PhysicsWorld &physics, const RigidBody &rigidBody, const Transform &transform)
         {
             const bool dynamic = rigidBody.motion == PhysicsMotion::Dynamic;
+            const WorldPosition position = BodyWorldPosition(transform);
 
             if (rigidBody.shape == PhysicsShape::Sphere)
             {
                 return dynamic
-                    ? physics.CreateDynamicSphere(transform.Position(), rigidBody.radius, transform.Rotation())
-                    : physics.CreateStaticSphere(transform.Position(), rigidBody.radius, transform.Rotation());
+                    ? physics.CreateDynamicSphere(position, rigidBody.radius, transform.Rotation())
+                    : physics.CreateStaticSphere(position, rigidBody.radius, transform.Rotation());
             }
 
             return dynamic
-                ? physics.CreateDynamicBox(transform.Position(), rigidBody.halfExtent, transform.Rotation())
-                : physics.CreateStaticBox(transform.Position(), rigidBody.halfExtent, transform.Rotation());
+                ? physics.CreateDynamicBox(position, rigidBody.halfExtent, transform.Rotation())
+                : physics.CreateStaticBox(position, rigidBody.halfExtent, transform.Rotation());
         }
     }
 
@@ -71,7 +80,7 @@ namespace mir
                 }
                 else if (transform.Version() != rigidBody.transformVersion)
                 {
-                    physics->SetBodyTransform(rigidBody.body, transform.Position(), transform.Rotation());
+                    physics->SetBodyTransform(rigidBody.body, BodyWorldPosition(transform), transform.Rotation());
                 }
 
                 rigidBody.transformVersion = transform.Version();
@@ -85,9 +94,11 @@ namespace mir
                 if (!rigidBody.body.IsValid() || rigidBody.motion != PhysicsMotion::Dynamic)
                     return;
 
-                const glm::vec3 position = physics->BodyPosition(rigidBody.body);
-                if (position != transform.Position())
-                    transform.SetPosition(position);
+                // A body Jolt left at a non-finite position keeps its last
+                // Transform instead of writing that back.
+                const std::optional<WorldPosition> position = physics->BodyPosition(rigidBody.body);
+                if (position && position->Meters() != transform.Position())
+                    transform.SetPosition(position->Meters());
 
                 const glm::quat rotation = physics->BodyRotation(rigidBody.body);
                 if (rotation != transform.Rotation())

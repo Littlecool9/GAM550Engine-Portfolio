@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 
 namespace mir
 {
@@ -21,11 +22,17 @@ namespace mir
         Dynamic = 1,
     };
 
+    // Index == underlying PhysicsMotion value; for RigidBody's "motion" inspector field.
+    inline constexpr std::string_view kPhysicsMotionNames[] = { "Static", "Dynamic" };
+
     enum class PhysicsShape : int32_t
     {
         Box = 0,
         Sphere = 1,
     };
+
+    // Index == underlying PhysicsShape value; for RigidBody's "shape" inspector field.
+    inline constexpr std::string_view kPhysicsShapeNames[] = { "Box", "Sphere" };
 
     struct BodyHandle
     {

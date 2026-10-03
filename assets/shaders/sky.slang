@@ -3,7 +3,7 @@
 struct VSOutput
 {
     float4 position : SV_Position;
-    float2 ndc      : TEXCOORD0;
+    float2 ndc : TEXCOORD0;
 };
 
 [[vk::binding(0, 0)]]
@@ -14,11 +14,17 @@ cbuffer CameraData
     float4 lightColor;
     float4 ambientColor;
     float4x4 invViewProj;
-    float4 cameraPosWS;
+    float4 cameraPos; // the origin of camera-relative render space
+    float4 fogColor;
+    float4 cameraWorldPos; // absolute camera position, for the altitude only
+    float4 clipPlanes;
+    float4 atmosphereScattering;
+    float4 atmosphereRadii;
+    float4 atmosphereMisc;
 };
 
 [shader("vertex")]
-VSOutput vertexMain(uint vertexId : SV_VertexID)
+VSOutput vertexMain(uint vertexId: SV_VertexID)
 {
     float2 positions[3] = {
         float2(-1.0, -1.0),
@@ -29,7 +35,8 @@ VSOutput vertexMain(uint vertexId : SV_VertexID)
     float2 pos = positions[vertexId];
 
     VSOutput output;
-    output.position = float4(pos, 1.0, 1.0);
+    // Depth 0 is the far end of the reverse-Z range, where the clear value is.
+    output.position = float4(pos, 0.0, 1.0);
     output.ndc = pos;
     return output;
 }
@@ -37,14 +44,25 @@ VSOutput vertexMain(uint vertexId : SV_VertexID)
 [shader("fragment")]
 float4 fragmentMain(VSOutput input) : SV_Target
 {
-    float4 worldFar = mul(invViewProj, float4(input.ndc, 1.0, 1.0));
-    float3 worldPos = worldFar.xyz / worldFar.w;
-    float3 rayDir = normalize(worldPos - cameraPosWS.xyz);
+    AtmosphereParams params;
+    params.rayleighCoeff = atmosphereScattering.xyz;
+    params.mieCoeff = atmosphereScattering.w;
+    params.planetRadius = atmosphereRadii.x;
+    params.atmosphereRadius = atmosphereRadii.y;
+    params.rayleighScaleHeight = atmosphereRadii.z;
+    params.mieScaleHeight = atmosphereRadii.w;
+    params.mieG = atmosphereMisc.x;
+    params.sunIntensity = atmosphereMisc.y;
+
+    // Depth 1 is the near plane, a finite point even with no far plane.
+    float4 onNearPlane = mul(invViewProj, float4(input.ndc, 1.0, 1.0));
+    float3 worldPos = onNearPlane.xyz / onNearPlane.w;
+    float3 rayDir = normalize(worldPos - cameraPos.xyz);
 
     // Camera position relative to the planet's center
-    float3 rayOrigin = float3(cameraPosWS.x, kPlanetRadius + cameraPosWS.y, cameraPosWS.z);
+    float3 rayOrigin = float3(cameraWorldPos.x, params.planetRadius + cameraWorldPos.y, cameraWorldPos.z);
 
-    float3 color = Atmosphere(rayDir, rayOrigin, normalize(lightDirWS.xyz));
+    float3 color = Atmosphere(rayDir, rayOrigin, normalize(lightDirWS.xyz), params);
     color = TonemapReinhard(color);
     return float4(color, 1.0);
 }

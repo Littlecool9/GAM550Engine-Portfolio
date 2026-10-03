@@ -17,14 +17,13 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <glm/mat4x4.hpp>
 #include <span>
 #include <vector>
 
 namespace mir
 {
-    // World space matrix computation
-    glm::mat4 ResolveWorld(World &world, Entity entity);
+    // The entity's pose in the fixed Scene world; a dead entity is the identity at the origin.
+    WorldPose ResolveWorld(World &world, Entity entity);
 
     // Adds Transform and its WorldTransform cache
     Transform &AddTransform(World &world,

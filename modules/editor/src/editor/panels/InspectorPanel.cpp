@@ -12,6 +12,8 @@
 
 #include <core/ecs/ComponentFields.h>
 #include <core/ecs/ComponentRegistry.h>
+#include <core/ecs/components/Name.h>
+#include <core/math/WorldReal.h>
 #include <editor/Selection.h>
 
 #include <glm/gtc/quaternion.hpp>
@@ -19,10 +21,12 @@
 
 #include <imgui.h>
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <initializer_list>
+#include <cstring>
+#include <span>
 #include <string_view>
 
 namespace mir
@@ -49,42 +53,130 @@ namespace mir
                 return ImGui::DragFloat(label, static_cast<float *>(bytes), 0.1f);
             case FieldKind::Vec3:
                 return ImGui::DragFloat3(label, glm::value_ptr(*static_cast<glm::vec3 *>(bytes)), 0.1f);
+            case FieldKind::WorldPosition: {
+                // NoRoundToFormat: a drag must not snap a far position to the 4 shown decimals
+                WorldVec3 &value = *static_cast<WorldVec3 *>(bytes);
+                constexpr ImGuiDataType kWorldDataType = kLargeWorld ? ImGuiDataType_Double : ImGuiDataType_Float;
+                if (!ImGui::DragScalarN(label, kWorldDataType, glm::value_ptr(value), 3, 0.1f, nullptr,
+                                        nullptr, "%.4f", ImGuiSliderFlags_NoRoundToFormat))
+                    return false;
+                // typed text such as 1e400 parses to inf, which Transform's setter drops silently
+                return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+            }
             case FieldKind::Vec4:
                 return ImGui::DragFloat4(label, glm::value_ptr(*static_cast<glm::vec4 *>(bytes)), 0.1f);
-            case FieldKind::Quat: {
-                // Editing quaternion components directly can denormalize them
-                glm::quat &quat = *static_cast<glm::quat *>(bytes);
-                glm::vec3 euler = glm::degrees(glm::eulerAngles(quat));
-                if (ImGui::DragFloat3(label, glm::value_ptr(euler), 0.5f))
+            case FieldKind::Quat:
                 {
-                    quat = glm::quat(glm::radians(euler));
-                    return true;
+// Editing quaternion components directly can denormalize them
+                    glm::quat &quat = *static_cast<glm::quat *>(bytes);
+                    glm::vec3 euler = glm::degrees(glm::eulerAngles(quat));
+                    if (ImGui::DragFloat3(label, glm::value_ptr(euler), 0.5f))
+                    {
+                        quat = glm::quat(glm::radians(euler));
+                        return true;
+                    }
+                    return false;
                 }
-                return false;
-            }
-            case FieldKind::Mat4: {
-                ImGui::TextUnformatted(label);
-                bool changed = false;
-                float *m = glm::value_ptr(*static_cast<glm::mat4 *>(bytes));
-                for (int row = 0; row < 4; ++row)
+            case FieldKind::Mat4:
                 {
-                    ImGui::PushID(row);
-                    changed |= ImGui::DragFloat4("##row", m + row * 4, 0.1f);
-                    ImGui::PopID();
+                    ImGui::TextUnformatted(label);
+                    bool changed = false;
+                    float *m = glm::value_ptr(*static_cast<glm::mat4 *>(bytes));
+                    for (int row = 0; row < 4; ++row)
+                    {
+                        ImGui::PushID(row);
+                        changed |= ImGui::DragFloat4("##row", m + row * 4, 0.1f);
+                        ImGui::PopID();
+                    }
+                    return changed;
                 }
-                return changed;
-            }
-            case FieldKind::EntityRef: {
-                const Entity *ref = static_cast<const Entity *>(bytes);
-                ImGui::Text("%s: Entity %u", label, ref->mIndex);
-                return false;
-            }
+            case FieldKind::EntityRef:
+                {
+                    const Entity *ref = static_cast<const Entity *>(bytes);
+                    ImGui::Text("%s: Entity %u", label, ref->mIndex);
+                    return false;
+                }
             case FieldKind::Handle:
                 return ImGui::DragScalarN(label, ImGuiDataType_U32, bytes, 2);
             case FieldKind::String:
                 return ImGui::InputText(label, static_cast<char *>(bytes), kFieldStringCapacity);
             }
             return false;
+        }
+
+        bool DrawEnumWidget(const FieldDesc &field, void *bytes)
+        {
+            int32_t &value = *static_cast<int32_t *>(bytes);
+            const char *preview = (value >= 0 && static_cast<size_t>(value) < field.mEnumNames.size())
+                ? field.mEnumNames[static_cast<size_t>(value)].data()
+                : "?";
+
+            bool changed = false;
+            if (ImGui::BeginCombo(field.mName.data(), preview))
+            {
+                for (size_t i = 0; i < field.mEnumNames.size(); ++i)
+                {
+                    const bool isSelected = static_cast<int32_t>(i) == value;
+                    if (ImGui::Selectable(field.mEnumNames[i].data(), isSelected) && !isSelected)
+                    {
+                        value = static_cast<int32_t>(i);
+                        changed = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            return changed;
+        }
+
+        bool DrawColorWidget(const FieldDesc &field, void *bytes)
+        {
+            float *color = reinterpret_cast<float *>(bytes);
+            return field.mKind == FieldKind::Vec4 ? ImGui::ColorEdit4(field.mName.data(), color)
+                                                   : ImGui::ColorEdit3(field.mName.data(), color);
+        }
+
+        // Only AssetKind::Model exists today; add a branch per new AssetKind here.
+        bool DrawAssetRefWidget(const FieldDesc &field, void *bytes, const AssetImportView &assets)
+        {
+            if (field.mAssetKind != AssetKind::Model)
+                return false;
+
+            const char *currentId = static_cast<const char *>(bytes);
+            const char *preview = "Choose model...";
+            for (const auto &model : assets.mModels)
+            {
+                char id[17]{};
+                std::snprintf(id, sizeof(id), "%016llx", static_cast<unsigned long long>(model.mAssetId));
+                if (std::string_view(id) == currentId)
+                    preview = model.mPath.c_str();
+            }
+
+            bool changed = false;
+            if (ImGui::BeginCombo(field.mName.data(), preview))
+            {
+                for (const auto &model : assets.mModels)
+                    if (model.mAssetId != 0 && ImGui::Selectable(model.mPath.c_str()))
+                    {
+                        char newId[kFieldStringCapacity]{};
+                        std::snprintf(newId, sizeof(newId), "%016llx",
+                            static_cast<unsigned long long>(model.mAssetId));
+                        if (std::string_view(newId) != currentId)
+                        {
+                            std::memcpy(bytes, newId, kFieldStringCapacity);
+                            changed = true;
+                        }
+                    }
+                ImGui::EndCombo();
+            }
+            return changed;
+        }
+
+        void ResetFields(const ComponentOps &ops, void *component, std::span<const std::string_view> names)
+        {
+            FieldBuffer empty{};
+            for (std::string_view name : names)
+                if (const FieldDesc *field = ops.FindField(name))
+                    field->Write(component, empty.mBytes);
         }
 
         void DrawComponent(World &world, const ComponentOps &ops, Entity entity, const AssetImportView &assets)
@@ -101,56 +193,9 @@ namespace mir
                 else
                 {
                     ImGui::Indent();
-                    if (ops.mType.name == "ModelPlayer")
-                    {
-                        const FieldDesc *modelAsset = nullptr;
-                        for (const FieldDesc &field : ops.mFields)
-                            if (field.mName == "modelAsset")
-                                modelAsset = &field;
-                        if (modelAsset)
-                        {
-                            FieldBuffer current{};
-                            modelAsset->Read(component, current.mBytes);
-                            const char *currentId = reinterpret_cast<const char *>(current.mBytes);
-                            const char *preview = "Choose model...";
-                            for (const auto &model : assets.mModels)
-                            {
-                                char id[17]{};
-                                std::snprintf(id, sizeof(id), "%016llx",
-                                              static_cast<unsigned long long>(model.mAssetId));
-                                if (std::string_view(id) == currentId)
-                                    preview = model.mPath.c_str();
-                            }
-                            if (ImGui::BeginCombo("Model", preview))
-                            {
-                                for (const auto &model : assets.mModels)
-                                    if (model.mAssetId != 0 && ImGui::Selectable(model.mPath.c_str()))
-                                    {
-                                        FieldBuffer value{};
-                                        std::snprintf(reinterpret_cast<char *>(value.mBytes), kFieldStringCapacity,
-                                                      "%016llx", static_cast<unsigned long long>(model.mAssetId));
-                                        if (std::string_view(reinterpret_cast<const char *>(value.mBytes)) != currentId)
-                                        {
-                                            modelAsset->Write(component, value.mBytes);
-                                            // A clip ID from the previous model must not override the new
-                                            // model's clip index. Drop the path fallback and restart playback.
-                                            FieldBuffer empty{};
-                                            for (std::string_view name : {"modelName", "animationAsset", "clip", "time"})
-                                                if (const FieldDesc *field = ops.FindField(name))
-                                                    field->Write(component, empty.mBytes);
-                                        }
-                                    }
-                                ImGui::EndCombo();
-                            }
-                        }
-                    }
                     for (const FieldDesc &field : ops.mFields)
                     {
-                        // These are persistence/lookup details. Model selection goes through
-                        // the picker above; clip selection uses the public clip index.
-                        if (ops.mType.name == "ModelPlayer" &&
-                            (field.mName == "modelName" || field.mName == "modelAsset" ||
-                             field.mName == "animationAsset"))
+                        if (field.mHidden)
                             continue;
 
                         FieldBuffer buffer{};
@@ -158,11 +203,33 @@ namespace mir
 
                         const bool readOnly = field.ReadOnly();
                         ImGui::BeginDisabled(readOnly);
-                        const bool edited = DrawFieldWidget(field, buffer.mBytes);
+                        bool edited = false;
+                        switch (field.mWidget)
+                        {
+                        case FieldWidget::Enum:
+                            edited = DrawEnumWidget(field, buffer.mBytes);
+                            break;
+                        case FieldWidget::Color:
+                            edited = DrawColorWidget(field, buffer.mBytes);
+                            break;
+                        case FieldWidget::AssetRef:
+                            edited = DrawAssetRefWidget(field, buffer.mBytes, assets);
+                            break;
+                        case FieldWidget::Default:
+                            edited = field.mClamped
+                                ? ImGui::DragFloat(field.mName.data(), reinterpret_cast<float *>(buffer.mBytes),
+                                    0.05f, field.mMin, field.mMax, "%.3f", ImGuiSliderFlags_AlwaysClamp)
+                                : DrawFieldWidget(field, buffer.mBytes);
+                            break;
+                        }
                         ImGui::EndDisabled();
 
                         if (edited && !readOnly)
+                        {
                             field.Write(component, buffer.mBytes);
+                            if (field.mWidget == FieldWidget::AssetRef)
+                                ResetFields(ops, component, field.mResetOnChange);
+                        }
                     }
                     ImGui::Unindent();
                 }
@@ -191,7 +258,10 @@ namespace mir
             return;
         }
 
-        ImGui::Text("Entity %u", entity.mIndex);
+        if (const Name *name = world.GetComponent<Name>(entity))
+            ImGui::Text("%s", name->mValue);
+        else
+            ImGui::Text("Entity %u", entity.mIndex);
         ImGui::Separator();
 
         for (const ComponentOps *ops : ComponentRegistry::Instance().All())

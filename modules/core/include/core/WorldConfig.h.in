@@ -1,0 +1,22 @@
+/**
+ * @file WorldConfig.h
+ * @author Jackey Cen
+ * @brief Generated from WorldConfig.h.in by CMake: the MIR_LARGE_WORLD option.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+#pragma once
+
+// 1: world positions are double. 0: float, for small maps only.
+#cmakedefine01 MIR_LARGE_WORLD
+
+// The option changes Transform's layout, so object files built with different
+// values must fail to link rather than disagree silently.
+#if defined(_MSC_VER)
+#if MIR_LARGE_WORLD
+#pragma detect_mismatch("MIR_LARGE_WORLD", "1")
+#else
+#pragma detect_mismatch("MIR_LARGE_WORLD", "0")
+#endif
+#endif

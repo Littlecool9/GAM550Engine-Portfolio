@@ -8,6 +8,7 @@
  */
 #include <app/AssetImportManager.h>
 
+#include <assets/AssetPath.h>
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
 #include <nlohmann/json.hpp>
@@ -35,6 +36,11 @@ namespace mir
             std::transform(ext.begin(), ext.end(), ext.begin(),
                            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             return ext == ".gltf" || ext == ".glb" || ext == ".bin" || ext == ".png" || ext == ".jpg" || ext == ".jpeg";
+        }
+        // The key AssetCooker uses for a model under the source asset root
+        AssetPathResult LogicalModelPath(std::string_view idRoot, const std::filesystem::path &relative)
+        {
+            return MakeLogicalAssetPath(idRoot, relative.generic_string());
         }
         uint64_t Signature(const std::filesystem::directory_entry &entry)
         {
@@ -232,9 +238,11 @@ namespace mir
             const auto relative = source.lexically_relative(std::filesystem::weakly_canonical(mSourceAssetRoot));
             if (!relative.empty() && !relative.is_absolute() && *relative.begin() != "..")
             {
-                const std::string logical = (std::filesystem::path(mProject.mAssetIdRoot) / relative).generic_string();
-                mQueued.models.insert(logical);
-                SetStatus(logical, AssetImportStatus::Queued);
+                const AssetPathResult logical = LogicalModelPath(mProject.mAssetIdRoot, relative);
+                if (!logical.Ok())
+                    throw std::runtime_error(source.string() + ": " + std::string(Describe(logical.error)));
+                mQueued.models.insert(logical.path);
+                SetStatus(logical.path, AssetImportStatus::Queued);
                 return;
             }
             mQueued.importSource = source;
@@ -407,10 +415,13 @@ namespace mir
                 if (IsModel(path))
                 {
                     const auto relative = std::filesystem::relative(path, mSourceAssetRoot);
-                    const std::string logical =
-                        (std::filesystem::path(mProject.mAssetIdRoot) / relative).generic_string();
-                    mQueued.models.insert(logical);
-                    SetStatus(logical, AssetImportStatus::Queued);
+                    if (const AssetPathResult logical = LogicalModelPath(mProject.mAssetIdRoot, relative); logical.Ok())
+                    {
+                        mQueued.models.insert(logical.path);
+                        SetStatus(logical.path, AssetImportStatus::Queued);
+                    }
+                    else
+                        MIR_LOG_ERROR("Asset import: '{}': {}", path.string(), Describe(logical.error));
                 }
                 else
                     mQueued.changed.insert(path);
@@ -453,9 +464,10 @@ namespace mir
         for (const auto &entry : std::filesystem::recursive_directory_iterator(mSourceAssetRoot))
             if (entry.is_regular_file() && IsModel(entry.path()))
             {
+                // Runs every frame: an unusable name is logged once, when the watcher sees it
                 const auto relative = std::filesystem::relative(entry.path(), mSourceAssetRoot);
-                const std::string logical = (std::filesystem::path(mProject.mAssetIdRoot) / relative).generic_string();
-                models[logical].mPath = logical;
+                if (const AssetPathResult logical = LogicalModelPath(mProject.mAssetIdRoot, relative); logical.Ok())
+                    models[logical.path].mPath = logical.path;
             }
         try
         {

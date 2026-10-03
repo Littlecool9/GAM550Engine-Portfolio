@@ -12,6 +12,7 @@
 #include "SceneResolve.h"
 #include <animation/ModelPlayer.h>
 #include <animation/ModelSystem.h>
+#include <assets/AssetPath.h>
 #include <audio/AudioEmitterSystem.h>
 #include <audio/AudioListenerSystem.h>
 #include <audio/AudioSystem.h>
@@ -147,6 +148,7 @@ namespace mir
         // Before anything may load a script
         RegisterCoreComponents();
         RegisterRendererComponents();
+        RegisterRendererEntityTypes();
         RegisterPhysicsComponents();
         RegisterScriptComponents();
         RegisterAudioComponents();
@@ -472,7 +474,8 @@ namespace mir
             if (IsEditing(mWorld) && mDesc.mEnableEditorLayout)
             {
                 mEditor.UpdateCamera(dt);
-                mRenderSystem->SetExternalCamera(0, mEditor.SceneCamera().Matrix(), mEditor.SceneCamera().mLens);
+                const EditorCamera &camera = mEditor.SceneCamera();
+                mRenderSystem->SetExternalCamera(0, camera.Pose(), camera.mLens);
             }
             else
             {
@@ -554,9 +557,10 @@ namespace mir
             mWorld.GetOrCreateQuery<const ModelPlayer>().ForEach([&](Entity, const ModelPlayer &player) {
                 AssetId referenced = player.ModelAsset();
                 if (referenced.IsNull() && !player.ModelName().empty())
-                    referenced = MakeAssetId((std::filesystem::path(mProject.mAssetIdRoot) / player.ModelName())
-                                                 .lexically_normal()
-                                                 .generic_string());
+                    if (const AssetPathResult logical =
+                            MakeLogicalAssetPath(mProject.mAssetIdRoot, player.ModelName());
+                        logical.Ok())
+                        referenced = MakeAssetId(logical.path);
                 assetActionAccepted &= referenced != target;
             });
             if (!assetActionAccepted)

@@ -1,9 +1,10 @@
 // Default material shader: a flat grey, non-metallic Blinn-Phong material
+#include "LightingCommon.slang"
 
 struct VSInput
 {
-    float3 pos    : POSITION;
-    float3 color  : COLOR;
+    float3 pos : POSITION;
+    float3 color : COLOR;
     float3 normal : NORMAL;
 };
 
@@ -11,8 +12,8 @@ struct VSOutput
 {
     float4 position : SV_Position;
     float3 worldPos : TEXCOORD0;
-    float3 normal   : NORMAL;
-    float3 tint     : COLOR;
+    float3 normal : NORMAL;
+    float3 tint : COLOR;
 };
 
 struct PushData
@@ -35,8 +36,14 @@ cbuffer CameraData
     float4 lightColor;
     float4 ambientColor;
     float4x4 invViewProj;
-    float4 cameraPosWS;
+    float4 cameraPos; // the origin: model and camera share camera-relative render space
     float4 fogColor; // rgb = fog color, a = density (0 = disabled)
+    float4 cameraWorldPos;
+    float4 clipPlanes;
+    float4 atmosphereScattering;
+    float4 atmosphereRadii;
+    float4 atmosphereMisc;
+    float4 lightingMeta; // x = this view's count in gLights, y = its first index
 };
 
 [shader("vertex")]
@@ -47,8 +54,8 @@ VSOutput vertexMain(VSInput input)
     output.position = mul(viewProj, worldPos);
     output.worldPos = worldPos.xyz;
     output.normal = pushData.normalCol0.xyz * input.normal.x +
-                     pushData.normalCol1.xyz * input.normal.y +
-                     pushData.normalCol2.xyz * input.normal.z;
+                    pushData.normalCol1.xyz * input.normal.y +
+                    pushData.normalCol2.xyz * input.normal.z;
 
     output.tint = pushData.tint.rgb;
     return output;
@@ -63,7 +70,7 @@ float4 fragmentMain(VSOutput input) : SV_Target
 {
     float3 N = normalize(input.normal);
     float3 L = normalize(lightDirWS.xyz);
-    float3 V = normalize(cameraPosWS.xyz - input.worldPos);
+    float3 V = normalize(cameraPos.xyz - input.worldPos);
     float3 H = normalize(L + V);
 
     float diffuse = max(dot(N, L), 0.0);
@@ -73,7 +80,9 @@ float4 fragmentMain(VSOutput input) : SV_Target
     float3 color = albedo * (ambientColor.rgb + lightColor.rgb * diffuse) +
                    lightColor.rgb * kSpecularStrength * specular;
 
-    float dist = length(cameraPosWS.xyz - input.worldPos);
+    color += AccumulatePunctualLights(input.worldPos, N, albedo, int(lightingMeta.y), int(lightingMeta.x));
+
+    float dist = length(cameraPos.xyz - input.worldPos);
     float fogFactor = clamp(1.0 - exp(-fogColor.a * dist), 0.0, 1.0);
     color = lerp(color, fogColor.rgb, fogFactor);
 

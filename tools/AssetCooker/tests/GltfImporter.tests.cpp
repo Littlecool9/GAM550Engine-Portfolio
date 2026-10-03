@@ -10,6 +10,7 @@
 #include "../ImageImporter.h"
 #include <algorithm>
 #include <animation/ModelAnimation.h>
+#include <assets/AssetPath.h>
 #include <core/fs/FileIO.h>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -414,14 +415,14 @@ TEST_CASE("Cooker publishes atomically and retains one fallback manifest generat
 {
     Fixture f;
     const auto out = fs::path(f.root.string() + "-cooked");
-    std::vector<std::string> args{"--source", f.root.string(), "--out", out.string()};
+    std::vector<std::string> args{"--source-dir", f.root.string(), "--id-root", "assets", "--out", out.string()};
     REQUIRE(LaunchProcess(GLTF_COOKER_EXE, args, true) == 0);
     auto manifest = AssetManifest::LoadFile(out / "manifest.blob");
     REQUIRE(manifest);
     AssetCache cache(&*manifest, out);
     ModelResources model;
     std::string error;
-    REQUIRE(LoadModelResources(cache, MakeAssetId((f.root / "flag.gltf").generic_string()), model, error));
+    REQUIRE(LoadModelResources(cache, MakeAssetId("assets/flag.gltf"), model, error));
     REQUIRE(model.model.animations.size() == 2);
     auto oldClip = model.model.animations.back();
     auto oldPath = std::string(manifest->PathOf(*manifest->Find(oldClip)));
@@ -446,7 +447,36 @@ TEST_CASE("Cooker publishes atomically and retains one fallback manifest generat
     // Last successful publication remains usable even after a failed import.
     AssetCache stillValid(&*updated, out);
     ModelResources loaded;
-    CHECK(LoadModelResources(stillValid, MakeAssetId((f.root / "flag.gltf").generic_string()), loaded, error));
+    CHECK(LoadModelResources(stillValid, MakeAssetId("assets/flag.gltf"), loaded, error));
+}
+
+TEST_CASE("Cooker ids match the engine's logical paths for any root spelling", "[cooker][identity]")
+{
+    Fixture f;
+    const auto out = fs::path(f.root.string() + "-spelling-cooked");
+    std::vector<std::string> args{"--source-dir", f.root.string(), "--id-root", "games\\Test\\.\\assets\\",
+                                  "--out",        out.string()};
+    REQUIRE(LaunchProcess(GLTF_COOKER_EXE, args, true) == 0);
+    const auto manifest = AssetManifest::LoadFile(out / "manifest.blob");
+    REQUIRE(manifest);
+
+    // What the engine computes from game.json's root and a scene-relative name
+    for (const char *relative : {"checker.png", "flag.bin", "flag.gltf"})
+    {
+        INFO(relative);
+        const AssetPathResult logical = MakeLogicalAssetPath("games/Test/assets", relative);
+        REQUIRE(logical.Ok());
+        CHECK(manifest->Find(MakeAssetId(logical.path)) != nullptr);
+    }
+
+    const auto rejected = fs::path(f.root.string() + "-rejected-cooked");
+    const std::vector<std::string> escaping{"--source-dir", f.root.string(), "--id-root", "../outside",
+                                            "--out",        rejected.string()};
+    CHECK(LaunchProcess(GLTF_COOKER_EXE, escaping, true) != 0);
+    // An absolute --source would bake this machine's path into every id
+    const std::vector<std::string> absolute{"--source", f.root.string(), "--out", rejected.string()};
+    CHECK(LaunchProcess(GLTF_COOKER_EXE, absolute, true) != 0);
+    CHECK_FALSE(fs::exists(rejected / "manifest.blob"));
 }
 
 TEST_CASE("Import lists what the package holds, with the model's own animation ids", "[gltf][contents]")

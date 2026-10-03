@@ -29,6 +29,7 @@ if (AssetCache *cache = app.Assets())
 | Type | Header | Role |
 |---|---|---|
 | `AssetId` | `assets/AssetId.h` | FNV-1a 64 of the repo-relative source path; `kNullAssetId`, `MakeAssetId` |
+| `AssetPathResult` | `assets/AssetPath.h` | `NormalizeAssetPath`, `MakeLogicalAssetPath`: the one spelling of a logical path, or an `AssetPathError` |
 | `AssetBlobHeader` | `assets/AssetBlob.h` | 32 bytes: magic, format version, type tag, content version, size, content hash |
 | `AssetBlobView` | `assets/AssetBlob.h` | Header plus a span over the payload; `AsStringView` for text |
 | `AssetManifest` | `assets/AssetManifest.h` | id to type tag, content version and path, over a shared path table |
@@ -42,8 +43,23 @@ Cook roots must never be absolute, and `engine_cook_assets` rejects one. The roo
 string is part of what gets hashed, so an absolute path would bake one machine's
 checkout location into ids that have to match on every machine.
 
+**Every id string goes through `assets/AssetPath.h`.** The engine and the cooker
+build `<id root>/<relative path>` with `MakeLogicalAssetPath`, where the id root
+is `games/<Game>/<assetsRoot>` (or `assets` for the engine) and the relative
+path is what a scene stores. The rules are purely lexical: `\` becomes `/`,
+empty and `.` segments drop, `..` pops a segment. A `..` that climbs out of
+its own root, an absolute path, a drive letter, `:` or NUL is an error, not a
+guess. A path spelled like that before `AssetPath` existed keeps its id; the
+cooked manifest was byte-identical before and after the change.
+
+**Case is part of the id.** `Terrain/A` and `terrain/A` are two assets even on
+Windows, where both open the same file. Folding case would have changed every
+existing id and let two files collide on a case-sensitive filesystem; a wrong
+case now fails as a missing asset.
+
 **Renaming a source file changes its id.** There is no rename tracking, so a
-rename is a new asset as far as anything holding an id is concerned.
+rename is a new asset as far as anything holding an id is concerned. Scenes
+that reference the old path must be updated explicitly.
 
 **`AssetCache` is move-only.** The `AssetBlobView` it hands out aliases the
 entry's own buffer, so copying the cache would leave two views onto one buffer.
@@ -71,7 +87,10 @@ cooks to a `TextureAsset`, decoded to RGBA8, under the id of its own path; an
 image a glTF references is left to that model's import and stays a raw blob.
 Everything else cooks as a raw passthrough blob.
 
-Tests in `modules/assets/tests/`: `AssetBlob`, `AssetCache`, `AssetManifest`.
+Tests in `modules/assets/tests/`: `AssetBlob`, `AssetCache`, `AssetManifest`,
+`AssetPath`. The cooker side of path identity is checked in
+`tools/AssetCooker/tests/GltfImporter.tests.cpp` ("Cooker ids match the engine's
+logical paths for any root spelling").
 
 ## Backlog
 
@@ -95,6 +114,13 @@ importer's decoder, now `tools/AssetCooker/ImageImporter.h`, and writes
 `kTextureAssetTypeTag`. Its id is unchanged, and a corrupt image fails the
 cook. Because `gameui` draws UI textures straight from the cache and reads no
 file itself. See [gameui.md](gameui.md).
+
+*2026-09-30* — **One normalizer for logical paths (#110).** Was: about eight
+call sites in `app`, `animation` and `AssetCooker` joined root and relative path
+their own way (`lexically_normal`, or a bare `"/"` concatenation), and none
+rejected `..`. Now: all of them call `MakeLogicalAssetPath`, and AssetCooker
+refuses an absolute or escaping `--source`/`--id-root`. Because the terrain
+tool and the engine must derive the same id from one logical path.
 
 *2026-09-18* — **The byte primitives left this module.**
 `assets/AssetFileIo.h` is gone; its functions are in `core/fs/FileIO.h`, and

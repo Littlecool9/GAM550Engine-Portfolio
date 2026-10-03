@@ -8,6 +8,7 @@
  */
 #include <app/GameProject.h>
 
+#include <assets/AssetPath.h>
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
 #include <renderer/RenderSettings.h>
@@ -127,12 +128,16 @@ namespace mir
         if (project.mName.empty())
             project.mName = gameDir.filename().string();
 
-        // normalized like AssetCooker's NormalizeRoot, so ids match
-        std::string idRoot = (gameDir / assetsRoot).lexically_normal().generic_string();
-        while (!idRoot.empty() && idRoot.back() == '/')
-            idRoot.pop_back();
+        // The same normalizer AssetCooker applies to its --source roots, so ids match
+        AssetPathResult idRoot = MakeLogicalAssetPath(gameDir.generic_string(), assetsRoot);
+        if (!idRoot.Ok())
+        {
+            MIR_LOG_ERROR("LoadGameProject: assetsRoot '{}' in '{}': {}", assetsRoot, manifestPath.string(),
+                          Describe(idRoot.error));
+            return std::nullopt;
+        }
 
-        project.mAssetIdRoot = std::move(idRoot);
+        project.mAssetIdRoot = std::move(idRoot.path);
         project.mSceneDir = root / sceneDir;
         project.mProjectSettingsPath = root / kProjectSettingsFileName;
         project.mSoundBankDir = root / soundBanksRoot;

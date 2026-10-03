@@ -13,7 +13,7 @@
 #include <core/ecs/EngineMode.h>
 #include <core/ecs/World.h>
 
-#include <glm/mat4x4.hpp>
+#include <glm/mat3x3.hpp>
 #include <glm/vec3.hpp>
 
 namespace mir
@@ -60,11 +60,11 @@ namespace mir
 
                 if (worldTransform.Version() != emitter.mWorldVersion)
                 {
-                    const glm::mat4 &matrix = worldTransform.Matrix();
+                    const glm::mat3 &linear = worldTransform.Linear();
                     audio::SetEmitterPosition(emitter.mGameObject,
-                        glm::vec3(matrix[3]),
-                        -glm::vec3(matrix[2]),  // -Z is forward
-                        glm::vec3(matrix[1]));  // +Y is up
+                        worldTransform.Position(),
+                        -linear[2],  // -Z is forward
+                        linear[1]);  // +Y is up
 
                     emitter.mWorldVersion = worldTransform.Version();
                 }

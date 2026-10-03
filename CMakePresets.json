@@ -67,6 +67,16 @@
             "cacheVariables": {
                 "MJOLNIR_WITH_EDITOR": "OFF"
             }
+        },
+        {
+            "name": "windows-msvc-debug-float",
+            "displayName": "Debug (float world)",
+            "inherits": [
+                "windows-msvc-debug"
+            ],
+            "cacheVariables": {
+                "MIR_LARGE_WORLD": false
+            }
         }
     ],
     "buildPresets": [
@@ -89,6 +99,11 @@
             "name": "windows-msvc-game-release",
             "displayName": "Game Release (no editor)",
             "configurePreset": "windows-msvc-game-release"
+        },
+        {
+            "name": "windows-msvc-debug-float",
+            "displayName": "Debug (float world)",
+            "configurePreset": "windows-msvc-debug-float"
         }
     ]
 }
