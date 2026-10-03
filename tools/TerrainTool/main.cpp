@@ -1,12 +1,13 @@
 /**
  * @file main.cpp
  * @author Jackey Cen
- * @brief TerrainTool command line: headless bake, validate, publish and sync of terrain releases.
+ * @brief TerrainTool command line: headless bake, validate, publish, sync and package of terrain releases.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
 #include "TerrainBake.h"
+#include "TerrainPackage.h"
 #include "TerrainPublish.h"
 #include "TerrainReport.h"
 #include "TerrainSync.h"
@@ -45,10 +46,14 @@ namespace
         "  TerrainTool publish --candidate <dir> --releases <root> --report <json> [--recipe <file>]\n"
         "  TerrainTool sync --recipe <file> --id-root <logical root> --source-path <relative path>\n"
         "                   --game-dir <dir> --candidate <dir> --report <json>\n"
+        "  TerrainTool package --id-root <logical root> --source-path <relative path>\n"
+        "                   --game-dir <dir> --out <game dir> --report <json>\n"
         "The asset id is MakeAssetId(<id-root>/<source-path>), e.g. --id-root games/G/assets\n"
         "--source-path terrain/x.terrain.json. bake and validate never touch a published release.\n"
         "publish adds <releases>/<asset>/<release>/ and then moves <asset>/current to it; sync\n"
         "publishes into <game-dir>/terrain/releases only when current does not match the recipe.\n"
+        "package copies the release <game-dir>'s current names, and a current naming it, into\n"
+        "<out>/terrain/releases, then removes anything else there for that asset.\n"
         "Exit 0: ok; 1: a check failed; 2: bad arguments.\n";
 
     struct UsageError : std::runtime_error
@@ -125,8 +130,9 @@ namespace
         if (report.Ok() && written && report.publish)
         {
             if (report.publish->published)
-                std::printf("TerrainTool: %s ok: published release %s of %s (current was %s); report %s\n",
-                            report.command.c_str(), id(report.publish->current).c_str(), report.assetPath.c_str(),
+                std::printf("TerrainTool: %s ok: %s release %s of %s (current was %s); report %s\n",
+                            report.command.c_str(), report.command == "package" ? "copied" : "published",
+                            id(report.publish->current).c_str(), report.assetPath.c_str(),
                             id(report.publish->previous).c_str(), PathUtf8(reportPath).c_str());
             else
                 std::printf("TerrainTool: %s ok: %s is up to date, release %s; report %s\n", report.command.c_str(),
@@ -212,6 +218,24 @@ namespace
         return Finish(RunTerrainSync(request), line.Get("--report"));
     }
 
+    int Package(int argc, char **argv)
+    {
+        const CommandLine line =
+            Parse(argc, argv, {"--id-root", "--source-path", "--game-dir", "--out", "--report"});
+        Require(line, {"--id-root", "--source-path", "--game-dir", "--out", "--report"});
+        if (IsInside(line.Get("--report"), mir::TerrainReleasesRoot(line.Get("--game-dir"))))
+            throw UsageError("--report must not be inside the game's terrain/releases");
+        if (IsInside(line.Get("--report"), mir::TerrainReleasesRoot(line.Get("--out"))))
+            throw UsageError("--report must not be inside --out's terrain/releases");
+
+        TerrainPackageRequest request;
+        request.idRoot = line.Get("--id-root");
+        request.sourcePath = line.Get("--source-path");
+        request.gameDir = line.Get("--game-dir");
+        request.outDir = line.Get("--out");
+        return Finish(RunTerrainPackage(request), line.Get("--report"));
+    }
+
     // Still writes a requested report, unless it would land in a candidate or a release tree.
     int Usage(int argc, char **argv, const std::string &command, const std::string &message)
     {
@@ -225,10 +249,11 @@ namespace
                 reportPath = argv[i + 1];
             else if (*argv[i + 1] == '\0')
                 continue;
+            // Package's --out is a game directory; only its release tree is guarded.
+            else if (arg == "--game-dir" || (arg == "--out" && command == "package"))
+                guarded.push_back(mir::TerrainReleasesRoot(argv[i + 1]));
             else if (arg == "--out" || arg == "--candidate" || arg == "--releases")
                 guarded.push_back(argv[i + 1]);
-            else if (arg == "--game-dir")
-                guarded.push_back(mir::TerrainReleasesRoot(argv[i + 1]));
         }
         const auto holdsReport = [&](const fs::path &dir) { return IsInside(*reportPath, dir); };
         if (!reportPath || std::any_of(guarded.begin(), guarded.end(), holdsReport))
@@ -261,6 +286,8 @@ int main(int argc, char **argv)
             return Publish(argc, argv);
         if (command == "sync")
             return Sync(argc, argv);
+        if (command == "package")
+            return Package(argc, argv);
         return Usage(argc, argv, command, "unknown command \"" + command + "\"");
     }
     catch (const UsageError &error)

@@ -120,6 +120,7 @@ set(game_names "")
 set(game_asset_roots "")
 set(game_copy_commands "")
 set(terrain_sync_commands "")
+set(terrain_package_commands "")
 foreach(manifest IN LISTS game_manifests)
     get_filename_component(game_dir "${manifest}" DIRECTORY)
     get_filename_component(game_name "${game_dir}" NAME)
@@ -163,6 +164,13 @@ foreach(manifest IN LISTS game_manifests)
                      --recipe "${recipe}" --id-root "${assets_rel}" --source-path "terrain/${recipe_file}"
                      --game-dir "${game_dir}" --candidate "${terrain_build_dir}/${recipe_stem}"
                      --report "${terrain_build_dir}/${recipe_stem}.sync.json")
+                # The game reads games/ next to the exe: package each recipe's current release there.
+                if(NOT MJOLNIR_WITH_EDITOR)
+                    list(APPEND terrain_package_commands COMMAND TerrainTool package
+                         --id-root "${assets_rel}" --source-path "terrain/${recipe_file}"
+                         --game-dir "${game_dir}" --out "$<TARGET_FILE_DIR:MjolnirEngine>/games/${game_name}"
+                         --report "${terrain_build_dir}/${recipe_stem}.package.json")
+                endif()
             endforeach()
         endif()
     endif()
@@ -197,10 +205,11 @@ add_custom_target(MjolnirEngine_copy_games
     VERBATIM)
 add_dependencies(MjolnirEngine MjolnirEngine_copy_games)
 
-# Always runs; sync is a no-op while current.
+# Always runs; sync and package are no-ops while current.
 if(terrain_sync_commands)
     add_custom_target(MjolnirEngine_sync_terrain
         ${terrain_sync_commands}
+        ${terrain_package_commands}
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         COMMENT "Publishing terrain recipes whose current release is out of date"
         VERBATIM)
