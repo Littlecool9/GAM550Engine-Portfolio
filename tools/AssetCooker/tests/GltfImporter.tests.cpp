@@ -7,6 +7,7 @@
  *
  */
 #include "../GltfImporter.h"
+#include "../ImageImporter.h"
 #include <algorithm>
 #include <animation/ModelAnimation.h>
 #include <assets/AssetPath.h>
@@ -528,4 +529,43 @@ TEST_CASE("Cooked package contents reach the import cache", "[gltf][cooker][cont
             CHECK_FALSE(entry.at("name").get<std::string>().empty());
         }
     CHECK(animation);
+}
+
+TEST_CASE("A standalone image cooks to a texture, and an image a glTF references stays its import's",
+          "[cooker][texture]")
+{
+    Fixture f;
+    fs::create_directories(f.root / "ui");
+    fs::copy_file(f.root / "checker.png", f.root / "ui" / "frame.png");
+    const auto out = fs::path(f.root.string() + "-texture-cooked");
+    std::vector<std::string> args{"--source-dir", f.root.string(), "--id-root", "assets", "--out", out.string()};
+    REQUIRE(LaunchProcess(GLTF_COOKER_EXE, args, true) == 0);
+    auto manifest = AssetManifest::LoadFile(out / "manifest.blob");
+    REQUIRE(manifest);
+
+    const auto *frame = manifest->Find(MakeAssetId("assets/ui/frame.png"));
+    REQUIRE(frame);
+    CHECK(frame->typeTag == kTextureAssetTypeTag);
+    CHECK(frame->contentVersion == kTextureAssetContentVersion);
+    AssetCache cache(&*manifest, out);
+    const AssetBlobView *blob = cache.Load(MakeAssetId("assets/ui/frame.png"));
+    REQUIRE(blob);
+    TextureAsset texture;
+    std::string error;
+    REQUIRE(ReadTypedAsset(*blob, texture, error));
+    const auto bytes = ReadBytes(f.root / "checker.png");
+    REQUIRE(bytes);
+    const TextureAsset decoded = cook::DecodeImage(*bytes);
+    CHECK(texture.width == decoded.width);
+    CHECK(texture.height == decoded.height);
+    CHECK(texture.rgba == decoded.rgba);
+
+    // flag.gltf's own copy is its import's texture; the file is left as it was
+    const auto *checker = manifest->Find(MakeAssetId("assets/checker.png"));
+    REQUIRE(checker);
+    CHECK(checker->typeTag == kRawAssetTypeTag);
+
+    // a broken image fails the cook rather than shipping a texture nothing can read
+    std::ofstream(f.root / "ui" / "broken.png") << "not a png";
+    CHECK(LaunchProcess(GLTF_COOKER_EXE, args, true) != 0);
 }

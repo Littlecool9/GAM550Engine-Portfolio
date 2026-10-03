@@ -2,7 +2,8 @@
  * @file DefaultInputMap.tests.cpp
  * @author Quy Dong Ta
  * @brief Tests for input/DefaultInputMap: the UI actions, their bindings on
- *        each device, the save/load round trip, and merging into a loaded map.
+ *        each device, the save/load round trip, and merging into a loaded map;
+ *        and InputState's ForGame while a game UI holds the input.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -30,8 +31,12 @@ using namespace mir;
 namespace
 {
     constexpr std::string_view kUIActions[] = {
-        kUINavigateAction, kUIConfirmAction, kUICancelAction, kUITabLeftAction, kUITabRightAction,
+        kUINavigateAction, kUIConfirmAction, kUICancelAction, kUITabLeftAction, kUITabRightAction, kUIPauseAction,
     };
+
+    // the mouse navigates by pointing and pauses by clicking the HUD, so these
+    // two have no mouse binding
+    bool BindsMouse(std::string_view action) { return action != kUINavigateAction && action != kUIPauseAction; }
 
     bool BindsDevice(const InputAction &action, DeviceKind device)
     {
@@ -95,7 +100,7 @@ namespace
     };
 } // namespace
 
-TEST_CASE("The default map has the five UI actions with their types", "[input]")
+TEST_CASE("The default map has the six UI actions with their types", "[input]")
 {
     const InputMap map = DefaultInputMap();
 
@@ -108,8 +113,8 @@ TEST_CASE("The default map has the five UI actions with their types", "[input]")
     }
 }
 
-// the mouse navigates by pointing, so UINavigate is the one action without it
-TEST_CASE("Every UI action is bound on keyboard and gamepad, and all but UINavigate on the mouse", "[input]")
+TEST_CASE("Every UI action is bound on keyboard and gamepad, and all but UINavigate and UIPause on the mouse",
+          "[input]")
 {
     const InputMap map = DefaultInputMap();
 
@@ -119,7 +124,7 @@ TEST_CASE("Every UI action is bound on keyboard and gamepad, and all but UINavig
         const InputAction &action = *map.Find(name);
         CHECK(BindsDevice(action, DeviceKind::Keyboard));
         CHECK(BindsDevice(action, DeviceKind::Gamepad));
-        CHECK(BindsDevice(action, DeviceKind::Mouse) == (name != kUINavigateAction));
+        CHECK(BindsDevice(action, DeviceKind::Mouse) == BindsMouse(name));
     }
 }
 
@@ -217,4 +222,49 @@ TEST_CASE("UI buttons resolve the same from each device", "[input]")
     CHECK(f.state.JustPressed(kUICancelAction));
     CHECK(f.state.JustPressed(kUITabRightAction));
     CHECK_FALSE(f.state.IsDown(kUITabLeftAction));
+}
+
+TEST_CASE("UIPause comes from Escape and the gamepad's Start", "[input]")
+{
+    Fixture f;
+
+    f.SetKey(Key::Escape, true);
+    f.Update();
+    CHECK(f.state.JustPressed(kUIPauseAction));
+    // the same key backs out of a menu
+    CHECK(f.state.JustPressed(kUICancelAction));
+    f.SetKey(Key::Escape, false);
+    f.Update();
+
+    f.Pad().buttons[static_cast<size_t>(GamepadButton::Start)] = true;
+    f.Update();
+    CHECK(f.state.JustPressed(kUIPauseAction));
+    CHECK_FALSE(f.state.IsDown(kUICancelAction));
+}
+
+TEST_CASE("ForGame reads every action at rest while a game UI holds the input, and Get does not", "[input]")
+{
+    Fixture f;
+    f.map.AddAction("Jump", InputActionType::Button)
+        .bindings.push_back(InputBinding{.device = DeviceKind::Keyboard, .key = Key::Space});
+
+    f.SetKey(Key::Space, true);
+    f.SetKey(Key::Down, true);
+    f.Update();
+    CHECK(f.state.ForGame("Jump").down);
+    CHECK(f.state.ForGame("Jump").justPressed);
+
+    f.state.SetGameInputHeld(true);
+    CHECK_FALSE(f.state.ForGame("Jump").down);
+    CHECK_FALSE(f.state.ForGame("Jump").justPressed);
+    CHECK(f.state.ForGame(kUINavigateAction).y == 0.0f);
+
+    // the game UI's own reads, and every device, are untouched
+    CHECK(f.state.Get("Jump").down);
+    CHECK(f.state.Get(kUINavigateAction).y == 1.0f);
+    CHECK_FALSE(f.state.UiCapturesKeyboard());
+    CHECK_FALSE(f.state.UiCapturesMouse());
+
+    f.state.SetGameInputHeld(false);
+    CHECK(f.state.ForGame("Jump").down);
 }

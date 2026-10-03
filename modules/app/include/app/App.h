@@ -8,7 +8,6 @@
  */
 #pragma once
 
-#include <app/AssetImportManager.h>
 #include <app/GameProject.h>
 #include <assets/AssetCache.h>
 #include <assets/AssetManifest.h>
@@ -16,8 +15,9 @@
 #include <core/ecs/FixedTimestep.h>
 #include <core/ecs/SystemScheduler.h>
 #include <core/ecs/World.h>
-#include <editor/Editor.h>
+#include <gameshell/GameShell.h>
 #include <gameui/UIContext.h>
+#include <gameui/UIDemoScreen.h>
 #include <imguiruntime/ImGuiRuntime.h>
 #include <renderer/VulkanRenderer.h>
 #include <scene/PlaySnapshot.h>
@@ -26,6 +26,16 @@
 #include <script/ScriptReloadWatcher.h>
 #include <window/Splash.h>
 #include <window/Window.h>
+
+// 1 with the editor, 0 for the game alone
+#ifndef MIR_WITH_EDITOR 
+#error "MIR_WITH_EDITOR is set by linking mir::app"
+#endif
+
+#if MIR_WITH_EDITOR
+#include <app/AssetImportManager.h>
+#include <editor/Editor.h>
+#endif
 
 #include <cstdint>
 #include <filesystem>
@@ -61,6 +71,9 @@ namespace mir
         uint64_t mMaxFrames = 0;
         std::filesystem::path mCapturePath;
 
+        // debug: draw UIDemoScreen, every core widget, as the game UI
+        bool mUIDemo = false;
+
         // the game Initialize opens
         GameProject mProject;
 
@@ -72,6 +85,9 @@ namespace mir
     class App
     {
     public:
+        //whether this build has the editor in it at all
+        static constexpr bool kHasEditor = MIR_WITH_EDITOR != 0;
+
         App() = default;
         ~App();
 
@@ -133,6 +149,9 @@ namespace mir
         // Toggles Running/Paused. No-op outside Play.
         void TogglePause();
 
+        //carries out what the player asked of the game in the pause menu
+        void ApplyShellAction(GameShellAction action);
+
     private:
         // context is rebuilt per tick
         SystemContext MakeContext(float dt);
@@ -145,15 +164,29 @@ namespace mir
 
         // the mSwitchProjectTo test hook
         void RunSwitchHook();
+
+        //the game UI's area: the editor's scene viewport, or the whole window
+        UIRect GameUIArea() const;
+
+#if MIR_WITH_EDITOR
+        //what the editor's menus, toolbar and panels asked for this frame
+        void ApplyEditorActions(const EditorActions &actions);
         void ApplyImportedAssets();
+#endif
 
         SplashScreen mSplash;
         std::unique_ptr<Window> mWindow;
         VulkanRenderer mRenderer;
         ImGuiRuntime mImGui;
+#if MIR_WITH_EDITOR
         Editor mEditor;
+#endif
         UIContext mGameUI;
+        UIDemoScreen mUIDemo;
+        GameShell mGameShell;
+#if MIR_WITH_EDITOR
         AssetImportManager mAssetImport;
+#endif
 
         // Before mWorld, so it is destroyed after it
         CommandBuffer mCommands;
@@ -171,7 +204,9 @@ namespace mir
         AppDesc mDesc;
         GameProject mProject;
         std::vector<GameProject> mAvailableProjects;
+#if MIR_WITH_EDITOR
         std::vector<ProjectMenuEntry> mProjectMenu;
+#endif
         std::optional<GameProject> mProjectToOpen;
         bool mSwitchHookFired = false;
         double mElapsed = 0.0;

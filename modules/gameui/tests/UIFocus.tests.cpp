@@ -3,8 +3,9 @@
  * @author Quy Dong Ta
  * @brief Tests for focus in gameui/UIState: stepping UINavigate per direction,
  *        link traversal, skipping hidden and disabled widgets, cycles, the
- *        pointer and UINavigate sharing one slot, and UIConfirm activating the
- *        focused widget.
+ *        pointer and UINavigate sharing one slot, UIConfirm activating the
+ *        focused widget, the focus highlight hiding and coming back, a
+ *        widget taking left and right for itself, and pointer-only widgets.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -58,9 +59,10 @@ namespace
     constexpr UINavInput kConfirm{.mConfirm = true};
 
     std::vector<UIInteraction> Frame(UIState &state, const std::vector<Widget> &widgets,
-                                     const UIPointer &pointer = kRest, const UINavInput &nav = {})
+                                     const UIPointer &pointer = kRest, const UINavInput &nav = {},
+                                     bool focusVisible = true)
     {
-        state.BeginFrame(kArea, pointer, nav);
+        state.BeginFrame(kArea, pointer, nav, focusVisible);
         std::vector<UIInteraction> results;
         for (const Widget &widget : widgets)
             results.push_back(state.Interact(widget.mId, widget.mRect, kClip, widget.mOptions));
@@ -513,4 +515,184 @@ TEST_CASE("Pressing the pointer on a widget focuses it", "[gameui]")
 
     Frame(state, Menu(), UIPointer{150, 120, true});
     CHECK(state.Focus() == kPlay);
+}
+
+TEST_CASE("A hidden focus highlight keeps focus, and shows it again where it was", "[gameui]")
+{
+    UIState state;
+    state.SetFocus(kOptions);
+
+    const std::vector<UIInteraction> hidden = Frame(state, Menu(), kRest, {}, false);
+    CHECK_FALSE(state.FocusVisible());
+    CHECK(hidden[1].mFocused);
+    CHECK_FALSE(hidden[1].mShowFocus);
+    CHECK(state.Focus() == kOptions);
+
+    const std::vector<UIInteraction> shown = Frame(state, Menu());
+    CHECK(state.FocusVisible());
+    CHECK(shown[1].mShowFocus);
+    CHECK_FALSE(shown[0].mShowFocus);
+    CHECK_FALSE(shown[2].mShowFocus);
+    CHECK(state.Focus() == kOptions);
+}
+
+TEST_CASE("The UINavigate press that brings the highlight back does not move focus", "[gameui]")
+{
+    UIState state;
+    state.SetFocus(kOptions);
+    Frame(state, Menu(), kRest, {}, false);
+
+    CHECK(Frame(state, Menu(), kRest, Nav(0, 1))[1].mShowFocus);
+    CHECK(state.Focus() == kOptions);
+
+    // held, it does not step either; let go and pressed again, it does
+    Frame(state, Menu(), kRest, Nav(0, 1));
+    CHECK(state.Focus() == kOptions);
+
+    Frame(state, Menu(), kRest, UINavInput{});
+    Frame(state, Menu(), kRest, Nav(0, 1));
+    CHECK(state.Focus() == kQuit);
+}
+
+TEST_CASE("The UIConfirm press that brings the highlight back clicks nothing", "[gameui]")
+{
+    UIState state;
+    state.SetFocus(kOptions);
+    Frame(state, Menu(), kRest, {}, false);
+
+    for (const UIInteraction &interaction : Frame(state, Menu(), kRest, kConfirm))
+        CHECK_FALSE(interaction.mClicked);
+
+    Frame(state, Menu());
+    CHECK(Frame(state, Menu(), kRest, kConfirm)[1].mClicked);
+}
+
+TEST_CASE("The UINavigate press that brings the highlight back still lands on a widget when none is focused",
+          "[gameui]")
+{
+    UIState state;
+    Frame(state, Menu(), kRest, {}, false);
+
+    Frame(state, Menu(), kRest, Nav(0, 1));
+    CHECK(state.Focus() == kPlay);
+}
+
+TEST_CASE("The pointer moves focus while the highlight is hidden, and it comes back there", "[gameui]")
+{
+    UIState state;
+    state.SetFocus(kPlay);
+    Frame(state, Menu(), kRest, {}, false);
+
+    Frame(state, Menu(), UIPointer{150, 220, false}, {}, false);
+    CHECK(state.Focus() == kQuit);
+
+    Frame(state, Menu(), UIPointer{600, 500, false}, {}, false);
+    CHECK(state.Focus() == kQuit);
+
+    const std::vector<UIInteraction> shown = Frame(state, Menu(), UIPointer{600, 500, false}, Nav(0, 1));
+    CHECK(shown[2].mShowFocus);
+    CHECK(state.Focus() == kQuit);
+}
+
+TEST_CASE("A focused widget with mAdjustsX takes left and right as mAdjust, and focus stays", "[gameui]")
+{
+    UIState state;
+    std::vector<Widget> menu = Menu();
+    menu[1].mOptions.mLinks = Links(kPlay, kQuit, kPlay, kQuit);
+    menu[1].mOptions.mAdjustsX = true;
+    state.SetFocus(kOptions);
+
+    const std::vector<UIInteraction> right = Frame(state, menu, kRest, Nav(1, 0));
+    CHECK(right[1].mAdjust == 1);
+    CHECK(right[0].mAdjust == 0);
+    CHECK(state.Focus() == kOptions);
+
+    Frame(state, menu);
+    CHECK(Frame(state, menu, kRest, Nav(-1, 0))[1].mAdjust == -1);
+    CHECK(state.Focus() == kOptions);
+
+    // held, it adjusts once
+    CHECK(Frame(state, menu, kRest, Nav(-1, 0))[1].mAdjust == 0);
+}
+
+TEST_CASE("A widget with mAdjustsX still lets up and down follow its links", "[gameui]")
+{
+    UIState state;
+    std::vector<Widget> menu = Menu();
+    menu[1].mOptions.mAdjustsX = true;
+    state.SetFocus(kOptions);
+
+    CHECK(Frame(state, menu, kRest, Nav(0, 1))[1].mAdjust == 0);
+    CHECK(state.Focus() == kQuit);
+}
+
+TEST_CASE("mAdjust goes only to the focused widget, and not on the press that brings the highlight back",
+          "[gameui]")
+{
+    UIState state;
+    std::vector<Widget> menu = Menu();
+    for (Widget &widget : menu)
+        widget.mOptions.mAdjustsX = true;
+    state.SetFocus(kQuit);
+
+    Frame(state, menu, kRest, {}, false);
+    for (const UIInteraction &interaction : Frame(state, menu, kRest, Nav(1, 0)))
+        CHECK(interaction.mAdjust == 0);
+
+    Frame(state, menu);
+    const std::vector<UIInteraction> right = Frame(state, menu, kRest, Nav(1, 0));
+    CHECK(right[0].mAdjust == 0);
+    CHECK(right[1].mAdjust == 0);
+    CHECK(right[2].mAdjust == 1);
+}
+
+TEST_CASE("A widget without mAdjustsX follows its left and right links as before", "[gameui]")
+{
+    UIState state;
+    std::vector<Widget> menu = Menu();
+    menu[1].mOptions.mLinks = Links(kPlay, kQuit, kPlay, kQuit);
+    state.SetFocus(kOptions);
+
+    CHECK(Frame(state, menu, kRest, Nav(1, 0))[1].mAdjust == 0);
+    CHECK(state.Focus() == kQuit);
+}
+
+TEST_CASE("A pointer-only widget is clicked by the pointer and never focused", "[gameui]")
+{
+    UIState state;
+    constexpr UIId kHud("hud");
+    const std::vector<Widget> widgets{{kHud, {100, 100, 200, 40}, {.mPointerOnly = true}}};
+    constexpr UIPointer kOver{150, 120, false};
+    constexpr UIPointer kPressOver{150, 120, true};
+
+    // no first UINavigate press lands on it, and UIConfirm clicks nothing
+    Frame(state, widgets, kRest, Nav(0, 1));
+    Frame(state, widgets);
+    CHECK(state.Focus().IsNull());
+    CHECK_FALSE(Frame(state, widgets, kRest, kConfirm)[0].mClicked);
+
+    // the pointer hovers and clicks it, and leaves focus alone
+    Frame(state, widgets, kOver);
+    CHECK(Frame(state, widgets, kOver)[0].mHovered);
+    Frame(state, widgets, kPressOver);
+    CHECK(Frame(state, widgets, kOver)[0].mClicked);
+    CHECK(state.Focus().IsNull());
+
+    // focus set on it by hand is not shown or confirmed
+    state.SetFocus(kHud);
+    const UIInteraction named = Frame(state, widgets, kOver, kConfirm)[0];
+    CHECK_FALSE(named.mFocused);
+    CHECK_FALSE(named.mShowFocus);
+    CHECK_FALSE(named.mClicked);
+}
+
+TEST_CASE("Links pass over a pointer-only widget, as over a disabled one", "[gameui]")
+{
+    UIState state;
+    std::vector<Widget> menu = Menu();
+    menu[1].mOptions.mPointerOnly = true;
+    state.SetFocus(kPlay);
+
+    Frame(state, menu, kRest, Nav(0, 1));
+    CHECK(state.Focus() == kQuit);
 }

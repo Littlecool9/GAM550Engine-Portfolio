@@ -36,6 +36,7 @@ namespace
         uint64_t mMaxFrames = 0;
         std::string mCapturePath;
         bool mNoEditor = false;
+        bool mUIDemo = false;
 
         // test hook: games to restart into, in order
         std::vector<std::string> mProjectSwitches;
@@ -71,13 +72,17 @@ namespace
             {
                 options.mNoEditor = true;
             }
+            else if (arg == "--ui-demo")
+            {
+                options.mUIDemo = true;
+            }
             else if (arg == "--switch-to" && i + 1 < argc)
             {
                 options.mProjectSwitches.emplace_back(argv[++i]);
             }
             else
             {
-                MIR_LOG_ERROR("unrecognized argument '{}' (usage: [--game <dir>] [--frames <N>] [--capture <png>] [--no-editor] [--switch-to <dir>]...)", arg);
+                MIR_LOG_ERROR("unrecognized argument '{}' (usage: [--game <dir>] [--frames <N>] [--capture <png>] [--no-editor] [--ui-demo] [--switch-to <dir>]...)", arg);
                 return std::nullopt;
             }
         }
@@ -103,6 +108,8 @@ namespace
         std::vector<std::string> args{"--game", next.mDir};
         if (options.mNoEditor)
             args.emplace_back("--no-editor");
+        if (options.mUIDemo)
+            args.emplace_back("--ui-demo");
         if (!options.mCapturePath.empty())
         {
             args.emplace_back("--capture");
@@ -162,7 +169,9 @@ int main(int argc, char **argv)
     desc.mProject = *project;
     desc.mMaxFrames = options->mMaxFrames;
     desc.mCapturePath = options->mCapturePath;
-    desc.mEnableEditorLayout = !options->mNoEditor;
+    // a build without the editor is always the game; --no-editor is then a no-op
+    desc.mEnableEditorLayout = mir::App::kHasEditor && !options->mNoEditor;
+    desc.mUIDemo = options->mUIDemo;
     if (!options->mProjectSwitches.empty())
         desc.mSwitchProjectTo = options->mProjectSwitches.front();
 

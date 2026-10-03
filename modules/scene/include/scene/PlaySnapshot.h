@@ -23,4 +23,8 @@ namespace mir
     PlaySnapshot CaptureWorld(World &world);
 
     LoadedScene RestoreWorld(World &world, const PlaySnapshot &snapshot);
+
+    // Removes the snapshot's directory, one per process, once it will not be
+    // restored again; the snapshot is empty afterwards
+    void DiscardSnapshot(PlaySnapshot &snapshot);
 }

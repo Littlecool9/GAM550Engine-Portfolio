@@ -46,54 +46,20 @@
 
 namespace mir
 {
-    //placer holder, to be removed. content proving the gameui path end to end, replaced once
-    //a game can author its own UI
     namespace
     {
-
+#if MIR_WITH_EDITOR
         UIRect ToUIRect(const VkRect2D &rect)
         {
             return UIRect{static_cast<float>(rect.offset.x), static_cast<float>(rect.offset.y),
                           static_cast<float>(rect.extent.width), static_cast<float>(rect.extent.height)};
         }
+#endif
 
         UIPointer ToUIPointer(const RawInputSnapshot &input)
         {
             return UIPointer{static_cast<float>(input.mouseX), static_cast<float>(input.mouseY),
                              input.IsDown(MouseButton::Left)};
-        }
-
-        //column of three panels whose up and down links wrap so hover,
-        //gamepad stick, d-pad and arrow keys all move one focus
-        void DrawPlaceholderHud(UIContext &ui)
-        {
-            const UIStyle &style = ui.Style();
-            UIDrawList &draw = ui.DrawList();
-
-            constexpr uint64_t kCount = 3;
-            for (uint64_t i = 0; i < kCount; ++i)
-            {
-                const UIRect panel{16.0f, 16.0f + 48.0f * static_cast<float>(i), 220.0f, 40.0f};
-                const UINavLinks links{UIId("placeholder_hud", (i + kCount - 1) % kCount),
-                                       UIId("placeholder_hud", (i + 1) % kCount), UIId{}, UIId{}};
-                const UIInteraction interaction =
-                    ui.Interact(UIId("placeholder_hud", i), panel, UIWidgetOptions{.mLinks = links});
-                if (interaction.mClicked)
-                    MIR_LOG_INFO("gameui: placeholder panel {} clicked", i);
-
-                UIColor color = style.mPanelColor;
-                if (interaction.mHeld && interaction.mHovered)
-                    color.a = 0.95f;
-                else if (interaction.mFocused)
-                    color.a = 0.8f;
-
-                draw.Rect(panel, color, style.mPanelRounding);
-                draw.Text(28.0f, 28.0f + 48.0f * static_cast<float>(i), "this is test for game ui",
-                          style.mTextColor, style.mFontSize);
-            }
-
-            if (ui.CancelPressed())
-                MIR_LOG_INFO("gameui: placeholder screen cancelled");
         }
     }
 
@@ -106,7 +72,13 @@ namespace mir
         mProjectToOpen.reset();
         mSwitchHookFired = false;
         mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
+#if MIR_WITH_EDITOR
         mAssetImport.Initialize(mProject);
+#else
+        //no editor to lay out, the window is the game
+        mDesc.mEnableEditorLayout = false;
+        MIR_LOG_INFO("Built without the editor; running the game");
+#endif
 
         audio::Init(mProject.mSoundBankDir);
 
@@ -125,8 +97,8 @@ namespace mir
         windowDesc.mWidth = desc.mWidth;
         windowDesc.mHeight = desc.mHeight;
         windowDesc.mTitle = mProject.mTitle.c_str();
-        windowDesc.mMaximized = desc.mEnableEditorLayout;
-        windowDesc.mCustomTitleBar = desc.mEnableEditorLayout;
+        windowDesc.mMaximized = mDesc.mEnableEditorLayout;
+        windowDesc.mCustomTitleBar = mDesc.mEnableEditorLayout;
         windowDesc.mStartHidden = true;
 
         mWindow = Window::Create(windowDesc);
@@ -154,6 +126,7 @@ namespace mir
             return false;
         }
 
+#if MIR_WITH_EDITOR
         mSplash.SetProgress("Initializing editor...", 0.5f);
         if (!mEditor.Initialize(mImGui, *mWindow, mProject.mProjectSettingsPath, mWorld))
         {
@@ -163,6 +136,7 @@ namespace mir
             mWindow.reset();
             return false;
         }
+#endif
 
         mInitialized = true;
 
@@ -216,15 +190,24 @@ namespace mir
 
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
+        if (mDesc.mUIDemo)
+            mUIDemo.Load(mGameUI, Assets());
+
         // scanned once: a new game needs a build to cook its assets anyway
         mAvailableProjects = DiscoverGameProjects();
+#if MIR_WITH_EDITOR
         mProjectMenu.clear();
         for (const GameProject &project : mAvailableProjects)
             mProjectMenu.push_back(ProjectMenuEntry{ project.mDir, project.mName });
+#endif
 
         mSplash.SetProgress("Loading scene...", 0.9f);
         mScene = mir::NewScene("untitled");
         LoadProjectScene();
+
+        //without the editor there is no Play button
+        if (!mDesc.mEnableEditorLayout)
+            PlayScene();
 
         mWindow->Show();
         return true;
@@ -339,6 +322,34 @@ namespace mir
         SetPlayState(mWorld, IsPaused(mWorld) ? PlayState::Running : PlayState::Paused);
     }
 
+    void App::ApplyShellAction(GameShellAction action)
+    {
+        switch (action)
+        {
+        case GameShellAction::Pause:
+            if (IsSimulating(mWorld))
+                TogglePause();
+            break;
+        case GameShellAction::Resume:
+            if (IsPaused(mWorld))
+                TogglePause();
+            break;
+        case GameShellAction::Restart:
+            StopScene();
+            PlayScene();
+            break;
+        case GameShellAction::Quit:
+            //the editor's Quit leaves Play, but game build closes
+            if (mDesc.mEnableEditorLayout)
+                StopScene();
+            else
+                mWindow->RequestClose();
+            break;
+        case GameShellAction::None:
+            break;
+        }
+    }
+
     void App::UnloadCurrentScene()
     {
         UnloadScene(mWorld, mScene);
@@ -422,86 +433,41 @@ namespace mir
             previous = now;
             mElapsed += dt;
 
+#if MIR_WITH_EDITOR
             mAssetImport.Update(IsEditing(mWorld));
             if (mAssetImport.PendingApply() && IsEditing(mWorld))
                 ApplyImportedAssets();
+#endif
 
             mImGui.BeginFrame();
 
             if (mWindow->Width() != 0 && mWindow->Height() != 0)
             {
+#if MIR_WITH_EDITOR
                 const EditorActions actions = mEditor.DrawLayout(
                     mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<RenderSettings>(),
                     mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir, mWorld, mAssetImport.View());
+#endif
 
-                //temp code to prove game ui functionality
-                const UIRect uiArea = mDesc.mEnableEditorLayout
-                    ? ToUIRect(mEditor.SceneViewportRect())
-                    : UIRect{0.0f, 0.0f, static_cast<float>(mWindow->Width()), static_cast<float>(mWindow->Height())};
-                mGameUI.BeginFrame(uiArea, mWorld.Resource<InputState>(), ToUIPointer(mWindow->RawInput()));
-                DrawPlaceholderHud(mGameUI);
+                mGameUI.BeginFrame(GameUIArea(), mWorld.Resource<InputState>(), mWorld.Resource<InputMap>(),
+                                   ToUIPointer(mWindow->RawInput()));
+                GameShellAction shellAction = GameShellAction::None;
+                if (mDesc.mUIDemo)
+                    mUIDemo.Draw(mGameUI);
+                else
+                    shellAction = mGameShell.Draw(mGameUI, IsPlaying(mWorld), dt);
                 mGameUI.EndFrame();
 
+                ApplyShellAction(shellAction);
 
-                switch (actions.mScene)
-                {
-                case SceneMenuAction::New:
-                    NewScene();
-                    break;
-                case SceneMenuAction::Save:
-                    SaveScene();
-                    break;
-                case SceneMenuAction::Load:
-                    LoadScene();
-                    break;
-                case SceneMenuAction::Play:
-                    PlayScene();
-                    break;
-                case SceneMenuAction::TogglePause:
-                    TogglePause();
-                    break;
-                case SceneMenuAction::Stop:
-                    StopScene();
-                    break;
-                case SceneMenuAction::None:
-                    break;
-                }
-
-                bool assetActionAccepted = true;
-                if (actions.mAssetImport.mKind == AssetImportActionKind::Remove)
-                {
-                    AssetId target = MakeAssetId(actions.mAssetImport.mModelPath);
-                    for (const auto &model : mAssetImport.View().mModels)
-                        if (model.mPath == actions.mAssetImport.mModelPath && model.mAssetId != 0)
-                            target = AssetId{model.mAssetId};
-                    mWorld.GetOrCreateQuery<const ModelPlayer>().ForEach([&](Entity, const ModelPlayer &player) {
-                        AssetId referenced = player.ModelAsset();
-                        if (referenced.IsNull() && !player.ModelName().empty())
-                            if (const AssetPathResult logical =
-                                    MakeLogicalAssetPath(mProject.mAssetIdRoot, player.ModelName());
-                                logical.Ok())
-                                referenced = MakeAssetId(logical.path);
-                        assetActionAccepted &= referenced != target;
-                    });
-                    if (!assetActionAccepted)
-                        mAssetImport.Reject(actions.mAssetImport.mModelPath,
-                                            "cannot remove this asset while a scene entity references it");
-                }
-                if (assetActionAccepted)
-                    mAssetImport.Handle(actions.mAssetImport);
-
-                if (!actions.mOpenProject.empty())
-                    RequestOpenProject(actions.mOpenProject);
-
-                if (!actions.mCreateProjectName.empty() &&
-                    CreateGameProject(actions.mCreateProjectName, actions.mCreateProjectRayTracing))
-                {
-                    RequestOpenProject("games/" + actions.mCreateProjectName);
-                }
+#if MIR_WITH_EDITOR
+                ApplyEditorActions(actions);
+#endif
             }
 
             mRenderer.SetImGuiDrawData(mImGui.EndFrame());
 
+#if MIR_WITH_EDITOR
             mRenderSystem->SetViewportRect(0, mDesc.mEnableEditorLayout ? mEditor.SceneViewportRect() : VkRect2D{});
 
             // Only feed EditorCamera input in Edit.
@@ -517,6 +483,10 @@ namespace mir
             }
 
             mWorld.Resource<InputState>().SetUiCapture(mEditor.WantsCaptureKeyboard(), mEditor.WantsCaptureMouse());
+#else
+            mRenderSystem->SetViewportRect(0, VkRect2D{});
+            mRenderSystem->SetViewportCamera(0, kNullEntity);
+#endif
 
             mScriptReloadWatcher.Poll(Assets(), dt);
 
@@ -538,6 +508,75 @@ namespace mir
             // same exit path as the close button
             if (mDesc.mMaxFrames != 0 && mFrame >= mDesc.mMaxFrames)
                 mWindow->RequestClose();
+        }
+    }
+
+    UIRect App::GameUIArea() const
+    {
+#if MIR_WITH_EDITOR
+        if (mDesc.mEnableEditorLayout)
+            return ToUIRect(mEditor.SceneViewportRect());
+#endif
+        return UIRect{0.0f, 0.0f, static_cast<float>(mWindow->Width()), static_cast<float>(mWindow->Height())};
+    }
+
+#if MIR_WITH_EDITOR
+    void App::ApplyEditorActions(const EditorActions &actions)
+    {
+        switch (actions.mScene)
+        {
+        case SceneMenuAction::New:
+            NewScene();
+            break;
+        case SceneMenuAction::Save:
+            SaveScene();
+            break;
+        case SceneMenuAction::Load:
+            LoadScene();
+            break;
+        case SceneMenuAction::Play:
+            PlayScene();
+            break;
+        case SceneMenuAction::TogglePause:
+            TogglePause();
+            break;
+        case SceneMenuAction::Stop:
+            StopScene();
+            break;
+        case SceneMenuAction::None:
+            break;
+        }
+
+        bool assetActionAccepted = true;
+        if (actions.mAssetImport.mKind == AssetImportActionKind::Remove)
+        {
+            AssetId target = MakeAssetId(actions.mAssetImport.mModelPath);
+            for (const auto &model : mAssetImport.View().mModels)
+                if (model.mPath == actions.mAssetImport.mModelPath && model.mAssetId != 0)
+                    target = AssetId{model.mAssetId};
+            mWorld.GetOrCreateQuery<const ModelPlayer>().ForEach([&](Entity, const ModelPlayer &player) {
+                AssetId referenced = player.ModelAsset();
+                if (referenced.IsNull() && !player.ModelName().empty())
+                    if (const AssetPathResult logical =
+                            MakeLogicalAssetPath(mProject.mAssetIdRoot, player.ModelName());
+                        logical.Ok())
+                        referenced = MakeAssetId(logical.path);
+                assetActionAccepted &= referenced != target;
+            });
+            if (!assetActionAccepted)
+                mAssetImport.Reject(actions.mAssetImport.mModelPath,
+                                    "cannot remove this asset while a scene entity references it");
+        }
+        if (assetActionAccepted)
+            mAssetImport.Handle(actions.mAssetImport);
+
+        if (!actions.mOpenProject.empty())
+            RequestOpenProject(actions.mOpenProject);
+
+        if (!actions.mCreateProjectName.empty() &&
+            CreateGameProject(actions.mCreateProjectName, actions.mCreateProjectRayTracing))
+        {
+            RequestOpenProject("games/" + actions.mCreateProjectName);
         }
     }
 
@@ -566,6 +605,7 @@ namespace mir
         mAssetImport.MarkApplied();
         MIR_LOG_INFO("Applied imported assets at an Edit frame boundary");
     }
+#endif
 
     void App::Shutdown()
     {
@@ -578,7 +618,9 @@ namespace mir
         SystemContext stopContext = MakeContext(0.0f);
         mScheduler.Stop(stopContext);
 
+#if MIR_WITH_EDITOR
         mAssetImport.Shutdown();
+#endif
 
         audio::Terminate();
 
@@ -589,7 +631,11 @@ namespace mir
         mAssetManifest.reset();
         mAssetLoadFailed = false;
 
+        DiscardSnapshot(mPlaySnapshot);
+
+#if MIR_WITH_EDITOR
         mEditor.Shutdown();
+#endif
         mImGui.Shutdown(mRenderer);
 
         mRenderer.Shutdown();
