@@ -24,6 +24,7 @@ Start(scheduler)                       systems cache their queries
 while not ShouldClose:
     PollEvents                         close flag and size refresh here
     dt = min(elapsed, mMaxDeltaSeconds)
+    if IsEditing(world): imported assets, then TerrainRuntime::Refresh   the Edit safe point
     ImGuiRuntime::BeginFrame                 the NewFrame trio
     Editor::DrawLayout -> EditorActions      New/Save/Load/Play/TogglePause/Stop and Open Project acted on here
     renderer.SetImGuiDrawData(ImGuiRuntime::EndFrame())
@@ -136,13 +137,21 @@ be destroyed wholesale. It then releases the Play session's GPU resources and
 resolves scripts and meshes again, same as `LoadScene` — `RestoreWorld`'s entities come from `LoadScene` under the hood,
 with the same only-names-round-trip gap.
 
+Terrain is pinned for the whole Play (terrain ADR 0018, local). `PlayScene` runs
+the terrain safe point once more before the snapshot, so a release published a
+moment earlier is adopted rather than missed; nothing refreshes terrain during
+Play, so a release published then changes no mesh, query or collider. `StopScene`
+rebuilds the terrain meshes `ReleaseSceneResources` freed, or, when `current`
+moved during Play, switches every terrain resource to that release in the same
+call.
+
 ## API
 
 | Type | Header | Role |
 |---|---|---|
 | `AppDesc` | `app/App.h` | Window size, Vulkan app name and validation, editor-layout gate, `dt` clamp, frame limit, the game to open, a scripted game switch for tests |
 | `App` | `app/App.h` | Owns the subsystems, runs the loop, takes a request to open another game |
-| `GameProject` | `app/GameProject.h` | `{mDir, mName, mTitle, mAssetIdRoot, mSceneDir, mProjectSettingsPath}` for one game directory |
+| `GameProject` | `app/GameProject.h` | `{mDir, mName, mTitle, mAssetIdRoot, mRootDir, mSceneDir, mProjectSettingsPath}` for one game directory; `mRootDir` is where it is read from (the source tree in a development build), so terrain releases are found under `TerrainReleasesRoot(mRootDir)` |
 
 `app/GameProject.h` also declares `ReadDefaultGame`, `NormalizeGameDir`,
 `LoadGameProject`, `ResolveGameProject` (normalize, then load) and
@@ -179,6 +188,7 @@ control is `RequestOpenProject(dir)`, and the switch itself is a restart.
 | `mEditor` | after the renderer | before it | its Vulkan backend needs a live device, its GLFW backend a live window |
 | `mCommands` | before `mWorld` | after it | outlives the world it records against |
 | `mWorld`, `mScheduler`, `mScriptHost`, `mScene` | with `App` | with `App` | no external resources |
+| `mTerrain` (`TerrainRuntime`, private) | in `Initialize`, after `RenderSystem` | with `App` | holds handles only: its meshes go with the renderer, its height fields with the World's `PhysicsWorld` |
 | `mProject`, `mAvailableProjects`, `mProjectToOpen` | with `App` | with `App` | plain data |
 | `mAssetManifest` | first `Assets()` | after the cache | owns the parsed manifest |
 | `mAssetCache` | with the manifest | before it | holds a raw pointer into it |
@@ -203,19 +213,41 @@ from a `LoadedScene` file: `LoadScene()` and `StopScene()` (via `PlaySnapshot::
 RestoreWorld`). Neither call site can skip them independently — both live
 inside the same two methods.
 
-### Terrain draws (private glue, no caller yet)
+### Terrain (private glue)
 
-`src/app/TerrainRender.{h,cpp}` is the only place terrain meets the renderer,
-since neither module may link the other. `TerrainRenderTiles::Add` takes a
-`TerrainTileMesh` (see [terrain.md](terrain.md)), converts it with
-`MakeTerrainVertices`, uploads it (with a BLAS on an RT device) and records a
-`WorldDrawItem` at placement plus tile origin, added in double, with the
-diagnostic tint on the default material and a `translationGrid` of 1/4096 m.
-All tiles in one `TerrainRenderTiles` must come from one release; a mesh from
-another is refused. `PublishTerrainDraws` copies the draws into the
-`TerrainDrawItems` resource (see [renderer.md](renderer.md)); the project's
-ray tracing setting decides how they are drawn. The `TerrainInstance` work
-(#118) will call it from scene load.
+App is the only place terrain meets the renderer and physics, since neither
+module may link `terrain`. A scene holds terrain as `TerrainInstance`
+components; the `TerrainWorld` World resource holds what they resolve to (see
+[terrain.md](terrain.md)). `src/app/TerrainRuntime.{h,cpp}` owns everything
+derived from it, one set per instance: the raster tile meshes and one static
+height field over the whole map, each stamped with the release it came from.
+
+```
+LoadScene      -> TerrainRuntime::Load      CollectTerrainScene, ResolveTerrainWorld, build, publish
+Run (Edit)     -> TerrainRuntime::Refresh   an edit settled 0.5 s, or a current pointer moved (polled every 1 s)
+PlayScene      -> Refresh(force)            adopt a newer complete release, then the snapshot pins it
+StopScene      -> ForgetMeshes, ReleaseSceneResources, ..., Refresh(force)
+UnloadCurrentScene -> Unload                draws emptied, height fields destroyed, TerrainWorld emptied
+```
+
+A rebuild builds every new mesh and height field first, then swaps in one
+step: the new draws are published, the old meshes and height fields are
+destroyed and the `TerrainWorld` value is replaced. Nothing between frames sees
+two releases. A terrain whose mesh or collider cannot be built is dropped whole
+with an error, so the query never answers for ground nothing collides with.
+Each problem is logged once per loaded scene.
+
+`src/app/TerrainRender.{h,cpp}` uploads a mesh: `TerrainRenderTiles::Add` takes a
+`TerrainTileMesh`, converts it with `MakeTerrainVertices`, uploads it (with a
+BLAS on an RT device) and records a `WorldDrawItem` at placement plus tile
+origin, added in double, with the diagnostic tint on the default material and a
+`translationGrid` of 1/4096 m. All tiles in one `TerrainRenderTiles` must come
+from one release; a mesh from another is refused. `PublishTerrainDraws` copies
+the draws into the `TerrainDrawItems` resource (see [renderer.md](renderer.md));
+the project's ray tracing setting alone decides how they are drawn.
+The height field is `BuildTerrainAreaSamples`'s block handed to
+`PhysicsWorld::CreateStaticHeightField` at placement plus the block's first
+sample.
 
 ## Rules
 
@@ -303,9 +335,17 @@ the other value would disagree with `App.cpp` about the class.
 
 **Terrain meshes do not survive `ReleaseSceneResources`.** It frees every mesh
 without bumping generations, so a kept handle would name the next scene's
-mesh. Whoever owns a `TerrainRenderTiles` publishes empty terrain draws and
-calls `Forget` around every release, then rebuilds from the same release;
-`Destroy` is for dropping terrain while the scene stays.
+mesh. `TerrainRuntime::ForgetMeshes` (Stop) or `Unload` (scene change) runs
+before every release; the next `Refresh` rebuilds from the same release.
+`Destroy` is for dropping terrain while the scene stays. Height fields live in
+the process-long `PhysicsWorld`, so `Unload` and every swap destroy them
+explicitly.
+
+**Terrain changes only at an Edit frame boundary.** `TerrainRuntime::Refresh`
+runs at the top of an Edit frame, in `PlayScene` before the snapshot and at the
+end of `StopScene`, never during Play: one Play keeps the releases it entered
+with, and a mesh, query or height field of another release never shares a frame
+or a physics step with them.
 
 ## State
 
@@ -325,7 +365,11 @@ tested where they live. A headless renderer is the prerequisite for unit testing
 anything here. Until then the `smoke.<game>` tests run the whole `App` for 120
 frames per game through `mMaxFrames`, and `smoke.switch` restarts from one game
 into another twice through `mSwitchProjectTo`. All of them fail on a crash or a
-logged error.
+logged error. `smoke.TerrainCheck` loads a far-world terrain from the release
+the build just published, with ray tracing requested. The terrain state machine
+is tested in `terrain` (`TerrainScene.tests.cpp`) and the collider assembly in
+`physics` (`TerrainCollider.tests.cpp`); the Play/publish/Stop sequence through
+`App` itself was checked once with a local harness (terrain ADR 0018).
 
 ## Backlog
 
@@ -357,6 +401,13 @@ Was: `App::Initialize` reset the window and returned when
 before the failure was never freed. Now: it calls `mRenderer.Shutdown()` first,
 then resets the window, which the renderer's surface needs until its own
 shutdown.
+
+*2026-10-02* — **Scenes load terrain (#118).** Was: `TerrainRender` had no
+caller. Now: the private `TerrainRuntime` resolves a scene's
+`TerrainInstance`s at load, swaps meshes, height fields and the `TerrainWorld`
+resource together at Edit frame boundaries, pins them for Play and rebuilds or
+switches release at Stop. `GameProject` gains `mRootDir`; `App()` is defined in
+`App.cpp`. New game `games/TerrainCheck/` (`smoke.TerrainCheck`).
 
 *2026-10-02* — **Terrain draw glue (#14).** Was: app did not link `terrain`.
 Now: it links it privately for `src/app/TerrainRender.{h,cpp}`, which uploads

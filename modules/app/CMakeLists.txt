@@ -23,6 +23,7 @@ target_sources(engine_app PRIVATE
     src/app/GameProject.cpp
     src/app/SceneResolve.cpp
     src/app/TerrainRender.cpp
+    src/app/TerrainRuntime.cpp
 )
 
 # PUBLIC: App.h holds the editor's members only with it, so everything that

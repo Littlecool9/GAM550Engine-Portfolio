@@ -149,9 +149,11 @@ Tests in `modules/scene/tests/SceneIO.tests.cpp`,
 `modules/scene/tests/EntitySnapshot.tests.cpp`.
 
 Resolving names back into live handles after a load is not done here — a
-`ScriptRef.scriptName` into an `instanceRef`, or a mesh name into a `MeshHandle`.
-`App` does that, through `ResolveSceneScripts` and `ResolveSceneMeshes` in
-`app`'s private `SceneResolve.cpp` (see [app.md](app.md)), because it needs the
+`ScriptRef.scriptName` into an `instanceRef`, a mesh name into a `MeshHandle`, or
+a `TerrainInstance.recipePath` into a pinned terrain release with its meshes and
+height field. `App` does that, through `ResolveSceneScripts` and
+`ResolveSceneMeshes` in `app`'s private `SceneResolve.cpp` and through its private
+`TerrainRuntime` (see [app.md](app.md)), because it needs the
 renderer and the script host that this module does not link — and because `App`
 is the one place both of this module's load paths (`LoadScene`, `RestoreWorld`)
 converge.

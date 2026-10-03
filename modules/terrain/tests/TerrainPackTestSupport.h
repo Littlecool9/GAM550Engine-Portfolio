@@ -87,6 +87,14 @@ namespace mir::test
         return *layout;
     }
 
+    // relief-2x2.terrain.json's layout.
+    inline TerrainLayout ReliefLayout()
+    {
+        const auto layout = TerrainLayout::CreateFromTileSize(256.0, 4.0, {-250.0, -256.0, 256.0, 250.0});
+        REQUIRE(layout);
+        return *layout;
+    }
+
     // Two tiles per chunk: packs chunk_-1_-1, chunk_0_-1, chunk_-1_0 (four tiles) and chunk_0_0.
     inline TerrainEncodedRelease EncodeEdge(AssetId asset, uint64_t release, float salt = 0.0f)
     {
