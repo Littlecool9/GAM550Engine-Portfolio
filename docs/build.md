@@ -76,9 +76,11 @@ Every build is the same three steps.
 3. Build.
 
 `CMakePresets.json` is the only supported way to configure. There are two
-presets for everyday work, `windows-msvc-debug` and `windows-msvc-release`, and
+presets for everyday work, `windows-msvc-debug` and `windows-msvc-release`;
 two that build the game without the editor, `windows-msvc-game-debug` and
-`windows-msvc-game-release` (see [A build without the editor](#a-build-without-the-editor)).
+`windows-msvc-game-release` (see [A build without the editor](#a-build-without-the-editor));
+and `windows-msvc-debug-float`, with float world positions (see World precision
+below).
 All use Ninja and all build into `builds/<presetName>/`.
 
 The command line and VS Code read the same presets, so everyone builds the same
