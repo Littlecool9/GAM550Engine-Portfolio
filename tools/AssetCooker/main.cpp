@@ -9,6 +9,7 @@
  */
 
 #include "GltfImporter.h"
+#include "ImageImporter.h"
 #include <algorithm>
 #include <assets/AssetBlob.h>
 #include <core/fs/FileIO.h>
@@ -703,6 +704,12 @@ namespace
                             outputs[output.id.value] = output;
                     }
                 }
+            //a gltf's images are cooked by its import, under its own ids
+            std::unordered_set<std::string> modelImages;
+            for (const auto &[logical, record] : cache["models"].items())
+                for (const auto &dependency : record.value("dependencies", Json::array()))
+                    modelImages.insert(
+                        std::filesystem::weakly_canonical(dependency.get<std::string>()).generic_string());
             for (const auto &root : options.roots)
             {
                 std::vector<std::filesystem::path> files;
@@ -719,7 +726,25 @@ namespace
                     auto bytes = mir::ReadBytes(path);
                     if (!bytes)
                         throw std::runtime_error("cannot read " + path.string());
-                    emit(mir::MakeAssetId(LogicalPath(root, path)),
+                    const std::string logical = LogicalPath(root, path);
+                    //any other image is a texture of its own, decoded here so
+                    //runtime never parses an image format
+                    if (mir::cook::IsImagePath(path) &&
+                        !modelImages.contains(std::filesystem::weakly_canonical(path).generic_string()))
+                    {
+                        std::vector<std::byte> texture;
+                        try
+                        {
+                            texture = mir::BuildTypedAsset(mir::cook::DecodeImage(*bytes));
+                        }
+                        catch (const std::exception &error)
+                        {
+                            throw std::runtime_error(logical + ": " + error.what());
+                        }
+                        emit(mir::MakeAssetId(logical), texture);
+                        continue;
+                    }
+                    emit(mir::MakeAssetId(logical),
                          mir::BuildAssetBlob(mir::kRawAssetTypeTag, mir::kRawAssetContentVersion, *bytes));
                 }
             }

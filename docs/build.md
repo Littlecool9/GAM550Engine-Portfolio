@@ -76,8 +76,10 @@ Every build is the same three steps.
 3. Build.
 
 `CMakePresets.json` is the only supported way to configure. There are two
-presets, `windows-msvc-debug` and `windows-msvc-release`. Both use Ninja and both
-build into `builds/<presetName>/`.
+presets for everyday work, `windows-msvc-debug` and `windows-msvc-release`, and
+two that build the game without the editor, `windows-msvc-game-debug` and
+`windows-msvc-game-release` (see [A build without the editor](#a-build-without-the-editor)).
+All use Ninja and all build into `builds/<presetName>/`.
 
 The command line and VS Code read the same presets, so everyone builds the same
 way.
@@ -113,6 +115,29 @@ resolve against a pinned `builtin-baseline`, so everyone gets the same versions.
 
 Ninja does it for you at build time, and cmake-tools can do it on save — see
 `cmake.configureOnEdit`. To force one: `Ctrl+Shift+P` → **CMake: Configure**.
+
+## A build without the editor
+
+`windows-msvc-game-debug` and `windows-msvc-game-release` configure with
+`MJOLNIR_WITH_EDITOR=OFF`. `MjolnirEngine` is then the game alone: the
+`editor` and `editortheme` modules and ImGuizmo are not built, nothing links
+`engine_editor`, and the editor's asset import queue is left out of `app`. The
+game opens in its own window, not maximized and with the system title bar, and
+plays from the first frame, with the game UI fullscreen.
+
+```
+cmake --preset windows-msvc-game-debug
+cmake --build --preset windows-msvc-game-debug
+ctest --test-dir builds/windows-msvc-game-debug --output-on-failure
+```
+
+It is a second build tree, the one exception to building into the tree you
+already have, since the option changes which modules exist. The same tests and
+smoke tests run in it. `--no-editor` is accepted and changes nothing there.
+
+A module that starts linking `mir::editor` unconditionally fails this
+configure, because the target does not exist, so the separation cannot erode
+without someone noticing.
 
 ## Tests
 

@@ -246,6 +246,11 @@ Open Project asks for, but not the menu or the dialog themselves.
 
 ## Changed
 
+*2026-10-02* — **Optional.** Was: built and linked into every binary. Now: not
+built at all when `MJOLNIR_WITH_EDITOR` is OFF (the `windows-msvc-game-*`
+presets), along with `editortheme` and ImGuizmo; `app` is the only module that
+links it, and only with the option on. See [app.md](app.md#without-the-editor).
+
 *2026-09-26* — **The ImGui context's lifetime moved to `imguiruntime`.** Was:
 `Initialize` created the context, loaded the fonts and initialised both
 backends, `Shutdown(VulkanRenderer&)` tore them down, and `BeginFrame`/`EndFrame`

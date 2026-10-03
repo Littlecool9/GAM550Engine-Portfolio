@@ -104,12 +104,16 @@ namespace mir
         const bool suppressKeyboard = state.UiCapturesKeyboard();
         const bool suppressMouse = state.UiCapturesMouse();
 
+        const bool mouseMoved = mHasLastMouse && (raw.mouseX != mLastMouseX || raw.mouseY != mLastMouseY);
+        mLastMouseX = raw.mouseX;
+        mLastMouseY = raw.mouseY;
+        mHasLastMouse = true;
 
         if (AnyGamepadActive(raw))
             state.SetActiveDevice(DeviceKind::Gamepad);
         else if (AnyKeyActive(raw))
             state.SetActiveDevice(DeviceKind::Keyboard);
-        else if (AnyMouseActive(raw))
+        else if (mouseMoved || AnyMouseActive(raw))
             state.SetActiveDevice(DeviceKind::Mouse);
 
         for (const InputAction &action : map.Actions())

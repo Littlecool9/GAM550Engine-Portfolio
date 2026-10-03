@@ -65,6 +65,13 @@ UI module, and shuts down after every UI module and before the renderer, so the
 Vulkan backend is gone before the device is and the GLFW backend before the
 window.
 
+**The Vulkan backend frees `gameui`'s textures.** `gameui` registers each UI
+texture with the context as an ImGui user texture, and
+`ImGui_ImplVulkan_Shutdown` frees every registered texture's image and
+descriptor, as it does the font atlas's. So `App`'s `UIContext` outlives
+`Shutdown` and goes with `App`, and the order above still holds for everything
+it draws. See [gameui.md](gameui.md).
+
 **`~ImGuiRuntime()` is a no-op if `Shutdown()` was skipped.** It leaks the context
 rather than reach into a `VulkanRenderer&` it was never given.
 
@@ -94,6 +101,12 @@ every frame and shutdown, and `smoke.switch` covers the restart that reloads
    that wants its own fonts has no hook yet.
 
 ## Changed
+
+*2026-10-02* — **The editor-free build exists.** `MJOLNIR_WITH_EDITOR` OFF
+builds without `editor`, and this module is then the context's only owner and
+`gameui` its only client. Nothing here changed for it: no `ConfigFlags`, no
+`imgui.ini`, and the shared fonts, as the rules above already required. See
+[build.md](../build.md#a-build-without-the-editor).
 
 *2026-09-26* — **Created from `Editor::Initialize`/`Shutdown`/`BeginFrame`/`EndFrame`.**
 Was: `editor` created the context, loaded the fonts, initialised both backends and

@@ -11,6 +11,7 @@ target_sources(engine_input PRIVATE
     src/input/DefaultInputMap.cpp
     src/input/InputMap.cpp
     src/input/InputSystem.cpp
+    src/input/PromptLabel.cpp
 )
 
 if(BUILD_TESTING)

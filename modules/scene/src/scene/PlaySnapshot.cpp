@@ -10,16 +10,19 @@
 
 #include "core/ecs/World.h"
 #include "core/log/Log.h"
+#include "core/platform/Process.h"
 #include "scene/SceneIO.h"
 
+#include <string>
 #include <vector>
 
 namespace mir
 {
     PlaySnapshot CaptureWorld(World &world)
     {
-        // Fixed scratch path
-        PlaySnapshot snapshot{ std::filesystem::temp_directory_path() / "mjolnir_play_snapshot" };
+
+        PlaySnapshot snapshot{ std::filesystem::temp_directory_path() /
+                               ("mjolnir_play_snapshot_" + std::to_string(CurrentProcessId())) };
 
         std::error_code ec;
         std::filesystem::remove_all(snapshot.mDir, ec);
@@ -51,5 +54,15 @@ namespace mir
         }
 
         return LoadScene(world, snapshot.mDir);
+    }
+
+    void DiscardSnapshot(PlaySnapshot &snapshot)
+    {
+        if (snapshot.mDir.empty())
+            return;
+
+        std::error_code ec;
+        std::filesystem::remove_all(snapshot.mDir, ec);
+        snapshot.mDir.clear();
     }
 }

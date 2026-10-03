@@ -58,10 +58,12 @@ TEST_CASE("ReadNavInput reports a button only on the frame it was pressed", "[ga
     Set(input, kUICancelAction) = ActionValue{.down = true, .justPressed = false};
     Set(input, kUITabLeftAction) = ActionValue{.down = true, .justPressed = true};
     Set(input, kUITabRightAction) = ActionValue{.justReleased = true};
+    Set(input, kUIPauseAction) = ActionValue{.down = true, .justPressed = true};
 
     const UINavInput nav = ReadNavInput(input);
     CHECK(nav.mConfirm);
     CHECK_FALSE(nav.mCancel);
     CHECK(nav.mTabLeft);
     CHECK_FALSE(nav.mTabRight);
+    CHECK(nav.mPause);
 }

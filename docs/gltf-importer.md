@@ -2,7 +2,7 @@
 
 ## Import and asset ownership
 
-`AssetCooker` routes `.gltf` and `.glb` under its source roots through fastgltf (vcpkg supplies 0.9.0). The runtime does not parse glTF or load its original buffers/images. Other supported source files, including legacy `.mesh.json`, retain the raw-asset path.
+`AssetCooker` routes `.gltf` and `.glb` under its source roots through fastgltf (vcpkg supplies 0.9.0). The runtime does not parse glTF or load its original buffers/images. Other supported source files, including legacy `.mesh.json`, retain the raw-asset path, except a standalone PNG or JPEG, which cooks to a `TextureAsset` with the same decoder (`ImageImporter.h`). An image a glTF references keeps the raw path, since the import already cooks it under the model's ids.
 
 The source path resolves to a **Model** asset. It references independently cooked **Mesh**, **Skeleton**, **AnimationClip**, **Material**, and **Texture** assets. Model stores scenes, node hierarchy, mesh instances, default morph weights, and skin bindings. A skin binding owns its joint-key palette and inverse bind matrices; a Skeleton preserves auxiliary nodes as well as joints. Clips target stable node keys. This separates reusable content from instance playback without introducing retargeting or an animation state machine.
 

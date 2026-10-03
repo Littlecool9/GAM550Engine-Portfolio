@@ -104,7 +104,23 @@ Systems are registered on `app.Systems()` between `Initialize` and `Run`.
 
 `EngineModeState` (see [core.md](core.md)) is a `World` resource; `App` is the
 only thing that flips it. `PlayScene`/`StopScene`/`TogglePause` are the three
-transitions, wired to the editor toolbar through `SceneMenuAction` today.
+transitions, wired to the editor toolbar through `SceneMenuAction` and to the
+pause menu through `GameShellAction` (see [gameshell.md](gameshell.md)). The
+menu's Pause and Resume pause and resume the simulation, Restart is Stop then
+Play, and Quit stops Play in the editor and closes the window without it.
+Without the editor there is no Play button, so `Initialize` calls `PlayScene`
+when `mEnableEditorLayout` is off: a game build plays.
+
+### Without the editor
+
+`app` builds with or without the editor, by the `MJOLNIR_WITH_EDITOR` CMake
+option (see [build.md](../build.md#a-build-without-the-editor)). It reaches the
+code as `MIR_WITH_EDITOR`, 1 or 0, a PUBLIC compile definition of `mir::app`,
+and `App::kHasEditor` says which build this is. Without it, `App` holds no
+`Editor`, no `AssetImportManager` and no project menu; `mEnableEditorLayout` is
+forced off; the scene viewport is the whole window through the World's camera;
+and nothing sets `InputState::SetUiCapture`, since there is no editor UI to
+want the input. Everything else, the game UI included, is the same code.
 
 ```cpp
 PlayScene()    // Edit -> Play. Captures the World first (PlaySnapshot).
@@ -253,6 +269,13 @@ camera then, not the editor one — silently fly the (invisible) editor camera
 off somewhere, surfacing only later when Stop reverts viewport 0 to wherever
 that ended up.
 
+**Only `App.h` and `App.cpp` branch on `MIR_WITH_EDITOR`.** Every
+editor call goes in a `#if MIR_WITH_EDITOR` block there, the editor's
+per-frame work in `ApplyEditorActions`, so the game build differs from the
+editor's `--no-editor` path by what is missing and nothing else. The definition
+is PUBLIC because `App.h` lays out `App` differently with it: a file that saw
+the other value would disagree with `App.cpp` about the class.
+
 **`NewScene`/`SaveScene`/`LoadScene` refuse while Play is running.** These can corrupt the current scene. Both `Editor` and app will opt out.
 
 ## State
@@ -292,6 +315,20 @@ logged error.
    cheap for a large scene.
 
 ## Changed
+
+*2026-10-02* — **A build without the editor.** Was: `app` linked `mir::editor`
+PUBLIC unconditionally, so every binary carried the editor. Now: the
+`MJOLNIR_WITH_EDITOR` option, ON by default, and the `windows-msvc-game-*`
+presets that turn it off. `App` gains `kHasEditor`, `GameUIArea` and, with the
+editor, `ApplyEditorActions`, which holds what `Run` did inline with
+`EditorActions`.
+
+*2026-10-02* — **The game shell, and a game build plays.** Was: `App` drew the
+game UI only under `--ui-demo`, and with `--no-editor` the world stayed in Edit,
+so no script ran. Now: the game UI runs every frame and draws `GameShell`, the
+HUD and pause menu, in Play; `ApplyShellAction` carries out what the player
+asked after the UI's frame; and `Initialize` calls `PlayScene` without the
+editor. `App` still never touches `InputState::SetUiCapture` for the game UI.
 
 *2026-09-18* — **`GameProject` reads through `mir::serial`, and owns the project
 filenames.** Was: `ReadDefaultGame` and `LoadGameProject` opened their own
