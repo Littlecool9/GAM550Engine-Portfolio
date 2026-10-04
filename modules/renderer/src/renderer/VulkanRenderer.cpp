@@ -69,6 +69,12 @@ namespace mir
         };
 
         constexpr std::string_view kModelShaderName = "model";
+
+        struct ShadowPushData
+        {
+            glm::mat4 viewProj; // 64
+            glm::mat4 model;    // 64
+        };
         struct CameraData
         {
             glm::mat4 viewProj;
@@ -83,7 +89,8 @@ namespace mir
             glm::vec4 atmosphereScattering; // xyz = Rayleigh coeff (m^-1), w = Mie coeff (m^-1)
             glm::vec4 atmosphereRadii;      // x = planet radius, y = atmosphere radius, z = Rayleigh scale height, w = Mie scale height (m)
             glm::vec4 atmosphereMisc;       // x = Mie anisotropy g, y = sun intensity
-            glm::vec4 lightingMeta;         // x = this view's Point/Spot/Area count, y = its first index in gLights
+            glm::vec4 lightingMeta;
+            glm::mat4 sunShadowViewProj;
         };
 
         // Must match GpuLight in assets/shaders/LightingCommon.slang.
@@ -91,7 +98,7 @@ namespace mir
         {
             glm::vec4 positionAndRange;    // xyz = relative to the view's camera, w = range
             glm::vec4 directionAndSpotCos; // xyz = normalized aim direction, w = cos(half-angle); -1 = no cone
-            glm::vec4 color;               // rgb = color * intensity
+            glm::vec4 color;               // rgb = color * intensity, w = shadowSlot (see LightItem::shadowSlot)
         };
 
         struct RtInstanceInfo
@@ -206,7 +213,8 @@ namespace mir
             return features13.dynamicRendering == VK_TRUE &&
                 features13.synchronization2 == VK_TRUE &&
                 features12.timelineSemaphore == VK_TRUE &&
-                features11.shaderDrawParameters == VK_TRUE;
+                features11.shaderDrawParameters == VK_TRUE &&
+                features.features.imageCubeArray == VK_TRUE;
         }
 
         bool HasRayTracingSupport(VkPhysicalDevice device,
@@ -380,7 +388,7 @@ namespace mir
             VkImageLayout oldLayout, VkImageLayout newLayout,
             VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
             VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess,
-            uint32_t levelCount = 1)
+            uint32_t levelCount = 1, uint32_t layerCount = 1)
         {
             const VkImageMemoryBarrier2 barrier{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -396,7 +404,7 @@ namespace mir
                 .subresourceRange{
                     .aspectMask = aspectMask,
                     .levelCount = levelCount,
-                    .layerCount = 1 } };
+                    .layerCount = layerCount } };
 
             const VkDependencyInfo dep{
                 .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -569,6 +577,9 @@ namespace mir
         if (!CreateCameraResources())
             return false;
 
+        if (!CreateShadowResources())
+            return false;
+
         if (!CreatePipelineLayout())
             return false;
 
@@ -683,6 +694,7 @@ namespace mir
             DestroyTextures();
             // before mAllocator: frees the camera UBO buffers
             DestroyCameraResources();
+            DestroyShadowResources();
 
             DestroySamplers();
 
@@ -1048,7 +1060,8 @@ namespace mir
 
         VkPhysicalDeviceFeatures2 features{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-            .pNext = mRayTracingSupported ? static_cast<void *>(&accelFeatures) : static_cast<void *>(&features11) };
+            .pNext = mRayTracingSupported ? static_cast<void *>(&accelFeatures) : static_cast<void *>(&features11),
+            .features{ .imageCubeArray = VK_TRUE } };
 
         const VkDeviceCreateInfo deviceInfo{
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -1423,10 +1436,8 @@ namespace mir
             .offset = 0,
             .size = sizeof(PushData) };
 
-        // set 0 = material (textures), set 1 = per-view camera UBO,
-        // set 2 = per-draw model data.
-        const std::array<VkDescriptorSetLayout, 3> setLayouts{
-            mMaterialSetLayout, mCameraSetLayout, mModelSetLayout };
+        const std::array<VkDescriptorSetLayout, 4> setLayouts{
+            mMaterialSetLayout, mCameraSetLayout, mModelSetLayout, mShadowSetLayout };
 
         const VkPipelineLayoutCreateInfo layoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -1581,14 +1592,18 @@ namespace mir
     {
         VkShaderModule raygenModule = CreateShaderModule(mDevice, ShaderPath("raytrace.rayGenMain.spv"));
         VkShaderModule missModule = CreateShaderModule(mDevice, ShaderPath("raytrace.missMain.spv"));
+        VkShaderModule shadowMissModule = CreateShaderModule(mDevice, ShaderPath("raytrace.shadowMissMain.spv"));
         VkShaderModule hitModule = CreateShaderModule(mDevice, ShaderPath("raytrace.closestHitMain.spv"));
 
-        if (raygenModule == VK_NULL_HANDLE || missModule == VK_NULL_HANDLE || hitModule == VK_NULL_HANDLE)
+        if (raygenModule == VK_NULL_HANDLE || missModule == VK_NULL_HANDLE ||
+            shadowMissModule == VK_NULL_HANDLE || hitModule == VK_NULL_HANDLE)
         {
             if (raygenModule != VK_NULL_HANDLE)
                 vkDestroyShaderModule(mDevice, raygenModule, nullptr);
             if (missModule != VK_NULL_HANDLE)
                 vkDestroyShaderModule(mDevice, missModule, nullptr);
+            if (shadowMissModule != VK_NULL_HANDLE)
+                vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
             if (hitModule != VK_NULL_HANDLE)
                 vkDestroyShaderModule(mDevice, hitModule, nullptr);
             return false;
@@ -1598,7 +1613,7 @@ namespace mir
             { .binding = 0,
              .descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
              .descriptorCount = 1,
-             .stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR },
+             .stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR },
             { .binding = 1,
              .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
              .descriptorCount = 1,
@@ -1618,6 +1633,7 @@ namespace mir
             MIR_LOG_CRITICAL("CreateRtPipeline: vkCreateDescriptorSetLayout failed");
             vkDestroyShaderModule(mDevice, raygenModule, nullptr);
             vkDestroyShaderModule(mDevice, missModule, nullptr);
+            vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
             vkDestroyShaderModule(mDevice, hitModule, nullptr);
             return false;
         }
@@ -1638,6 +1654,7 @@ namespace mir
             MIR_LOG_CRITICAL("CreateRtPipeline: vkCreateDescriptorPool failed");
             vkDestroyShaderModule(mDevice, raygenModule, nullptr);
             vkDestroyShaderModule(mDevice, missModule, nullptr);
+            vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
             vkDestroyShaderModule(mDevice, hitModule, nullptr);
             return false;
         }
@@ -1655,6 +1672,7 @@ namespace mir
                 MIR_LOG_CRITICAL("CreateRtPipeline: descriptor set allocation failed for frame {}", i);
                 vkDestroyShaderModule(mDevice, raygenModule, nullptr);
                 vkDestroyShaderModule(mDevice, missModule, nullptr);
+                vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
                 vkDestroyShaderModule(mDevice, hitModule, nullptr);
                 return false;
             }
@@ -1679,11 +1697,12 @@ namespace mir
             MIR_LOG_CRITICAL("CreateRtPipeline: vkCreatePipelineLayout failed");
             vkDestroyShaderModule(mDevice, raygenModule, nullptr);
             vkDestroyShaderModule(mDevice, missModule, nullptr);
+            vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
             vkDestroyShaderModule(mDevice, hitModule, nullptr);
             return false;
         }
 
-        const std::array<VkPipelineShaderStageCreateInfo, 3> stages{ {
+        const std::array<VkPipelineShaderStageCreateInfo, 4> stages{ {
             { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
              .stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR,
              .module = raygenModule,
@@ -1693,11 +1712,15 @@ namespace mir
              .module = missModule,
              .pName = "missMain" },
             { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+             .stage = VK_SHADER_STAGE_MISS_BIT_KHR,
+             .module = shadowMissModule,
+             .pName = "shadowMissMain" },
+            { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
              .stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
              .module = hitModule,
              .pName = "closestHitMain" } } };
 
-        const std::array<VkRayTracingShaderGroupCreateInfoKHR, 3> groups{ {
+        const std::array<VkRayTracingShaderGroupCreateInfoKHR, 4> groups{ {
             { .sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
              .type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR,
              .generalShader = 0,
@@ -1711,9 +1734,15 @@ namespace mir
              .anyHitShader = VK_SHADER_UNUSED_KHR,
              .intersectionShader = VK_SHADER_UNUSED_KHR },
             { .sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
+             .type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR,
+             .generalShader = 2,
+             .closestHitShader = VK_SHADER_UNUSED_KHR,
+             .anyHitShader = VK_SHADER_UNUSED_KHR,
+             .intersectionShader = VK_SHADER_UNUSED_KHR },
+            { .sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
              .type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR,
              .generalShader = VK_SHADER_UNUSED_KHR,
-             .closestHitShader = 2,
+             .closestHitShader = 3,
              .anyHitShader = VK_SHADER_UNUSED_KHR,
              .intersectionShader = VK_SHADER_UNUSED_KHR } } };
 
@@ -1723,7 +1752,7 @@ namespace mir
             .pStages = stages.data(),
             .groupCount = static_cast<uint32_t>(groups.size()),
             .pGroups = groups.data(),
-            .maxPipelineRayRecursionDepth = 1,
+            .maxPipelineRayRecursionDepth = 2,
             .layout = mRtPipelineLayout };
 
         const VkResult pipelineResult = vkCreateRayTracingPipelinesKHR(
@@ -1731,6 +1760,7 @@ namespace mir
 
         vkDestroyShaderModule(mDevice, raygenModule, nullptr);
         vkDestroyShaderModule(mDevice, missModule, nullptr);
+        vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
         vkDestroyShaderModule(mDevice, hitModule, nullptr);
 
         if (pipelineResult != VK_SUCCESS)
@@ -1739,13 +1769,14 @@ namespace mir
             return false;
         }
 
+        constexpr uint32_t kGroupCount = 4;
         const uint32_t handleSize = mRtProperties.shaderGroupHandleSize;
         const uint32_t handleSizeAligned = AlignUp(handleSize, mRtProperties.shaderGroupHandleAlignment);
         const VkDeviceSize regionSize = AlignUp(handleSizeAligned, mRtProperties.shaderGroupBaseAlignment);
-        const VkDeviceSize sbtSize = regionSize * 3;
+        const VkDeviceSize sbtSize = regionSize * kGroupCount;
 
-        std::vector<std::byte> handles(static_cast<size_t>(handleSize) * 3);
-        if (vkGetRayTracingShaderGroupHandlesKHR(mDevice, mRtPipeline, 0, 3,
+        std::vector<std::byte> handles(static_cast<size_t>(handleSize) * kGroupCount);
+        if (vkGetRayTracingShaderGroupHandlesKHR(mDevice, mRtPipeline, 0, kGroupCount,
             handles.size(), handles.data()) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateRtPipeline: vkGetRayTracingShaderGroupHandlesKHR failed");
@@ -1772,14 +1803,13 @@ namespace mir
         }
 
         std::byte *const sbtMapped = static_cast<std::byte *>(sbtInfo.pMappedData);
-        std::memcpy(sbtMapped + 0 * regionSize, handles.data() + 0 * handleSize, handleSize);
-        std::memcpy(sbtMapped + 1 * regionSize, handles.data() + 1 * handleSize, handleSize);
-        std::memcpy(sbtMapped + 2 * regionSize, handles.data() + 2 * handleSize, handleSize);
+        for (uint32_t i = 0; i < kGroupCount; ++i)
+            std::memcpy(sbtMapped + i * regionSize, handles.data() + i * handleSize, handleSize);
 
         const VkDeviceAddress sbtBase = GetBufferAddress(mDevice, mSbtBuffer);
         mSbtRaygenRegion = { .deviceAddress = sbtBase + 0 * regionSize, .stride = regionSize, .size = regionSize };
-        mSbtMissRegion = { .deviceAddress = sbtBase + 1 * regionSize, .stride = regionSize, .size = regionSize };
-        mSbtHitRegion = { .deviceAddress = sbtBase + 2 * regionSize, .stride = regionSize, .size = regionSize };
+        mSbtMissRegion = { .deviceAddress = sbtBase + 1 * regionSize, .stride = regionSize, .size = 2 * regionSize };
+        mSbtHitRegion = { .deviceAddress = sbtBase + 3 * regionSize, .stride = regionSize, .size = regionSize };
         mSbtCallableRegion = {};
 
         return true;
@@ -2060,6 +2090,849 @@ namespace mir
         }
     }
 
+    bool VulkanRenderer::CreateShadowResources()
+    {
+        const VkSamplerCreateInfo samplerInfo{
+            .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .magFilter = VK_FILTER_LINEAR,
+            .minFilter = VK_FILTER_LINEAR,
+            .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+            .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+            .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+            .compareEnable = VK_FALSE,
+            .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE };
+
+        if (vkCreateSampler(mDevice, &samplerInfo, nullptr, &mShadowSampler) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateShadowResources: vkCreateSampler failed");
+            return false;
+        }
+
+        for (uint32_t i = 0; i < kFramesInFlight; ++i)
+        {
+            const VkImageCreateInfo imageInfo{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                .imageType = VK_IMAGE_TYPE_2D,
+                .format = kDepthFormat,
+                .extent{ kSunShadowResolution, kSunShadowResolution, 1 },
+                .mipLevels = 1,
+                .arrayLayers = 1,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .tiling = VK_IMAGE_TILING_OPTIMAL,
+                .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
+
+            const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
+
+            if (vmaCreateImage(mAllocator, &imageInfo, &allocInfo,
+                &mSunShadowImages[i], &mSunShadowAllocations[i], nullptr) != VK_SUCCESS)
+            {
+                MIR_LOG_CRITICAL("CreateShadowResources: vmaCreateImage failed for Sun shadow map {}", i);
+                return false;
+            }
+
+            const VkImageViewCreateInfo viewInfo{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = mSunShadowImages[i],
+                .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                .format = kDepthFormat,
+                .subresourceRange{
+                    .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1 } };
+
+            if (vkCreateImageView(mDevice, &viewInfo, nullptr, &mSunShadowViews[i]) != VK_SUCCESS)
+            {
+                MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Sun shadow map {}", i);
+                return false;
+            }
+
+            NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mSunShadowImages[i]),
+                std::format("Sun shadow map {}", i).c_str());
+        }
+
+        for (uint32_t i = 0; i < kFramesInFlight; ++i)
+        {
+            const VkImageCreateInfo imageInfo{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                .imageType = VK_IMAGE_TYPE_2D,
+                .format = kDepthFormat,
+                .extent{ kSpotShadowResolution, kSpotShadowResolution, 1 },
+                .mipLevels = 1,
+                .arrayLayers = kMaxSpotShadows,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .tiling = VK_IMAGE_TILING_OPTIMAL,
+                .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
+
+            const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
+
+            if (vmaCreateImage(mAllocator, &imageInfo, &allocInfo,
+                &mSpotShadowImages[i], &mSpotShadowAllocations[i], nullptr) != VK_SUCCESS)
+            {
+                MIR_LOG_CRITICAL("CreateShadowResources: vmaCreateImage failed for Spot shadow array {}", i);
+                return false;
+            }
+
+            const VkImageViewCreateInfo arrayViewInfo{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = mSpotShadowImages[i],
+                .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+                .format = kDepthFormat,
+                .subresourceRange{
+                    .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                    .levelCount = 1,
+                    .layerCount = kMaxSpotShadows } };
+
+            if (vkCreateImageView(mDevice, &arrayViewInfo, nullptr, &mSpotShadowArrayViews[i]) != VK_SUCCESS)
+            {
+                MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Spot shadow array {}", i);
+                return false;
+            }
+
+            for (uint32_t slot = 0; slot < kMaxSpotShadows; ++slot)
+            {
+                const VkImageViewCreateInfo layerViewInfo{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                    .image = mSpotShadowImages[i],
+                    .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                    .format = kDepthFormat,
+                    .subresourceRange{
+                        .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                        .levelCount = 1,
+                        .baseArrayLayer = slot,
+                        .layerCount = 1 } };
+
+                if (vkCreateImageView(mDevice, &layerViewInfo, nullptr, &mSpotShadowLayerViews[i][slot]) != VK_SUCCESS)
+                {
+                    MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Spot shadow slot {}/{}",
+                        i, slot);
+                    return false;
+                }
+            }
+
+            NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mSpotShadowImages[i]),
+                std::format("Spot shadow array {}", i).c_str());
+
+            const VkDeviceSize spotMatrixBufferSize = sizeof(glm::mat4) * kMaxSpotShadows * kMaxViewsPerFrame;
+            VmaAllocationInfo spotMatrixAllocInfo{};
+            if (!CreateBuffer(mAllocator, spotMatrixBufferSize,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                mSpotShadowMatrixBuffers[i], mSpotShadowMatrixAllocations[i], &spotMatrixAllocInfo))
+            {
+                MIR_LOG_CRITICAL("CreateShadowResources: Spot shadow matrix buffer allocation failed for frame {}", i);
+                return false;
+            }
+            mSpotShadowMatrixMapped[i] = static_cast<std::byte *>(spotMatrixAllocInfo.pMappedData);
+        }
+
+        for (uint32_t i = 0; i < kFramesInFlight; ++i)
+        {
+            constexpr uint32_t kPointLayers = kMaxPointShadows * 6;
+
+            const VkImageCreateInfo depthImageInfo{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                .imageType = VK_IMAGE_TYPE_2D,
+                .format = kDepthFormat,
+                .extent{ kPointShadowResolution, kPointShadowResolution, 1 },
+                .mipLevels = 1,
+                .arrayLayers = kPointLayers,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .tiling = VK_IMAGE_TILING_OPTIMAL,
+                .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
+
+            const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
+
+            if (vmaCreateImage(mAllocator, &depthImageInfo, &allocInfo,
+                &mPointShadowDepthImages[i], &mPointShadowDepthAllocations[i], nullptr) != VK_SUCCESS)
+            {
+                MIR_LOG_CRITICAL("CreateShadowResources: vmaCreateImage failed for Point shadow depth {}", i);
+                return false;
+            }
+
+            const VkImageCreateInfo colorImageInfo{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                .flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT,
+                .imageType = VK_IMAGE_TYPE_2D,
+                .format = VK_FORMAT_R32_SFLOAT,
+                .extent{ kPointShadowResolution, kPointShadowResolution, 1 },
+                .mipLevels = 1,
+                .arrayLayers = kPointLayers,
+                .samples = VK_SAMPLE_COUNT_1_BIT,
+                .tiling = VK_IMAGE_TILING_OPTIMAL,
+                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
+
+            if (vmaCreateImage(mAllocator, &colorImageInfo, &allocInfo,
+                &mPointShadowColorImages[i], &mPointShadowColorAllocations[i], nullptr) != VK_SUCCESS)
+            {
+                MIR_LOG_CRITICAL("CreateShadowResources: vmaCreateImage failed for Point shadow distance {}", i);
+                return false;
+            }
+
+            for (uint32_t layer = 0; layer < kPointLayers; ++layer)
+            {
+                const VkImageViewCreateInfo depthLayerViewInfo{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                    .image = mPointShadowDepthImages[i],
+                    .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                    .format = kDepthFormat,
+                    .subresourceRange{
+                        .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                        .levelCount = 1,
+                        .baseArrayLayer = layer,
+                        .layerCount = 1 } };
+
+                if (vkCreateImageView(mDevice, &depthLayerViewInfo, nullptr,
+                    &mPointShadowDepthLayerViews[i][layer]) != VK_SUCCESS)
+                {
+                    MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Point depth {}/{}",
+                        i, layer);
+                    return false;
+                }
+
+                const VkImageViewCreateInfo colorLayerViewInfo{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                    .image = mPointShadowColorImages[i],
+                    .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                    .format = VK_FORMAT_R32_SFLOAT,
+                    .subresourceRange{
+                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .levelCount = 1,
+                        .baseArrayLayer = layer,
+                        .layerCount = 1 } };
+
+                if (vkCreateImageView(mDevice, &colorLayerViewInfo, nullptr,
+                    &mPointShadowColorLayerViews[i][layer]) != VK_SUCCESS)
+                {
+                    MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Point color {}/{}",
+                        i, layer);
+                    return false;
+                }
+            }
+
+            const VkImageViewCreateInfo cubeArrayViewInfo{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = mPointShadowColorImages[i],
+                .viewType = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY,
+                .format = VK_FORMAT_R32_SFLOAT,
+                .subresourceRange{
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .levelCount = 1,
+                    .layerCount = kPointLayers } };
+
+            if (vkCreateImageView(mDevice, &cubeArrayViewInfo, nullptr, &mPointShadowCubeArrayViews[i]) != VK_SUCCESS)
+            {
+                MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Point cube array {}", i);
+                return false;
+            }
+
+            NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mPointShadowColorImages[i]),
+                std::format("Point shadow distance cube array {}", i).c_str());
+        }
+
+        const std::array<VkDescriptorSetLayoutBinding, 4> bindings{ {
+            { .binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT },
+            { .binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT },
+            { .binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+             .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT },
+            { .binding = 3, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+             .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT } } };
+
+        const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = static_cast<uint32_t>(bindings.size()),
+            .pBindings = bindings.data() };
+
+        if (vkCreateDescriptorSetLayout(mDevice, &setLayoutInfo, nullptr, &mShadowSetLayout) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateShadowResources: vkCreateDescriptorSetLayout failed");
+            return false;
+        }
+
+        const std::array<VkDescriptorPoolSize, 2> poolSizes{ {
+            { .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = kFramesInFlight * 3 },
+            { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = kFramesInFlight } } };
+
+        const VkDescriptorPoolCreateInfo poolInfo{
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .maxSets = kFramesInFlight,
+            .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+            .pPoolSizes = poolSizes.data() };
+
+        if (vkCreateDescriptorPool(mDevice, &poolInfo, nullptr, &mShadowDescriptorPool) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateShadowResources: vkCreateDescriptorPool failed");
+            return false;
+        }
+
+        for (uint32_t i = 0; i < kFramesInFlight; ++i)
+        {
+            const VkDescriptorSetAllocateInfo setAllocInfo{
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                .descriptorPool = mShadowDescriptorPool,
+                .descriptorSetCount = 1,
+                .pSetLayouts = &mShadowSetLayout };
+
+            if (vkAllocateDescriptorSets(mDevice, &setAllocInfo, &mShadowDescriptorSets[i]) != VK_SUCCESS)
+            {
+                MIR_LOG_CRITICAL("CreateShadowResources: descriptor set allocation failed for frame {}", i);
+                return false;
+            }
+
+            const VkDescriptorImageInfo sunImageInfo{
+                .sampler = mShadowSampler,
+                .imageView = mSunShadowViews[i],
+                .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
+
+            const VkDescriptorImageInfo spotImageInfo{
+                .sampler = mShadowSampler,
+                .imageView = mSpotShadowArrayViews[i],
+                .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
+
+            const VkDescriptorBufferInfo spotMatrixBufferInfo{
+                .buffer = mSpotShadowMatrixBuffers[i],
+                .offset = 0,
+                .range = sizeof(glm::mat4) * kMaxSpotShadows * kMaxViewsPerFrame };
+
+            const VkDescriptorImageInfo pointImageInfo{
+                .sampler = mShadowSampler,
+                .imageView = mPointShadowCubeArrayViews[i],
+                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+
+            const std::array<VkWriteDescriptorSet, 4> writes{ {
+                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = mShadowDescriptorSets[i],
+                 .dstBinding = 0, .descriptorCount = 1,
+                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &sunImageInfo },
+                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = mShadowDescriptorSets[i],
+                 .dstBinding = 1, .descriptorCount = 1,
+                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &spotImageInfo },
+                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = mShadowDescriptorSets[i],
+                 .dstBinding = 2, .descriptorCount = 1,
+                 .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &spotMatrixBufferInfo },
+                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = mShadowDescriptorSets[i],
+                 .dstBinding = 3, .descriptorCount = 1,
+                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &pointImageInfo } } };
+
+            vkUpdateDescriptorSets(mDevice, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        }
+
+        VkShaderModule vertModule = CreateShaderModule(mDevice, ShaderPath("shadowDepth.vertexMain.spv"));
+        if (vertModule == VK_NULL_HANDLE)
+            return false;
+
+        const VkPushConstantRange pushConstantRange{
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .offset = 0,
+            .size = sizeof(ShadowPushData) };
+
+        const VkPipelineLayoutCreateInfo layoutInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &pushConstantRange };
+
+        if (vkCreatePipelineLayout(mDevice, &layoutInfo, nullptr, &mShadowDepthPipelineLayout) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateShadowResources: vkCreatePipelineLayout failed");
+            vkDestroyShaderModule(mDevice, vertModule, nullptr);
+            return false;
+        }
+
+        const VkPipelineShaderStageCreateInfo stage{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = vertModule,
+            .pName = "vertexMain" };
+
+        const VkVertexInputBindingDescription vertexBinding{
+            .binding = 0,
+            .stride = sizeof(Vertex),
+            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX };
+
+        const VkVertexInputAttributeDescription positionAttribute{
+            .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, pos) };
+
+        const VkPipelineVertexInputStateCreateInfo vertexInput{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &vertexBinding,
+            .vertexAttributeDescriptionCount = 1,
+            .pVertexAttributeDescriptions = &positionAttribute };
+
+        const VkPipelineInputAssemblyStateCreateInfo inputAssembly{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .primitiveRestartEnable = VK_FALSE };
+
+        const VkPipelineViewportStateCreateInfo viewportState{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .viewportCount = 1,
+            .pViewports = nullptr,
+            .scissorCount = 1,
+            .pScissors = nullptr };
+
+        const VkPipelineRasterizationStateCreateInfo rasterizer{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .depthClampEnable = VK_FALSE,
+            .rasterizerDiscardEnable = VK_FALSE,
+            .polygonMode = VK_POLYGON_MODE_FILL,
+            .cullMode = VK_CULL_MODE_NONE,
+            .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .depthBiasEnable = VK_TRUE,
+            .depthBiasConstantFactor = 1.25f,
+            .depthBiasSlopeFactor = 1.75f,
+            .lineWidth = 1.0f };
+
+        const VkPipelineMultisampleStateCreateInfo multisample{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable = VK_FALSE };
+
+        const VkPipelineDepthStencilStateCreateInfo depthStencil{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .depthTestEnable = VK_TRUE,
+            .depthWriteEnable = VK_TRUE,
+            .depthCompareOp = VK_COMPARE_OP_LESS,
+            .depthBoundsTestEnable = VK_FALSE,
+            .stencilTestEnable = VK_FALSE };
+
+        const VkDynamicState dynamicStates[]{ VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+        const VkPipelineDynamicStateCreateInfo dynamicState{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .dynamicStateCount = 2,
+            .pDynamicStates = dynamicStates };
+
+        const VkPipelineRenderingCreateInfo renderingInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .colorAttachmentCount = 0,
+            .depthAttachmentFormat = kDepthFormat };
+
+        const VkGraphicsPipelineCreateInfo pipelineInfo{
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = &renderingInfo,
+            .stageCount = 1,
+            .pStages = &stage,
+            .pVertexInputState = &vertexInput,
+            .pInputAssemblyState = &inputAssembly,
+            .pViewportState = &viewportState,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisample,
+            .pDepthStencilState = &depthStencil,
+            .pDynamicState = &dynamicState,
+            .layout = mShadowDepthPipelineLayout,
+            .renderPass = VK_NULL_HANDLE,
+            .subpass = 0 };
+
+        const VkResult pipelineResult = vkCreateGraphicsPipelines(
+            mDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &mShadowDepthPipeline);
+
+        vkDestroyShaderModule(mDevice, vertModule, nullptr);
+
+        if (pipelineResult != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateShadowResources: vkCreateGraphicsPipelines failed: {}",
+                static_cast<int>(pipelineResult));
+            return false;
+        }
+
+        VkShaderModule distanceVertModule = CreateShaderModule(mDevice, ShaderPath("shadowDistance.vertexMain.spv"));
+        VkShaderModule distanceFragModule = CreateShaderModule(mDevice, ShaderPath("shadowDistance.fragmentMain.spv"));
+        if (distanceVertModule == VK_NULL_HANDLE || distanceFragModule == VK_NULL_HANDLE)
+        {
+            if (distanceVertModule != VK_NULL_HANDLE)
+                vkDestroyShaderModule(mDevice, distanceVertModule, nullptr);
+            if (distanceFragModule != VK_NULL_HANDLE)
+                vkDestroyShaderModule(mDevice, distanceFragModule, nullptr);
+            return false;
+        }
+
+        const std::array<VkPipelineShaderStageCreateInfo, 2> distanceStages{ {
+            { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+             .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = distanceVertModule, .pName = "vertexMain" },
+            { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+             .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = distanceFragModule, .pName = "fragmentMain" } } };
+
+        const VkPipelineColorBlendAttachmentState distanceBlendAttachment{
+            .blendEnable = VK_FALSE,
+            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT };
+
+        const VkPipelineColorBlendStateCreateInfo distanceColorBlend{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .attachmentCount = 1,
+            .pAttachments = &distanceBlendAttachment };
+
+        constexpr VkFormat kPointShadowColorFormat = VK_FORMAT_R32_SFLOAT;
+        const VkPipelineRenderingCreateInfo distanceRenderingInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .colorAttachmentCount = 1,
+            .pColorAttachmentFormats = &kPointShadowColorFormat,
+            .depthAttachmentFormat = kDepthFormat };
+
+        const VkGraphicsPipelineCreateInfo distancePipelineInfo{
+            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = &distanceRenderingInfo,
+            .stageCount = static_cast<uint32_t>(distanceStages.size()),
+            .pStages = distanceStages.data(),
+            .pVertexInputState = &vertexInput,
+            .pInputAssemblyState = &inputAssembly,
+            .pViewportState = &viewportState,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisample,
+            .pDepthStencilState = &depthStencil,
+            .pColorBlendState = &distanceColorBlend,
+            .pDynamicState = &dynamicState,
+            .layout = mShadowDepthPipelineLayout,
+            .renderPass = VK_NULL_HANDLE,
+            .subpass = 0 };
+
+        const VkResult distancePipelineResult = vkCreateGraphicsPipelines(
+            mDevice, VK_NULL_HANDLE, 1, &distancePipelineInfo, nullptr, &mPointShadowPipeline);
+
+        vkDestroyShaderModule(mDevice, distanceVertModule, nullptr);
+        vkDestroyShaderModule(mDevice, distanceFragModule, nullptr);
+
+        if (distancePipelineResult != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateShadowResources: vkCreateGraphicsPipelines (Point) failed: {}",
+                static_cast<int>(distancePipelineResult));
+            return false;
+        }
+
+        return true;
+    }
+
+    void VulkanRenderer::DestroyShadowResources()
+    {
+        if (mShadowDepthPipeline != VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(mDevice, mShadowDepthPipeline, nullptr);
+            mShadowDepthPipeline = VK_NULL_HANDLE;
+        }
+        if (mPointShadowPipeline != VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(mDevice, mPointShadowPipeline, nullptr);
+            mPointShadowPipeline = VK_NULL_HANDLE;
+        }
+        if (mShadowDepthPipelineLayout != VK_NULL_HANDLE)
+        {
+            vkDestroyPipelineLayout(mDevice, mShadowDepthPipelineLayout, nullptr);
+            mShadowDepthPipelineLayout = VK_NULL_HANDLE;
+        }
+        if (mShadowDescriptorPool != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorPool(mDevice, mShadowDescriptorPool, nullptr);
+            mShadowDescriptorPool = VK_NULL_HANDLE;
+        }
+        if (mShadowSetLayout != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorSetLayout(mDevice, mShadowSetLayout, nullptr);
+            mShadowSetLayout = VK_NULL_HANDLE;
+        }
+        if (mShadowSampler != VK_NULL_HANDLE)
+        {
+            vkDestroySampler(mDevice, mShadowSampler, nullptr);
+            mShadowSampler = VK_NULL_HANDLE;
+        }
+        for (uint32_t i = 0; i < kFramesInFlight; ++i)
+        {
+            if (mSunShadowViews[i] != VK_NULL_HANDLE)
+            {
+                vkDestroyImageView(mDevice, mSunShadowViews[i], nullptr);
+                mSunShadowViews[i] = VK_NULL_HANDLE;
+            }
+            if (mSunShadowImages[i] != VK_NULL_HANDLE)
+            {
+                vmaDestroyImage(mAllocator, mSunShadowImages[i], mSunShadowAllocations[i]);
+                mSunShadowImages[i] = VK_NULL_HANDLE;
+                mSunShadowAllocations[i] = VK_NULL_HANDLE;
+            }
+
+            if (mSpotShadowMatrixBuffers[i] != VK_NULL_HANDLE)
+            {
+                vmaDestroyBuffer(mAllocator, mSpotShadowMatrixBuffers[i], mSpotShadowMatrixAllocations[i]);
+                mSpotShadowMatrixBuffers[i] = VK_NULL_HANDLE;
+                mSpotShadowMatrixAllocations[i] = VK_NULL_HANDLE;
+                mSpotShadowMatrixMapped[i] = nullptr;
+            }
+
+            if (mSpotShadowArrayViews[i] != VK_NULL_HANDLE)
+            {
+                vkDestroyImageView(mDevice, mSpotShadowArrayViews[i], nullptr);
+                mSpotShadowArrayViews[i] = VK_NULL_HANDLE;
+            }
+            for (uint32_t slot = 0; slot < kMaxSpotShadows; ++slot)
+            {
+                if (mSpotShadowLayerViews[i][slot] != VK_NULL_HANDLE)
+                {
+                    vkDestroyImageView(mDevice, mSpotShadowLayerViews[i][slot], nullptr);
+                    mSpotShadowLayerViews[i][slot] = VK_NULL_HANDLE;
+                }
+            }
+            if (mSpotShadowImages[i] != VK_NULL_HANDLE)
+            {
+                vmaDestroyImage(mAllocator, mSpotShadowImages[i], mSpotShadowAllocations[i]);
+                mSpotShadowImages[i] = VK_NULL_HANDLE;
+                mSpotShadowAllocations[i] = VK_NULL_HANDLE;
+            }
+
+            if (mPointShadowCubeArrayViews[i] != VK_NULL_HANDLE)
+            {
+                vkDestroyImageView(mDevice, mPointShadowCubeArrayViews[i], nullptr);
+                mPointShadowCubeArrayViews[i] = VK_NULL_HANDLE;
+            }
+            for (uint32_t layer = 0; layer < kMaxPointShadows * 6; ++layer)
+            {
+                if (mPointShadowDepthLayerViews[i][layer] != VK_NULL_HANDLE)
+                {
+                    vkDestroyImageView(mDevice, mPointShadowDepthLayerViews[i][layer], nullptr);
+                    mPointShadowDepthLayerViews[i][layer] = VK_NULL_HANDLE;
+                }
+                if (mPointShadowColorLayerViews[i][layer] != VK_NULL_HANDLE)
+                {
+                    vkDestroyImageView(mDevice, mPointShadowColorLayerViews[i][layer], nullptr);
+                    mPointShadowColorLayerViews[i][layer] = VK_NULL_HANDLE;
+                }
+            }
+            if (mPointShadowDepthImages[i] != VK_NULL_HANDLE)
+            {
+                vmaDestroyImage(mAllocator, mPointShadowDepthImages[i], mPointShadowDepthAllocations[i]);
+                mPointShadowDepthImages[i] = VK_NULL_HANDLE;
+                mPointShadowDepthAllocations[i] = VK_NULL_HANDLE;
+            }
+            if (mPointShadowColorImages[i] != VK_NULL_HANDLE)
+            {
+                vmaDestroyImage(mAllocator, mPointShadowColorImages[i], mPointShadowColorAllocations[i]);
+                mPointShadowColorImages[i] = VK_NULL_HANDLE;
+                mPointShadowColorAllocations[i] = VK_NULL_HANDLE;
+            }
+        }
+    }
+
+    void VulkanRenderer::SetSunShadowCaster(bool active, const glm::mat4 &viewProj, WorldPosition anchor,
+        std::span<const DrawItem> items)
+    {
+        mHasSunShadow = active;
+        mSunShadowViewProj = viewProj;
+        mSunShadowAnchor = anchor;
+        mSunShadowItems = items;
+    }
+
+    void VulkanRenderer::SetSpotShadowCaster(uint32_t slot, bool active, const glm::mat4 &viewProj,
+        WorldPosition anchor, std::span<const DrawItem> items)
+    {
+        if (slot >= kMaxSpotShadows)
+            return;
+        mSpotShadowCasters[slot] = SpotShadowCaster{ active, viewProj, anchor, items };
+    }
+
+    void VulkanRenderer::SetPointShadowCaster(uint32_t slot, bool active, WorldPosition position, float range,
+        const std::array<PointShadowFace, 6> &faces)
+    {
+        if (slot >= kMaxPointShadows)
+            return;
+        mPointShadowCasters[slot] = PointShadowCaster{ active, position, range, faces };
+    }
+
+    void VulkanRenderer::RecordShadowPasses(VkCommandBuffer cmd)
+    {
+        const auto drawItems = [&](const glm::mat4 &viewProj, std::span<const DrawItem> items)
+            {
+                for (const DrawItem &item : items)
+                {
+                    const GpuMesh *const mesh = FindMesh(item.mesh);
+                    if (mesh == nullptr)
+                        continue;
+
+                    const VkDeviceSize vertexOffset = 0;
+                    vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->mVertexBuffer, &vertexOffset);
+                    vkCmdBindIndexBuffer(cmd, mesh->mIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+                    const ShadowPushData pushData{ .viewProj = viewProj, .model = item.model };
+                    vkCmdPushConstants(cmd, mShadowDepthPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+                        0, sizeof(ShadowPushData), &pushData);
+
+                    vkCmdDrawIndexed(cmd, mesh->mIndexCount, 1, 0, 0, 0);
+                }
+            };
+
+        if (mHasSunShadow)
+        {
+            ImageBarrier(cmd, mSunShadowImages[mFrameIndex], VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+            const VkRenderingAttachmentInfo depthAttachment{
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .imageView = mSunShadowViews[mFrameIndex],
+                .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                .clearValue{ .depthStencil{ .depth = 1.0f } } }; // forward Z here: 1 is the far end
+
+            const VkRenderingInfo renderingInfo{
+                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                .renderArea{ .offset{ 0, 0 }, .extent{ kSunShadowResolution, kSunShadowResolution } },
+                .layerCount = 1,
+                .pDepthAttachment = &depthAttachment };
+
+            vkCmdBeginRendering(cmd, &renderingInfo);
+
+            const VkViewport viewport{ .x = 0.0f, .y = 0.0f,
+                .width = static_cast<float>(kSunShadowResolution), .height = static_cast<float>(kSunShadowResolution),
+                .minDepth = 0.0f, .maxDepth = 1.0f };
+            const VkRect2D scissor{ .offset{ 0, 0 }, .extent{ kSunShadowResolution, kSunShadowResolution } };
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mShadowDepthPipeline);
+            drawItems(mSunShadowViewProj, mSunShadowItems);
+
+            vkCmdEndRendering(cmd);
+
+            ImageBarrier(cmd, mSunShadowImages[mFrameIndex], VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+        }
+
+        const bool anySpotActive = std::any_of(mSpotShadowCasters.begin(), mSpotShadowCasters.end(),
+            [](const SpotShadowCaster &c) { return c.active; });
+        if (anySpotActive)
+        {
+            ImageBarrier(cmd, mSpotShadowImages[mFrameIndex], VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                1, kMaxSpotShadows);
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mShadowDepthPipeline);
+
+            const VkViewport viewport{ .x = 0.0f, .y = 0.0f,
+                .width = static_cast<float>(kSpotShadowResolution), .height = static_cast<float>(kSpotShadowResolution),
+                .minDepth = 0.0f, .maxDepth = 1.0f };
+            const VkRect2D scissor{ .offset{ 0, 0 }, .extent{ kSpotShadowResolution, kSpotShadowResolution } };
+
+            for (uint32_t slot = 0; slot < kMaxSpotShadows; ++slot)
+            {
+                if (!mSpotShadowCasters[slot].active)
+                    continue;
+
+                const VkRenderingAttachmentInfo depthAttachment{
+                    .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                    .imageView = mSpotShadowLayerViews[mFrameIndex][slot],
+                    .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                    .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                    .clearValue{ .depthStencil{ .depth = 1.0f } } };
+
+                const VkRenderingInfo renderingInfo{
+                    .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                    .renderArea{ .offset{ 0, 0 }, .extent{ kSpotShadowResolution, kSpotShadowResolution } },
+                    .layerCount = 1,
+                    .pDepthAttachment = &depthAttachment };
+
+                vkCmdBeginRendering(cmd, &renderingInfo);
+                vkCmdSetViewport(cmd, 0, 1, &viewport);
+                vkCmdSetScissor(cmd, 0, 1, &scissor);
+                drawItems(mSpotShadowCasters[slot].viewProj, mSpotShadowCasters[slot].items);
+                vkCmdEndRendering(cmd);
+            }
+
+            ImageBarrier(cmd, mSpotShadowImages[mFrameIndex], VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                1, kMaxSpotShadows);
+        }
+
+        const bool anyPointActive = std::any_of(mPointShadowCasters.begin(), mPointShadowCasters.end(),
+            [](const PointShadowCaster &c) { return c.active; });
+        if (anyPointActive)
+        {
+            constexpr uint32_t kPointLayers = kMaxPointShadows * 6;
+
+            ImageBarrier(cmd, mPointShadowDepthImages[mFrameIndex], VK_IMAGE_ASPECT_DEPTH_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                1, kPointLayers);
+
+            ImageBarrier(cmd, mPointShadowColorImages[mFrameIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                1, kPointLayers);
+
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPointShadowPipeline);
+
+            const VkViewport viewport{ .x = 0.0f, .y = 0.0f,
+                .width = static_cast<float>(kPointShadowResolution), .height = static_cast<float>(kPointShadowResolution),
+                .minDepth = 0.0f, .maxDepth = 1.0f };
+            const VkRect2D scissor{ .offset{ 0, 0 }, .extent{ kPointShadowResolution, kPointShadowResolution } };
+
+            for (uint32_t slot = 0; slot < kMaxPointShadows; ++slot)
+            {
+                if (!mPointShadowCasters[slot].active)
+                    continue;
+
+                for (uint32_t face = 0; face < 6; ++face)
+                {
+                    const uint32_t layer = slot * 6 + face;
+
+                    const VkRenderingAttachmentInfo colorAttachment{
+                        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                        .imageView = mPointShadowColorLayerViews[mFrameIndex][layer],
+                        .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                        .clearValue{ .color{ { 1e6f, 0.0f, 0.0f, 0.0f } } } };
+
+                    const VkRenderingAttachmentInfo depthAttachment{
+                        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                        .imageView = mPointShadowDepthLayerViews[mFrameIndex][layer],
+                        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+                        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE, // never sampled afterward
+                        .clearValue{ .depthStencil{ .depth = 1.0f } } };
+
+                    const VkRenderingInfo renderingInfo{
+                        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                        .renderArea{ .offset{ 0, 0 }, .extent{ kPointShadowResolution, kPointShadowResolution } },
+                        .layerCount = 1,
+                        .colorAttachmentCount = 1,
+                        .pColorAttachments = &colorAttachment,
+                        .pDepthAttachment = &depthAttachment };
+
+                    vkCmdBeginRendering(cmd, &renderingInfo);
+                    vkCmdSetViewport(cmd, 0, 1, &viewport);
+                    vkCmdSetScissor(cmd, 0, 1, &scissor);
+                    drawItems(mPointShadowCasters[slot].faces[face].viewProj, mPointShadowCasters[slot].faces[face].items);
+                    vkCmdEndRendering(cmd);
+                }
+            }
+
+            ImageBarrier(cmd, mPointShadowColorImages[mFrameIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                1, kPointLayers);
+        }
+    }
+
     void VulkanRenderer::WriteCameraData(const RenderView &view, uint32_t viewIndex)
     {
         // The atmosphere needs the camera's altitude over its planet, where
@@ -2069,6 +2942,29 @@ namespace mir
 
         const uint32_t firstLight = viewIndex * kMaxLights;
         const uint32_t lightCount = WriteViewLights(view, viewIndex);
+
+        glm::mat4 sunShadowViewProjForView{ 1.0f };
+        if (mHasSunShadow)
+        {
+            const glm::vec3 anchorFromView =
+                TryCameraRelativeFloat(mSunShadowAnchor, view.cameraPosition).value_or(glm::vec3(0.0f));
+            sunShadowViewProjForView = mSunShadowViewProj * glm::translate(glm::mat4(1.0f), -anchorFromView);
+        }
+
+        const uint32_t spotShadowBase = viewIndex * kMaxSpotShadows;
+        glm::mat4 *const spotMatrixDst =
+            reinterpret_cast<glm::mat4 *>(mSpotShadowMatrixMapped[mFrameIndex]) + spotShadowBase;
+        for (uint32_t slot = 0; slot < kMaxSpotShadows; ++slot)
+        {
+            const SpotShadowCaster &caster = mSpotShadowCasters[slot];
+            if (!caster.active)
+                continue;
+            const glm::vec3 anchorFromView =
+                TryCameraRelativeFloat(caster.anchor, view.cameraPosition).value_or(glm::vec3(0.0f));
+            spotMatrixDst[slot] = caster.viewProj * glm::translate(glm::mat4(1.0f), -anchorFromView);
+        }
+        vmaFlushAllocation(mAllocator, mSpotShadowMatrixAllocations[mFrameIndex],
+            sizeof(glm::mat4) * spotShadowBase, sizeof(glm::mat4) * kMaxSpotShadows);
 
         const CameraData data{
             .viewProj = view.viewProj,
@@ -2084,7 +2980,9 @@ namespace mir
             .atmosphereRadii = glm::vec4(mAtmosphere.mPlanetRadiusKm * 1e3f, mAtmosphere.mAtmosphereRadiusKm * 1e3f,
                 mAtmosphere.mRayleighScaleHeightKm * 1e3f, mAtmosphere.mMieScaleHeightKm * 1e3f),
             .atmosphereMisc = glm::vec4(mAtmosphere.mMieG, mAtmosphere.mSunIntensity, 0.0f, 0.0f),
-            .lightingMeta = glm::vec4(static_cast<float>(lightCount), static_cast<float>(firstLight), 0.0f, 0.0f) };
+            .lightingMeta = glm::vec4(static_cast<float>(lightCount), static_cast<float>(firstLight),
+                mHasSunShadow ? 1.0f : 0.0f, static_cast<float>(spotShadowBase)),
+            .sunShadowViewProj = sunShadowViewProjForView };
         const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
 
         std::byte *const dst = mCameraMapped[mFrameIndex] + offset;
@@ -2121,7 +3019,7 @@ namespace mir
             dst[count++] = GpuLight{
                 .positionAndRange = glm::vec4(*position, light.range),
                 .directionAndSpotCos = glm::vec4(light.direction, light.spotCos),
-                .color = glm::vec4(light.color, 0.0f) };
+                .color = glm::vec4(light.color, static_cast<float>(light.shadowSlot)) };
         }
 
         if (count > 0)
@@ -3354,6 +4252,8 @@ namespace mir
         const uint32_t cameraOffset = static_cast<uint32_t>(viewIndex * mCameraAlignedSize);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
             1, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
+            3, 1, &mShadowDescriptorSets[mFrameIndex], 0, nullptr);
 
         VkPipeline boundPipeline = VK_NULL_HANDLE;
         VkDescriptorSet boundDescriptorSet = VK_NULL_HANDLE;
@@ -3699,6 +4599,7 @@ namespace mir
             .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
 
         vkBeginCommandBuffer(cmd, &beginInfo);
+        RecordShadowPasses(cmd);
         RecordCommands(cmd, imageIndex, views);
         vkEndCommandBuffer(cmd);
 

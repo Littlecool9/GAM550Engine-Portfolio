@@ -24,6 +24,7 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -105,6 +106,13 @@ namespace mir
         glm::vec3 direction{ 0.0f, -1.0f, 0.0f };
         float spotCos = -1.0f; // cos(half-angle); -1 = no cone (Point/Area)
         glm::vec3 color{ 0.0f }; // color * intensity
+        int32_t shadowSlot = -1;
+    };
+
+    struct PointShadowFace
+    {
+        glm::mat4 viewProj{ 1.0f };
+        std::span<const DrawItem> items;
     };
 
     // One camera's worth of draw items, clipped to a screen-space rect.
@@ -162,6 +170,15 @@ namespace mir
 
         bool RayTracingSupported() const { return mRayTracingSupported; }
 
+        constexpr static uint32_t kMaxSpotShadows = 4;
+        constexpr static uint32_t kMaxPointShadows = 2;
+
+        constexpr static float kSunShadowHalfExtent = 25.0f;
+        constexpr static float kSunShadowNearZ = 0.5f;
+
+        constexpr static float kSpotShadowNearZ = 0.05f;
+        constexpr static float kPointShadowNearZ = 0.05f;
+
         void SetClearColor(const glm::vec4 &color) { mClearColor = color; }
 
         void SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color)
@@ -183,6 +200,15 @@ namespace mir
         void SetSkyVisible(bool visible) { mSkyVisible = visible; }
 
         void SetLights(std::span<const LightItem> lights);
+
+        void SetSunShadowCaster(bool active, const glm::mat4 &viewProj, WorldPosition anchor,
+            std::span<const DrawItem> items);
+
+        void SetSpotShadowCaster(uint32_t slot, bool active, const glm::mat4 &viewProj, WorldPosition anchor,
+            std::span<const DrawItem> items);
+
+        void SetPointShadowCaster(uint32_t slot, bool active, WorldPosition position, float range,
+            const std::array<PointShadowFace, 6> &faces);
 
         void Shutdown();
 
@@ -214,6 +240,9 @@ namespace mir
         bool CreateDefaultTextures();
         bool CreateCameraResources();
         void DestroyCameraResources();
+        bool CreateShadowResources();
+        void DestroyShadowResources();
+        void RecordShadowPasses(VkCommandBuffer cmd);
         bool CreateModelDescriptors();
         bool BindModelDescriptors(VkCommandBuffer cmd, const GpuMaterial &material, const DrawItem &item);
         void ResetModelFrame(uint32_t frame);
@@ -330,6 +359,67 @@ namespace mir
         VmaAllocation mLightAllocations[kFramesInFlight]{};
         std::byte *mLightMapped[kFramesInFlight]{};
         std::vector<LightItem> mLights;
+
+        constexpr static uint32_t kSunShadowResolution = 2048;
+
+        VkImage mSunShadowImages[kFramesInFlight]{};
+        VmaAllocation mSunShadowAllocations[kFramesInFlight]{};
+        VkImageView mSunShadowViews[kFramesInFlight]{};
+        VkSampler mShadowSampler = VK_NULL_HANDLE;
+
+        VkDescriptorSetLayout mShadowSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool mShadowDescriptorPool = VK_NULL_HANDLE;
+        VkDescriptorSet mShadowDescriptorSets[kFramesInFlight]{};
+
+        VkPipelineLayout mShadowDepthPipelineLayout = VK_NULL_HANDLE;
+        VkPipeline mShadowDepthPipeline = VK_NULL_HANDLE;
+
+        bool mHasSunShadow = false;
+        glm::mat4 mSunShadowViewProj{ 1.0f };
+        WorldPosition mSunShadowAnchor;
+        std::span<const DrawItem> mSunShadowItems;
+
+        constexpr static uint32_t kSpotShadowResolution = 1024;
+
+        VkImage mSpotShadowImages[kFramesInFlight]{};
+        VmaAllocation mSpotShadowAllocations[kFramesInFlight]{};
+        VkImageView mSpotShadowArrayViews[kFramesInFlight]{}; // sampling: 2D_ARRAY over all slots
+        VkImageView mSpotShadowLayerViews[kFramesInFlight][kMaxSpotShadows]{}; // rendering: one slot each
+
+        VkBuffer mSpotShadowMatrixBuffers[kFramesInFlight]{};
+        VmaAllocation mSpotShadowMatrixAllocations[kFramesInFlight]{};
+        std::byte *mSpotShadowMatrixMapped[kFramesInFlight]{};
+
+        struct SpotShadowCaster
+        {
+            bool active = false;
+            glm::mat4 viewProj{ 1.0f }; // relative to `anchor`, not any view's camera
+            WorldPosition anchor;       // the light's own position
+            std::span<const DrawItem> items;
+        };
+        std::array<SpotShadowCaster, kMaxSpotShadows> mSpotShadowCasters{};
+
+        constexpr static uint32_t kPointShadowResolution = 512;
+
+        VkImage mPointShadowDepthImages[kFramesInFlight]{};
+        VmaAllocation mPointShadowDepthAllocations[kFramesInFlight]{};
+        VkImageView mPointShadowDepthLayerViews[kFramesInFlight][kMaxPointShadows * 6]{};
+
+        VkImage mPointShadowColorImages[kFramesInFlight]{};
+        VmaAllocation mPointShadowColorAllocations[kFramesInFlight]{};
+        VkImageView mPointShadowColorLayerViews[kFramesInFlight][kMaxPointShadows * 6]{};
+        VkImageView mPointShadowCubeArrayViews[kFramesInFlight]{}; // sampling: CUBE_ARRAY
+
+        VkPipeline mPointShadowPipeline = VK_NULL_HANDLE; // shadowDistance.slang
+
+        struct PointShadowCaster
+        {
+            bool active = false;
+            WorldPosition position; // the light itself: every face's "camera" sits here
+            float range = 0.0f;     // for the shading pass to normalize sampled distance by
+            std::array<PointShadowFace, 6> faces{};
+        };
+        std::array<PointShadowCaster, kMaxPointShadows> mPointShadowCasters{};
 
         VkDescriptorSetLayout mModelSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool mModelPools[kFramesInFlight]{};
