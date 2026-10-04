@@ -1847,7 +1847,7 @@ namespace mir
             mCameraMapped[i] = static_cast<std::byte *>(allocInfo.pMappedData);
 
             VmaAllocationInfo lightAllocInfo{};
-            if (!CreateBuffer(mAllocator, lightBufferSize,
+            if (!vk::CreateBuffer(mAllocator, lightBufferSize,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
