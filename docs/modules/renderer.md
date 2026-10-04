@@ -166,7 +166,7 @@ rect's extent, not the swapchain's, so an editor's docked scene panel (or
 one half of a split screen) only costs rays over its own pixels. Ray-gen
 writes into `mRtOutputImages[mFrameIndex]` (`R8G8B8A8_UNORM`, `STORAGE_BIT`
 - the swapchain's own images carry no storage usage), which is always
-swapchain-sized regardless of the rect, so `RtPushData::outputOffset` (a
+swapchain-sized regardless of the rect, so `RtPushConstants::outputOffset` (a
 push constant, `rect.offset`) tells ray-gen where in it this dispatch's
 `(0,0)` actually lands - `raytrace.slang` computes NDC from
 `DispatchRaysIndex()`/`DispatchRaysDimensions()` exactly as before (both
@@ -214,7 +214,7 @@ indexing in units of the pointee - `float`, so vertex `i`'s data starts at
 `RecordTlasBuild` writes a second, parallel per-frame array alongside the
 `VkAccelerationStructureInstanceKHR` one it already built - one
 `RtInstanceInfo` (vertex/index buffer addresses, tint, the same 3-column
-normal matrix `PushData` uses for raster, and a lit/unlit flag) per traced
+normal matrix `RasterPushConstants` uses for raster, and a lit/unlit flag) per traced
 instance, same index. `VkAccelerationStructureInstanceKHR::instanceCustomIndex`
 is what ties the two together - it's set to that same index now (was
 hardcoded `0`, harmless while nothing read it, not once `InstanceID()`
@@ -714,7 +714,7 @@ docked panel, not just the scene viewport, while click-to-select and
 everything else still assumed raster's own rect-clipped output. Now:
 `ResolveViewRect` (new, shared with `RecordView`) computes the same clamped
 rect either path uses; `vkCmdTraceRaysKHR` dispatches only that rect's
-extent; a new push constant (`RtPushData::outputOffset` in
+extent; a new push constant (`RtPushConstants::outputOffset` in
 `raytrace.slang`, `VkPushConstantRange` on `mRtPipelineLayout`) tells
 ray-gen where that dispatch's `(0,0)` lands inside the still-swapchain-sized
 `mRtOutputImages`; and `RecordRtFrame` clears the whole swapchain image

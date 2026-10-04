@@ -3,14 +3,14 @@ struct VSInput
     float3 pos : POSITION;
 };
 
-struct PushData
+struct ShadowPushConstants
 {
     float4x4 viewProj;
     float4x4 model;
 }
 
 [[vk::push_constant]]
-PushData pushData;
+ShadowPushConstants pushData;
 
 [shader("vertex")]
 float4 vertexMain(VSInput input) : SV_Position

@@ -42,13 +42,13 @@ cbuffer CameraData
     float4 lightingMeta; // x = this view's count in gLights, y = its first index
 };
 
-struct RtPushData
+struct RtPushConstants
 {
     uint2 outputOffset;
 };
 
 [[vk::push_constant]]
-RtPushData pushData;
+RtPushConstants pushData;
 
 struct RayPayload
 {

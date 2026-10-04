@@ -16,7 +16,7 @@ struct VSOutput
     float3 tint : COLOR;
 };
 
-struct PushData
+struct RasterPushConstants
 {
     float4x4 model;
     float4 normalCol0;
@@ -26,7 +26,7 @@ struct PushData
 }
 
 [[vk::push_constant]]
-PushData pushData;
+RasterPushConstants pushData;
 
 [[vk::binding(0, 1)]]
 cbuffer CameraData

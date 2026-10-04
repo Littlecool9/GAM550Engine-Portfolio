@@ -13,6 +13,7 @@
 #include "core/ecs/components/Transform.h"
 #include "core/ecs/components/WorldTransform.h"
 #include "core/log/Assert.h"
+#include "core/math/Align.h"
 
 #include <algorithm>
 
@@ -20,12 +21,6 @@ namespace mir
 {
     namespace
     {
-        // alignment is always a power of two, so the mask form is exact
-        uint32_t AlignUp(uint32_t n, uint32_t alignment)
-        {
-            return (n + alignment - 1) & ~(alignment - 1);
-        }
-
         void *RuntimeGet(const ComponentOps &ops, World &world, Entity entity)
         {
             return world.GetRaw(entity, ops.mType);
