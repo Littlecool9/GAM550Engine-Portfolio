@@ -44,6 +44,15 @@ namespace mir
         bool mHidden = false;
 
         bool mDisabled = false;
+
+        //while focused, UINavigate left and right come to the widget as
+        //UIInteraction::mAdjust instead of following its left and right links
+        bool mAdjustsX = false;
+
+        //clicked by the pointer, never focused: no link, hover, press or first
+        //UINavigate lands on it, and links pass over it. For a HUD button in
+        //play, where the stick and the confirm button belong to the game
+        bool mPointerOnly = false;
     };
 
     struct UIInteraction
@@ -58,13 +67,24 @@ namespace mir
 
         //as of the last EndFrame
         bool mFocused = false;
+
+        //mFocused, while the focus highlight is shown; draw the highlight from this
+        bool mShowFocus = false;
+
+        //-1 or +1 on the frame UINavigate steps left or right, for a focused,
+        //enabled widget with mAdjustsX; otherwise 0
+        int mAdjust = 0;
     };
 
     class UIState
     {
     public:
 
-        void BeginFrame(const UIRect &area, const UIPointer &pointer, const UINavInput &nav = {});
+        //focusVisible: whether this frame draws the focus highlight. The frame it
+        //comes back on, UINavigate and UIConfirm only bring it back, unless
+        //nothing is focused, when UINavigate still lands on the first widget
+        void BeginFrame(const UIRect &area, const UIPointer &pointer, const UINavInput &nav = {},
+                        bool focusVisible = true);
 
 
         void EndFrame();
@@ -83,6 +103,8 @@ namespace mir
 
         void SetFocus(UIId id) { mFocus = id; }
 
+        bool FocusVisible() const { return mFocusVisible; }
+
         float PointerX() const { return mPointerX; }
         float PointerY() const { return mPointerY; }
 
@@ -92,10 +114,11 @@ namespace mir
         struct Declared
         {
             UINavLinks mLinks{};
-            bool mEnabled = true;
+            //enabled and not pointer-only: what focus may land on
+            bool mFocusable = true;
         };
 
-        bool IsEnabled(UIId id) const;
+        bool IsFocusable(UIId id) const;
 
         UIRect mArea;
         float mPointerX = 0.0f;
@@ -114,6 +137,13 @@ namespace mir
         std::optional<UINavDirection> mNavDirection;
         bool mConfirm = false;
 
+        //a widget took this frame's step as mAdjust, so focus does not follow it
+        bool mNavAdjusted = false;
+
+        bool mFocusVisible = true;
+        //the highlight comes back this frame
+        bool mRevealFocus = false;
+
         UIId mHot;
         UIId mActive;
         UIId mFocus;
@@ -122,9 +152,9 @@ namespace mir
 
         bool mActiveSeen = false;
 
-        // this frame's widgets by id; the first declaration of a colliding id wins
+        //this frame's widgets by id; the first declaration of a colliding id wins
         std::unordered_map<uint64_t, Declared> mDeclared;
-        UIId mFirstEnabled;
+        UIId mFirstFocusable;
         size_t mCollisions = 0;
 
         std::unordered_set<uint64_t> mLoggedCollisions;

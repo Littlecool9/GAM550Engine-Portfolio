@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -23,6 +24,13 @@ namespace mir
 
     // first count amount of bytes of file
     std::optional<std::vector<std::byte>> ReadFirstBytes(const std::filesystem::path &path, std::size_t count);
+
+    // Reads only [offset, offset + length); logs and fails if the range runs past the file.
+    std::optional<std::vector<std::byte>> ReadByteRange(const std::filesystem::path &path, std::uint64_t offset,
+                                                        std::size_t length);
+
+    // Logs and fails if the path is missing or not a regular file.
+    std::optional<std::uint64_t> FileSize(const std::filesystem::path &path);
 
     // file as text
     std::optional<std::string> ReadText(const std::filesystem::path &path);

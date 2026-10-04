@@ -64,24 +64,29 @@ the pieces depend on each other.
                         app
       +--------+---------+--------+-------------+
       |        |         |        |             |
-   assets    scene    script    editor        gameui
-      |        |         |      |    |        |     |
-      |        |         |      | editortheme |   input
-      |        |         |      |             |     |
-      |        |         |   imguiruntime     |     |
-      |        |         |     |      |       |     |
-      |        |         |  window  renderer <+     |
-      |        |         |     |      |             |
-      +--------+---------+-----+------+-------------+
+   assets    scene    script    editor      gameshell
+      |        |         |      |    |          |
+      |        |         |      | editortheme gameui
+      |        |         |      |               |
+      |        |         |   imguiruntime     input
+      |        |         |     |      |         |
+      |        |         |  window  renderer    |
+      |        |         |     |      |         |
+      +--------+---------+-----+------+---------+
                          |
                        core
 ```
 
 `app` also links `window`, `renderer` and `imguiruntime` directly, because it
-constructs them. `editor` links `window` and `renderer` too, for the title bar
+constructs them. It links `editor` only when `MJOLNIR_WITH_EDITOR` is on; a
+build with it off has no `editor`, `editortheme` or ImGuizmo at all (see
+[app.md](modules/app.md#without-the-editor)). `editor` links `window` and `renderer` too, for the title bar
 and the viewport rect. `gameui` sits beside `editor` and draws into the same
 ImGui frame, but links `imgui` alone, privately, and neither `editor` nor
-`imguiruntime`: it never owns or brackets the frame.
+`imguiruntime`: it never owns or brackets the frame. It also links `assets`,
+for the cooked textures it draws, and not `renderer`: ImGui's backend uploads
+those itself. `gameshell`, the HUD and pause menu every game gets, links
+`gameui` alone, as a game's own screens would.
 
 `serial` is not shown: `renderer`, `scene`, `input` and `app` reach `core`
 through it for anything touching a JSON file.
@@ -101,6 +106,7 @@ through it for anything touching a JSON file.
 | `editor` | The editor shell, drawn into `imguiruntime`'s context | [editor.md](modules/editor.md) |
 | `editortheme` | Theme data only | [editortheme.md](modules/editortheme.md) |
 | `gameui` | Game UI drawn over the scene, the same in the editor and a game build | [gameui.md](modules/gameui.md) |
+| `gameshell` | The HUD and the pause menu every game gets, built on `gameui` | [gameshell.md](modules/gameshell.md) |
 | `app` | Composition root and the frame loop | [app.md](modules/app.md) |
 
 Add your row when you start a document, and update it in the same commit as the
@@ -378,6 +384,23 @@ table. See [script.md](modules/script.md).
 5. No CI. Tests are run by hand.
 
 ## Changed
+
+*2026-10-02* — **The editor is optional.** Was: `app` linked `editor`
+unconditionally. Now: `MJOLNIR_WITH_EDITOR` OFF, set by the
+`windows-msvc-game-*` presets, builds `MjolnirEngine` as the game with no
+editor, `editortheme` or ImGuizmo in the build, which is what moving ImGui's
+lifetime into `imguiruntime` made possible. See [build.md](build.md#a-build-without-the-editor).
+
+*2026-10-02* — **`gameshell` added.** Was: the only game UI was
+`gameui`'s own demo screen. Now: a HUD and a pause menu, in a module that
+links `gameui` alone, drawn by `App` in Play, and a game build started with
+`--no-editor` begins in Play. See [gameshell.md](modules/gameshell.md).
+
+*2026-10-02* — **`gameui` links `assets` instead of `renderer`.** Was: it
+linked `renderer` for `TextureHandle`, which had no way into ImGui. Now: it
+loads cooked textures from the `AssetCache` and hands them to ImGui 1.92's
+dynamic texture path, which the Vulkan backend uploads and frees. See
+[gameui.md](modules/gameui.md).
 
 *2026-09-27* — **`gameui` added.** Was: `editor` was the only thing drawing into
 the ImGui frame, so a game had no UI. Now: `gameui` records a draw list and

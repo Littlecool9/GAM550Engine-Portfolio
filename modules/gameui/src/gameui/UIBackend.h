@@ -10,10 +10,18 @@
 #pragma once
 
 #include <gameui/UIDrawList.h>
+#include <gameui/UITextures.h>
 #include <gameui/UITypes.h>
+
+#include <cstdint>
+#include <memory>
+#include <span>
 
 namespace mir::detail
 {
+    using UIBackendTexturePtr = std::unique_ptr<UIBackendTexture, UIBackendTextureDeleter>;
 
-    void SubmitToBackground(const UIRect &area, const UIDrawList &list);
+    UIBackendTexturePtr CreateBackendTexture(uint32_t width, uint32_t height, std::span<const uint8_t> rgba);
+
+    void SubmitToBackground(const UIRect &area, const UIDrawList &list, const UITextures &textures);
 }

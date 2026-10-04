@@ -121,35 +121,43 @@ namespace mir
         }
     } // namespace detail
 
+    // Cleared when "modelAsset" is picked: a clip/time index from the previous model must not
+    // carry over, and modelName/animationAsset are the model picker's own persistence details.
+    inline constexpr std::string_view kModelAssetResetFields[] = { "modelName", "animationAsset", "clip", "time" };
+
     // ModelPlayer as scenes, scripts and the Inspector see it. Field names match
     // the scene JSON keys, so renaming one breaks existing scene files.
     inline constexpr FieldDesc kModelPlayerFields[] = {
-        {"modelName", FieldKind::String, 0,
-         [](const void *component, void *out) {
+        {.mName = "modelName", .mKind = FieldKind::String, .mOffset = 0,
+         .mGet = [](const void *component, void *out) {
              char *text = static_cast<char *>(out);
              const std::string_view name = detail::AsModelPlayer(component).ModelName();
              std::fill_n(text, kFieldStringCapacity, '\0');
              std::copy(name.begin(), name.end(), text);
          },
-         [](void *component, const void *in) {
+         .mSet = [](void *component, const void *in) {
              detail::AsModelPlayer(component).SetModelName(detail::FieldString(in));
-         }},
+         },
+         .mHidden = true},
 
-        {"modelAsset", FieldKind::String, 0,
-         [](const void *component, void *out) {
+        {.mName = "modelAsset", .mKind = FieldKind::String, .mOffset = 0,
+         .mGet = [](const void *component, void *out) {
              ModelPlayer::FormatAssetId(detail::AsModelPlayer(component).ModelAsset(), static_cast<char *>(out));
          },
-         [](void *component, const void *in) {
+         .mSet = [](void *component, const void *in) {
              detail::AsModelPlayer(component).SetModelAsset(ModelPlayer::ParseAssetId(detail::FieldString(in)));
-         }},
+         },
+         .mWidget = FieldWidget::AssetRef, .mAssetKind = AssetKind::Model,
+         .mResetOnChange = kModelAssetResetFields},
 
-        {"animationAsset", FieldKind::String, 0,
-         [](const void *component, void *out) {
+        {.mName = "animationAsset", .mKind = FieldKind::String, .mOffset = 0,
+         .mGet = [](const void *component, void *out) {
              ModelPlayer::FormatAssetId(detail::AsModelPlayer(component).AnimationAsset(), static_cast<char *>(out));
          },
-         [](void *component, const void *in) {
+         .mSet = [](void *component, const void *in) {
              detail::AsModelPlayer(component).SetAnimationAsset(ModelPlayer::ParseAssetId(detail::FieldString(in)));
-         }},
+         },
+         .mHidden = true},
 
         {"clip", FieldKind::Int, 0,
          [](const void *component, void *out) { *static_cast<int32_t *>(out) = detail::AsModelPlayer(component).Clip(); },

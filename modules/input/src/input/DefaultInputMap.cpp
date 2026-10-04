@@ -78,6 +78,11 @@ namespace mir
                 MouseBinding(MouseButton::Button5),
                 PadButtonBinding(GamepadButton::RightBumper),
             };
+
+            map.AddAction(std::string(kUIPauseAction), InputActionType::Button).bindings = {
+                KeyBinding(Key::Escape),
+                PadButtonBinding(GamepadButton::Start),
+            };
         }
     }
 

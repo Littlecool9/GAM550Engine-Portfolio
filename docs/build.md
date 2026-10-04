@@ -76,8 +76,12 @@ Every build is the same three steps.
 3. Build.
 
 `CMakePresets.json` is the only supported way to configure. There are two
-presets, `windows-msvc-debug` and `windows-msvc-release`. Both use Ninja and both
-build into `builds/<presetName>/`.
+presets for everyday work, `windows-msvc-debug` and `windows-msvc-release`;
+two that build the game without the editor, `windows-msvc-game-debug` and
+`windows-msvc-game-release` (see [A build without the editor](#a-build-without-the-editor));
+and `windows-msvc-debug-float`, with float world positions (see World precision
+below).
+All use Ninja and all build into `builds/<presetName>/`.
 
 The command line and VS Code read the same presets, so everyone builds the same
 way.
@@ -109,10 +113,50 @@ rather than making a second one.
 Dependencies are declared in `vcpkg.json` and installed during configure. They
 resolve against a pinned `builtin-baseline`, so everyone gets the same versions.
 
+Jolt is the one package that does not come from the registry as is:
+`vcpkg-overlays/joltphysics`, registered by `vcpkg-configuration.json`, replaces
+the port to add a `double-precision` feature (`JPH_DOUBLE_PRECISION`), which
+the upstream port lacks. vcpkg builds it from source on the first configure
+after it changes. A build directory whose cache has `VCPKG_MANIFEST_INSTALL=OFF`
+needs one configure with `-DVCPKG_MANIFEST_INSTALL=ON` to pick it up.
+
+**World precision.** The CMake option `MIR_LARGE_WORLD` (default ON) stores
+world positions as double and builds Jolt with double precision. OFF stores
+them as float: smaller and faster, but only for small maps. Before `project()`,
+the root `CMakeLists.txt` turns ON into the `large-world` vcpkg feature, so the
+C++ setting and the Jolt binary always agree; `modules/physics/CMakeLists.txt`
+stops the configure if they do not. The `windows-msvc-debug-float` preset
+builds with it OFF, into its own `builds/windows-msvc-debug-float/`. Tests that
+need double positions far from the origin report Skipped there. After changing
+code that handles positions, build and test both presets.
+
 **Reconfigure** every time a `CMakeLists.txt` or `vcpkg.json` changes.
 
 Ninja does it for you at build time, and cmake-tools can do it on save — see
 `cmake.configureOnEdit`. To force one: `Ctrl+Shift+P` → **CMake: Configure**.
+
+## A build without the editor
+
+`windows-msvc-game-debug` and `windows-msvc-game-release` configure with
+`MJOLNIR_WITH_EDITOR=OFF`. `MjolnirEngine` is then the game alone: the
+`editor` and `editortheme` modules and ImGuizmo are not built, nothing links
+`engine_editor`, and the editor's asset import queue is left out of `app`. The
+game opens in its own window, not maximized and with the system title bar, and
+plays from the first frame, with the game UI fullscreen.
+
+```
+cmake --preset windows-msvc-game-debug
+cmake --build --preset windows-msvc-game-debug
+ctest --test-dir builds/windows-msvc-game-debug --output-on-failure
+```
+
+It is a second build tree, the one exception to building into the tree you
+already have, since the option changes which modules exist. The same tests and
+smoke tests run in it. `--no-editor` is accepted and changes nothing there.
+
+A module that starts linking `mir::editor` unconditionally fails this
+configure, because the target does not exist, so the separation cannot erode
+without someone noticing.
 
 ## Tests
 
@@ -223,6 +267,14 @@ More info: [extending.md](extending.md).
 | `cl.exe` not found in a plain terminal | MSVC environment not loaded. Use a Developer PowerShell or prefix with `vcvars64.bat`. |
 
 ## Changed
+
+*2026-10-01* — **World precision is a compile-time option.** `MIR_LARGE_WORLD`
+picks double or float world positions (`WorldReal`) and, through the vcpkg
+`large-world` feature, the matching Jolt. A runtime switch, or templating every
+module on precision, was rejected: either would cost hot loops or spread
+templates through every module's headers. A float build pays nothing for
+doubles. Terrain addressing, audio (Wwise takes double) and camera-relative
+rendering keep the same code in both builds.
 
 *2026-09-11* — **`toolchainFile` in presets, not a wrapper `.cmake`.** vcpkg
 resolution moved from `cmake/VcpkgToolchain.cmake` into each preset's

@@ -9,6 +9,7 @@
 
 #pragma once
 #include "Entity.h"
+#include "core/math/WorldReal.h"
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/mat4x4.hpp>
@@ -18,12 +19,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <string_view>
 
 namespace mir
 {
     // The value types a script or an inspector may read and write.
-    // Each field should be small, at most 4-byte aligned
+    // Each field should be small; WorldPosition in a large-world build is the
+    // only kind aligned past 4 bytes
     // is entered offset based
     enum class FieldKind : uint8_t
     {
@@ -31,6 +34,7 @@ namespace mir
         Int,
         Float,
         Vec3,
+        WorldPosition, // WorldVec3: double, or float when MIR_LARGE_WORLD is off
         Vec4,
         Quat,
         Mat4,
@@ -53,6 +57,8 @@ namespace mir
             return sizeof(float);
         case FieldKind::Vec3:
             return sizeof(glm::vec3);
+        case FieldKind::WorldPosition:
+            return sizeof(WorldVec3);
         case FieldKind::Vec4:
             return sizeof(glm::vec4);
         case FieldKind::Quat:
@@ -81,6 +87,8 @@ namespace mir
             return alignof(float);
         case FieldKind::Vec3:
             return alignof(glm::vec3);
+        case FieldKind::WorldPosition:
+            return alignof(WorldVec3);
         case FieldKind::Vec4:
             return alignof(glm::vec4);
         case FieldKind::Quat:
@@ -109,6 +117,8 @@ namespace mir
             return "float";
         case FieldKind::Vec3:
             return "vec3";
+        case FieldKind::WorldPosition:
+            return "world_position";
         case FieldKind::Vec4:
             return "vec4";
         case FieldKind::Quat:
@@ -125,6 +135,22 @@ namespace mir
         return "?";
     }
 
+    // Presentation hint for the inspector; FieldKind stays about memory layout.
+    enum class FieldWidget : uint8_t
+    {
+        Default, // DragFloat/Checkbox/etc per FieldKind, clamped to mMin/mMax if mClamped
+        Enum,    // Int, shown as a combo over mEnumNames (index == underlying value)
+        Color,   // Vec3/Vec4, shown as a color picker instead of drag floats
+        AssetRef, // String, shown as a picker combo sourced from the inspector's asset list
+    };
+
+    // Which AssetImportView list an AssetRef field picks from.
+    enum class AssetKind : uint8_t
+    {
+        None,
+        Model,
+    };
+
     struct FieldDesc
     {
         // field could be accessed through Get/Set or plan members
@@ -135,6 +161,18 @@ namespace mir
 
         void (*mGet)(const void *component, void *out) = nullptr;
         void (*mSet)(void *component, const void *in) = nullptr;
+
+        FieldWidget mWidget = FieldWidget::Default;
+        std::span<const std::string_view> mEnumNames{}; // FieldWidget::Enum
+
+        bool mClamped = false; // FieldWidget::Default, Float only
+        float mMin = 0.0f;
+        float mMax = 0.0f;
+
+        AssetKind mAssetKind = AssetKind::None;             // FieldWidget::AssetRef
+        std::span<const std::string_view> mResetOnChange{}; // other field names to zero on write
+
+        bool mHidden = false; // excluded from the inspector entirely (persistence-only)
 
         bool ReadOnly() const { return mGet != nullptr && mSet == nullptr; }
 

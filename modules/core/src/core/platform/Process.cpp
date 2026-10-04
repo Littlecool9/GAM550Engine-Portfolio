@@ -69,6 +69,17 @@ namespace mir
 
     std::string QuoteCommandLineArgument(std::string_view arg) { return Quote(arg); }
 
+    uint64_t CurrentProcessId()
+    {
+#if defined(_WIN32)
+        return static_cast<uint64_t>(GetCurrentProcessId());
+#elif defined(__linux__)
+        return static_cast<uint64_t>(getpid());
+#else
+        return 0;
+#endif
+    }
+
     struct ChildProcess::Impl
     {
 #if defined(_WIN32)

@@ -10,10 +10,12 @@
 #pragma once
 #include "core/ecs/ComponentAsserts.h"
 #include "core/ecs/ComponentFields.h"
+#include "core/math/WorldReal.h"
 
+#include <cmath>
 #include <cstdint>
 #include <glm/gtc/quaternion.hpp>
-#include <glm/mat4x4.hpp>
+#include <glm/mat3x3.hpp>
 #include <glm/vec3.hpp>
 
 namespace mir
@@ -23,24 +25,40 @@ namespace mir
     public:
         Transform() = default;
 
-        explicit Transform(const glm::vec3 &position,
+        explicit Transform(const WorldVec3 &position,
                            const glm::quat &rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
                            const glm::vec3 &scale = glm::vec3(1.0f))
             : mPosition(position), mRotation(rotation), mScale(scale)
         {
         }
 
-        const glm::vec3 &Position() const { return mPosition; }
+        // glm would narrow a wider vector silently. A double that reaches a
+        // float build goes through TryWorldVec3FromDouble first.
+        template <typename Other>
+            requires(sizeof(Other) > sizeof(WorldReal))
+        explicit Transform(const glm::vec<3, Other> &, const glm::quat & = {}, const glm::vec3 & = {}) = delete;
+        template <typename Other>
+            requires(sizeof(Other) > sizeof(WorldReal))
+        bool SetPosition(const glm::vec<3, Other> &) = delete;
+        template <typename Other>
+            requires(sizeof(Other) > sizeof(WorldReal))
+        bool Translate(const glm::vec<3, Other> &) = delete;
+
+        const WorldVec3 &Position() const { return mPosition; }
         const glm::quat &Rotation() const { return mRotation; }
         const glm::vec3 &Scale() const { return mScale; }
 
         // Bumped on every mutation. Never 0, so 0 can mean "no such transform".
         uint32_t Version() const { return mVersion; }
 
-        void SetPosition(const glm::vec3 &position)
+        // Refuses a non-finite position: no write, no version bump.
+        bool SetPosition(const WorldVec3 &position)
         {
+            if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z))
+                return false;
             mPosition = position;
             Touch();
+            return true;
         }
 
         void SetRotation(const glm::quat &rotation)
@@ -55,11 +73,8 @@ namespace mir
             Touch();
         }
 
-        void Translate(const glm::vec3 &delta)
-        {
-            mPosition += delta;
-            Touch();
-        }
+        // Refuses a non-finite delta or result: no write, no version bump.
+        bool Translate(const WorldVec3 &delta) { return SetPosition(mPosition + delta); }
 
         // Applies `delta` on top of the current rotation, in local space.
         void Rotate(const glm::quat &delta)
@@ -68,14 +83,14 @@ namespace mir
             Touch();
         }
 
-        // Column-major TRS: translate * rotate * scale, applied right to left.
-        glm::mat4 Matrix() const
+        // rotate * scale, applied right to left. The translation stays in
+        // Position(): no float matrix carries an absolute position.
+        glm::mat3 LinearMatrix() const
         {
-            glm::mat4 m = glm::mat4_cast(mRotation);
+            glm::mat3 m = glm::mat3_cast(mRotation);
             m[0] *= mScale.x;
             m[1] *= mScale.y;
             m[2] *= mScale.z;
-            m[3] = glm::vec4(mPosition, 1.0f);
             return m;
         }
 
@@ -87,7 +102,7 @@ namespace mir
                 mVersion = 1;
         }
 
-        glm::vec3 mPosition{0.0f};
+        WorldVec3 mPosition{0};
         glm::quat mRotation{1.0f, 0.0f, 0.0f, 0.0f}; // w, x, y, z - identity
         glm::vec3 mScale{1.0f};
         uint32_t mVersion = 1;
@@ -98,11 +113,12 @@ namespace mir
     // Transform as a script or inspector sees it
     // Accessor thunks
     inline constexpr FieldDesc kTransformFields[] = {
-        {"position", FieldKind::Vec3, 0,
+        // Absolute on a root, parent-local on a child.
+        {"position", FieldKind::WorldPosition, 0,
          [](const void *component, void *out)
-         { *static_cast<glm::vec3 *>(out) = static_cast<const Transform *>(component)->Position(); },
+         { *static_cast<WorldVec3 *>(out) = static_cast<const Transform *>(component)->Position(); },
          [](void *component, const void *in)
-         { static_cast<Transform *>(component)->SetPosition(*static_cast<const glm::vec3 *>(in)); }},
+         { static_cast<Transform *>(component)->SetPosition(*static_cast<const WorldVec3 *>(in)); }},
 
         {"rotation", FieldKind::Quat, 0,
          [](const void *component, void *out)

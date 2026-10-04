@@ -62,6 +62,16 @@ namespace mir::detail
         JPH::Trace = &TraceImpl;
         JPH_IF_ENABLE_ASSERTS(JPH::AssertFailed = &AssertFailedImpl;)
 
+        // RegisterTypes aborts when the library was built with other defines
+        // than this file (JPH_DOUBLE_PRECISION among them), and says why only
+        // through Trace, which Release compiles out.
+        if (!JPH::VerifyJoltVersionID())
+        {
+            MIR_LOG_CRITICAL("Jolt was built with a different configuration than engine_physics "
+                             "(version or defines such as JPH_DOUBLE_PRECISION, which follows "
+                             "MIR_LARGE_WORLD); reconfigure so vcpkg rebuilds vcpkg-overlays/joltphysics");
+        }
+
         JPH::Factory::sInstance = new JPH::Factory();
         JPH::RegisterTypes();
     }

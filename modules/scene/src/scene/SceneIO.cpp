@@ -14,6 +14,7 @@
 #include "core/ecs/TransformHierarchy.h"
 #include "core/ecs/World.h"
 #include "core/log/Log.h"
+#include "core/math/WorldReal.h"
 
 #include <serial/JsonFile.h>
 
@@ -73,6 +74,17 @@ namespace mir
                     const auto &v = *static_cast<const glm::vec3 *>(bytes);
                     return json::array({ CleanFloat(v.x), CleanFloat(v.y), CleanFloat(v.z) });
                 }
+            case FieldKind::WorldPosition:
+                {
+                    const auto &v = *static_cast<const WorldVec3 *>(bytes);
+                    // nlohmann writes the shortest text that parses back to the
+                    // same double; a float build writes the float's, as for Vec3.
+                    if constexpr (kLargeWorld)
+                        return json::array({ v.x, v.y, v.z });
+                    else
+                        return json::array({ CleanFloat(static_cast<float>(v.x)), CleanFloat(static_cast<float>(v.y)),
+                                             CleanFloat(static_cast<float>(v.z)) });
+                }
             case FieldKind::Vec4:
                 {
                     const auto &v = *static_cast<const glm::vec4 *>(bytes);
@@ -108,7 +120,7 @@ namespace mir
             return nullptr;
         }
 
-        void JsonToField(FieldKind kind, const json &value, void *outBytes)
+        bool JsonToField(FieldKind kind, const json &value, void *outBytes)
         {
             switch (kind)
             {
@@ -127,6 +139,25 @@ namespace mir
                     v.x = value.at(0).get<float>();
                     v.y = value.at(1).get<float>();
                     v.z = value.at(2).get<float>();
+                    break;
+                }
+            case FieldKind::WorldPosition:
+                {
+                    if (!value.is_array() || value.size() != 3)
+                        return false;
+
+                    glm::dvec3 v{};
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        const json &component = value[i];
+                        if (!component.is_number())
+                            return false;
+                        v[i] = component.get<double>();
+                    }
+                    const std::optional<WorldVec3> position = TryWorldVec3FromDouble(v);
+                    if (!position)
+                        return false;
+                    *static_cast<WorldVec3 *>(outBytes) = *position;
                     break;
                 }
             case FieldKind::Vec4:
@@ -173,6 +204,7 @@ namespace mir
             case FieldKind::EntityRef:
                 break; // handled by the caller, needs the id map
             }
+            return true;
         }
     }
 
@@ -349,7 +381,13 @@ namespace mir
                     }
 
                     FieldBuffer buffer{};
-                    JsonToField(field.mKind, *it, buffer.mBytes);
+                    if (!JsonToField(field.mKind, *it, buffer.mBytes))
+                    {
+                        MIR_LOG_ERROR("LoadScene: entity {} '{}.{}' is not three finite numbers a world position "
+                                      "can hold, left at default",
+                            id, typeName, field.mName);
+                        continue;
+                    }
                     field.Write(component, buffer.mBytes);
                 }
             }

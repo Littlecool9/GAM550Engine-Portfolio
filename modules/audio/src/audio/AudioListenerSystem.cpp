@@ -13,7 +13,7 @@
 #include <core/ecs/World.h>
 #include <core/log/Log.h>
 
-#include <glm/mat4x4.hpp>
+#include <glm/mat3x3.hpp>
 #include <glm/vec3.hpp>
 
 namespace mir
@@ -48,10 +48,10 @@ namespace mir
                 if (worldTransform.Version() == listener.mWorldVersion)
                     return;
 
-                const glm::mat4 &matrix = worldTransform.Matrix();
-                audio::SetListenerPosition(glm::vec3(matrix[3]),
-                    -glm::vec3(matrix[2]),  // -Z is forward
-                    glm::vec3(matrix[1]));  // +Y is up
+                const glm::mat3 &linear = worldTransform.Linear();
+                audio::SetListenerPosition(worldTransform.Position(),
+                    -linear[2],  // -Z is forward
+                    linear[1]);  // +Y is up
 
                 listener.mWorldVersion = worldTransform.Version();
             });

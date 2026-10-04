@@ -29,5 +29,11 @@ namespace mir
 
     private:
         Window &mWindow;
+
+        // the cursor as of the last update, so moving it alone makes the
+        // mouse the active device
+        double mLastMouseX = 0.0;
+        double mLastMouseY = 0.0;
+        bool mHasLastMouse = false;
     };
 }

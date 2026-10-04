@@ -1,4 +1,5 @@
 #include "AtmosphereCommon.slang"
+#include "LightingCommon.slang"
 
 [[vk::binding(0, 0)]]
 RaytracingAccelerationStructure gTlas;
@@ -8,8 +9,8 @@ RWTexture2D<float4> gOutput;
 
 struct RtInstanceInfo
 {
-    float* vertexAddress;
-    uint* indexAddress;
+    float *vertexAddress;
+    uint *indexAddress;
     float4 tint;
     float4 normalCol0;
     float4 normalCol1;
@@ -31,8 +32,14 @@ cbuffer CameraData
     float4 lightColor;
     float4 ambientColor;
     float4x4 invViewProj;
-    float4 cameraPosWS;
+    float4 cameraPos; // the origin: the TLAS is built relative to this view's camera
     float4 fogColor;
+    float4 cameraWorldPos; // absolute camera position, for the atmosphere only
+    float4 clipPlanes; // x = near, y = far, or 0 for no far plane
+    float4 atmosphereScattering;
+    float4 atmosphereRadii;
+    float4 atmosphereMisc;
+    float4 lightingMeta; // x = this view's count in gLights, y = its first index
 };
 
 struct RtPushConstants
@@ -62,15 +69,21 @@ void rayGenMain()
 
     const float2 ndc = (float2(pixel) + 0.5) / float2(dims) * 2.0 - 1.0;
 
-    const float4 worldFar = mul(invViewProj, float4(ndc, 1.0, 1.0));
-    const float3 worldPos = worldFar.xyz / worldFar.w;
-    const float3 rayDir = normalize(worldPos - cameraPosWS.xyz);
+    // Depth 1 is the near plane, a finite point even with no far plane.
+    const float4 onNearPlane = mul(invViewProj, float4(ndc, 1.0, 1.0));
+    const float3 toNearPlane = onNearPlane.xyz / onNearPlane.w - cameraPos.xyz;
+    const float3 rayDir = normalize(toNearPlane);
+
+    // Stop where the raster path's far plane would clip. The plane is a view
+    // depth, so an off-axis ray travels farther to reach it, by the same
+    // factor it travels to reach the near plane.
+    const float toFarPlane = clipPlanes.y * length(toNearPlane) / clipPlanes.x;
 
     RayDesc ray;
-    ray.Origin = cameraPosWS.xyz;
+    ray.Origin = cameraPos.xyz;
     ray.Direction = rayDir;
     ray.TMin = 0.001;
-    ray.TMax = 10000.0;
+    ray.TMax = clipPlanes.y > 0.0 ? toFarPlane : 1.0e30;
 
     RayPayload payload;
     payload.color = float3(0.0, 0.0, 0.0);
@@ -83,8 +96,18 @@ void rayGenMain()
 [shader("miss")]
 void missMain(inout RayPayload payload)
 {
-    const float3 rayOrigin = float3(cameraPosWS.x, kPlanetRadius + cameraPosWS.y, cameraPosWS.z);
-    float3 color = Atmosphere(WorldRayDirection(), rayOrigin, normalize(lightDirWS.xyz));
+    AtmosphereParams params;
+    params.rayleighCoeff = atmosphereScattering.xyz;
+    params.mieCoeff = atmosphereScattering.w;
+    params.planetRadius = atmosphereRadii.x;
+    params.atmosphereRadius = atmosphereRadii.y;
+    params.rayleighScaleHeight = atmosphereRadii.z;
+    params.mieScaleHeight = atmosphereRadii.w;
+    params.mieG = atmosphereMisc.x;
+    params.sunIntensity = atmosphereMisc.y;
+
+    const float3 rayOrigin = float3(cameraWorldPos.x, params.planetRadius + cameraWorldPos.y, cameraWorldPos.z);
+    float3 color = Atmosphere(WorldRayDirection(), rayOrigin, normalize(lightDirWS.xyz), params);
     payload.color = TonemapReinhard(color);
 }
 
@@ -133,7 +156,7 @@ void closestHitMain(inout RayPayload payload, in BuiltInTriangleIntersectionAttr
 
         const float3 hitWorldPos = WorldRayOrigin() + RayTCurrent() * WorldRayDirection();
         const float3 L = normalize(lightDirWS.xyz);
-        const float3 V = normalize(cameraPosWS.xyz - hitWorldPos);
+        const float3 V = normalize(cameraPos.xyz - hitWorldPos);
         const float3 H = normalize(L + V);
 
         const float diffuse = max(dot(N, L), 0.0);
@@ -142,6 +165,8 @@ void closestHitMain(inout RayPayload payload, in BuiltInTriangleIntersectionAttr
         const float3 albedo = kAlbedo * info.tint.rgb;
         color = albedo * (ambientColor.rgb + lightColor.rgb * diffuse) +
                 lightColor.rgb * kSpecularStrength * specular;
+
+        color += AccumulatePunctualLights(hitWorldPos, N, albedo, int(lightingMeta.y), int(lightingMeta.x));
     }
 
     const float fogFactor = clamp(1.0 - exp(-fogColor.a * RayTCurrent()), 0.0, 1.0);

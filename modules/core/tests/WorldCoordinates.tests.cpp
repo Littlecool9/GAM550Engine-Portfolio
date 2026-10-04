@@ -1,0 +1,289 @@
+/**
+ * @file WorldCoordinates.tests.cpp
+ * @brief Fixed-world coordinate arithmetic and explicit narrowing tests.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ */
+
+#include <core/math/WorldCoordinates.h>
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <iomanip>
+#include <iostream>
+#include <limits>
+#include <type_traits>
+
+namespace
+{
+    double DoubleErrorBudget(double referenceMeters)
+    {
+        return 4.0 * std::numeric_limits<double>::epsilon() *
+               std::max(1.0, std::abs(referenceMeters));
+    }
+
+    // A near-origin round trip in WorldReal.
+    constexpr double kNearBudget = mir::kLargeWorld ? 1e-15 : 1e-6;
+
+    void CheckNear(const glm::dvec3 &actual, const glm::dvec3 &expected, double budget)
+    {
+        CHECK(std::abs(actual.x - expected.x) <= budget);
+        CHECK(std::abs(actual.y - expected.y) <= budget);
+        CHECK(std::abs(actual.z - expected.z) <= budget);
+    }
+}
+
+TEST_CASE("Fixed-world coordinates remain ECS-compatible value types", "[core][lwc]")
+{
+    STATIC_REQUIRE(std::is_trivially_copyable_v<mir::WorldPosition>);
+    STATIC_REQUIRE(std::is_standard_layout_v<mir::WorldPosition>);
+    STATIC_REQUIRE(std::is_trivially_copyable_v<mir::WorldOffset>);
+    STATIC_REQUIRE(std::is_standard_layout_v<mir::WorldOffset>);
+    STATIC_REQUIRE(std::is_trivially_copyable_v<mir::ParentLocalTranslation>);
+    STATIC_REQUIRE(std::is_standard_layout_v<mir::ParentLocalTranslation>);
+    STATIC_REQUIRE(std::is_trivially_copyable_v<mir::TerrainLocalPosition>);
+    STATIC_REQUIRE(std::is_standard_layout_v<mir::TerrainLocalPosition>);
+    STATIC_REQUIRE(alignof(mir::WorldPosition) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__);
+
+    // one template, but each meaning stays its own type
+    STATIC_REQUIRE_FALSE(std::is_same_v<mir::WorldPosition, mir::WorldOffset>);
+    STATIC_REQUIRE_FALSE(std::is_same_v<mir::WorldPosition, mir::ParentLocalTranslation>);
+    STATIC_REQUIRE_FALSE(std::is_same_v<mir::WorldPosition, mir::TerrainLocalPosition>);
+    STATIC_REQUIRE_FALSE(std::is_same_v<mir::WorldOffset, mir::ParentLocalTranslation>);
+    STATIC_REQUIRE_FALSE(std::is_same_v<mir::WorldOffset, mir::TerrainLocalPosition>);
+    STATIC_REQUIRE_FALSE(std::is_same_v<mir::ParentLocalTranslation, mir::TerrainLocalPosition>);
+    STATIC_REQUIRE_FALSE(std::is_convertible_v<mir::WorldOffset, mir::WorldPosition>);
+    STATIC_REQUIRE_FALSE(std::is_convertible_v<mir::WorldPosition, mir::WorldOffset>);
+    STATIC_REQUIRE_FALSE(std::is_convertible_v<mir::ParentLocalTranslation, mir::WorldOffset>);
+    STATIC_REQUIRE_FALSE(std::is_convertible_v<mir::TerrainLocalPosition, mir::WorldPosition>);
+    STATIC_REQUIRE_FALSE(std::is_convertible_v<glm::dvec3, mir::WorldPosition>);
+
+    // MIR_LARGE_WORLD picks the world scalar; terrain-local stays double in either build
+    STATIC_REQUIRE(std::is_same_v<mir::WorldReal, double> == mir::kLargeWorld);
+    STATIC_REQUIRE(sizeof(mir::WorldVec3) == 3 * sizeof(mir::WorldReal));
+    STATIC_REQUIRE(std::is_same_v<mir::WorldPosition::Vec, mir::WorldVec3>);
+    STATIC_REQUIRE(std::is_same_v<mir::TerrainLocalPosition::Vec, glm::dvec3>);
+
+    const mir::WorldPosition origin;
+    CHECK(origin.Meters() == mir::WorldVec3(0.0));
+}
+
+TEST_CASE("Near-origin world subtraction and renderer conversion", "[core][lwc]")
+{
+    const auto camera = mir::WorldPosition::FromMeters({-2.5, 4.0, 3.75});
+    const auto offset = mir::WorldOffset::FromMeters({0.125, -0.0625, 0.25});
+    REQUIRE(camera);
+    REQUIRE(offset);
+
+    const auto point = mir::TryTranslateWorld(*camera, *offset);
+    REQUIRE(point);
+    const auto recovered = mir::TryWorldDifference(*point, *camera);
+    REQUIRE(recovered);
+    CHECK(recovered->Meters() == offset->Meters());
+
+    const auto rendererLocal = mir::TryCameraRelativeFloat(*point, *camera);
+    REQUIRE(rendererLocal);
+    CHECK(*rendererLocal == glm::vec3(0.125f, -0.0625f, 0.25f));
+}
+
+TEST_CASE("Map-edge small displacements survive before float narrowing", "[core][lwc]")
+{
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
+    struct Case
+    {
+        glm::dvec3 camera;
+        glm::dvec3 displacement;
+    };
+    const Case cases[] = {
+        {{75000.25, 125.0, -75000.5}, {0.001, -0.002, 0.003}},
+        {{-150000.125, -20.0, 150000.625}, {-0.001, 0.002, -0.003}},
+    };
+
+    for (const Case &test : cases)
+    {
+        const auto camera = mir::WorldPosition::FromDoubleMeters(test.camera);
+        const auto displacement = mir::WorldOffset::FromDoubleMeters(test.displacement);
+        REQUIRE(camera);
+        REQUIRE(displacement);
+
+        const auto point = mir::TryTranslateWorld(*camera, *displacement);
+        REQUIRE(point);
+        const auto recovered = mir::TryWorldDifference(*point, *camera);
+        REQUIRE(recovered);
+
+        const double doubleBudget = DoubleErrorBudget(
+            std::max(std::abs(test.camera.x), std::abs(test.camera.z)));
+        CheckNear(glm::dvec3(recovered->Meters()), test.displacement, doubleBudget);
+
+        const auto rendererLocal = mir::TryCameraRelativeFloat(*point, *camera);
+        REQUIRE(rendererLocal);
+        const double floatBudget = doubleBudget +
+            std::numeric_limits<float>::epsilon() *
+                std::max({std::abs(test.displacement.x),
+                          std::abs(test.displacement.y),
+                          std::abs(test.displacement.z)});
+        CheckNear(glm::dvec3(*rendererLocal), test.displacement, floatBudget);
+
+        const glm::vec3 prematurelyNarrowed =
+            glm::vec3(point->Meters()) - glm::vec3(camera->Meters());
+        CHECK(prematurelyNarrowed.x == 0.0f);
+
+        const glm::dvec3 error = glm::abs(glm::dvec3(recovered->Meters()) - test.displacement);
+        const glm::dvec3 rendererError = glm::abs(glm::dvec3(*rendererLocal) - test.displacement);
+        std::cout << std::setprecision(17)
+                  << "LWC camera=(" << test.camera.x << ", " << test.camera.y << ", " << test.camera.z
+                  << ") displacement=(" << test.displacement.x << ", " << test.displacement.y << ", " << test.displacement.z
+                  << ") double_abs_error_m=(" << error.x << ", " << error.y << ", " << error.z
+                  << ") renderer_abs_error_m=(" << rendererError.x << ", " << rendererError.y << ", " << rendererError.z
+                  << ")\n";
+    }
+}
+
+TEST_CASE("Camera-relative result belongs to its viewport camera", "[core][lwc]")
+{
+    const auto point = mir::WorldPosition::FromMeters({150000.125, 12.0, -75000.5});
+    const auto firstCamera = mir::WorldPosition::FromMeters({150000.0, 12.0, -75000.5});
+    const auto secondCamera = mir::WorldPosition::FromMeters({149990.0, 12.0, -75000.5});
+    REQUIRE(point);
+    REQUIRE(firstCamera);
+    REQUIRE(secondCamera);
+
+    const auto first = mir::TryCameraRelativeFloat(*point, *firstCamera);
+    const auto second = mir::TryCameraRelativeFloat(*point, *secondCamera);
+    REQUIRE(first);
+    REQUIRE(second);
+    CHECK(first->x == 0.125f);
+    CHECK(second->x == 10.125f);
+}
+
+TEST_CASE("Parent-local translation becomes world-axis displacement after linear transform", "[core][lwc]")
+{
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
+    const auto local = mir::ParentLocalTranslation::FromMeters({0.001, 2.0, 3.0});
+    REQUIRE(local);
+
+    mir::WorldMat3 parentLinear(1.0);
+    parentLinear[0] = {0.0, 2.0, 0.0};
+    parentLinear[1] = {-3.0, 0.0, 0.0};
+    const auto worldOffset = mir::TryParentLocalToWorldOffset(parentLinear, *local);
+    REQUIRE(worldOffset);
+    CheckNear(worldOffset->Meters(), {-6.0, 0.002, 3.0}, 1e-15);
+
+    const auto parent = mir::WorldPosition::FromMeters({150000.0, 500.0, -150000.0});
+    REQUIRE(parent);
+    const auto child = mir::TryTranslateWorld(*parent, *worldOffset);
+    REQUIRE(child);
+    const auto recovered = mir::TryWorldDifference(*child, *parent);
+    REQUIRE(recovered);
+    CheckNear(recovered->Meters(), worldOffset->Meters(), DoubleErrorBudget(150000.0));
+}
+
+TEST_CASE("World-axis displacement converts back to a parent-local translation", "[core][lwc]")
+{
+    mir::WorldMat3 parentLinear(1.0);
+    parentLinear[0] = {0.0, 2.0, 0.0};
+    parentLinear[1] = {-3.0, 0.0, 0.0};
+
+    const auto local = mir::ParentLocalTranslation::FromMeters({0.001, 2.0, 3.0});
+    REQUIRE(local);
+    const auto worldOffset = mir::TryParentLocalToWorldOffset(parentLinear, *local);
+    REQUIRE(worldOffset);
+
+    const auto recovered = mir::TryWorldOffsetToParentLocal(parentLinear, *worldOffset);
+    REQUIRE(recovered);
+    CheckNear(recovered->Meters(), local->Meters(), kNearBudget);
+
+    // a zero scale has no inverse
+    mir::WorldMat3 flattened(1.0);
+    flattened[1] = {0.0, 0.0, 0.0};
+    CHECK_FALSE(mir::TryWorldOffsetToParentLocal(flattened, *worldOffset));
+
+    mir::WorldMat3 invalidLinear(1.0);
+    invalidLinear[0][0] = std::numeric_limits<mir::WorldReal>::quiet_NaN();
+    CHECK_FALSE(mir::TryWorldOffsetToParentLocal(invalidLinear, *worldOffset));
+}
+
+TEST_CASE("Translated terrain instance round-trips local coordinates", "[core][lwc]")
+{
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
+    const auto instance = mir::WorldPosition::FromMeters({123456.125, 350.5, -76543.75});
+    const auto local = mir::TerrainLocalPosition::FromMeters({-256.001, 12.375, 512.002});
+    REQUIRE(instance);
+    REQUIRE(local);
+
+    const auto world = mir::TryTerrainLocalToWorld(*local, *instance);
+    REQUIRE(world);
+    const auto recovered = mir::TryWorldToTerrainLocal(*world, *instance);
+    REQUIRE(recovered);
+    CheckNear(recovered->Meters(), local->Meters(), DoubleErrorBudget(123456.125));
+
+    const glm::dvec3 error = glm::abs(recovered->Meters() - local->Meters());
+    std::cout << std::setprecision(17)
+              << "LWC terrain_instance=(" << instance->Meters().x << ", " << instance->Meters().y << ", " << instance->Meters().z
+              << ") local=(" << local->Meters().x << ", " << local->Meters().y << ", " << local->Meters().z
+              << ") roundtrip_abs_error_m=(" << error.x << ", " << error.y << ", " << error.z << ")\n";
+}
+
+TEST_CASE("Invalid coordinates and overflowing conversions fail explicitly", "[core][lwc]")
+{
+    const double infinity = std::numeric_limits<double>::infinity();
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double maxDouble = std::numeric_limits<double>::max();
+    const mir::WorldReal maxWorld = std::numeric_limits<mir::WorldReal>::max();
+    REQUIRE_FALSE(mir::WorldPosition::FromMeters({nan, 0.0, 0.0}));
+    REQUIRE_FALSE(mir::WorldOffset::FromMeters({infinity, 0.0, 0.0}));
+    REQUIRE_FALSE(mir::ParentLocalTranslation::FromMeters({0.0, nan, 0.0}));
+    REQUIRE_FALSE(mir::TerrainLocalPosition::FromMeters({0.0, 0.0, -infinity}));
+
+    const auto large = mir::WorldPosition::FromMeters({maxWorld, 0.0, 0.0});
+    const auto negative = mir::WorldPosition::FromMeters({-maxWorld, 0.0, 0.0});
+    const auto largeOffset = mir::WorldOffset::FromMeters({maxWorld, 0.0, 0.0});
+    const auto largeLocal = mir::TerrainLocalPosition::FromMeters({maxDouble, 0.0, 0.0});
+    REQUIRE(large);
+    REQUIRE(negative);
+    REQUIRE(largeOffset);
+    REQUIRE(largeLocal);
+    CHECK_FALSE(mir::TryTranslateWorld(*large, *largeOffset));
+    CHECK_FALSE(mir::TryWorldDifference(*large, *negative));
+    CHECK_FALSE(mir::TryTerrainLocalToWorld(*largeLocal, *large));
+    // A float build's offsets always fit a float, and its differences a double.
+    if constexpr (mir::kLargeWorld)
+    {
+        CHECK_FALSE(mir::TryCameraRelativeFloat(*large, mir::WorldPosition{}));
+        CHECK_FALSE(mir::TryRendererLocalFloat(*largeOffset));
+        CHECK_FALSE(mir::TryWorldToTerrainLocal(*large, *negative));
+    }
+
+    // a double past float range is refused, not stored as an infinity
+    CHECK(mir::WorldPosition::FromDoubleMeters({maxDouble, 0.0, 0.0}).has_value() == mir::kLargeWorld);
+    CHECK_FALSE(mir::WorldPosition::FromDoubleMeters({nan, 0.0, 0.0}));
+    CHECK(mir::TryWorldVec3FromDouble({1e300, 0.0, 0.0}).has_value() == mir::kLargeWorld);
+    CHECK(mir::TryWorldVec3FromDouble({-2.5, 4.0, 3.75}) == mir::WorldVec3(-2.5, 4.0, 3.75));
+
+    mir::WorldMat3 invalidLinear(1.0);
+    invalidLinear[0][0] = static_cast<mir::WorldReal>(nan);
+    const auto local = mir::ParentLocalTranslation::FromMeters({1.0, 0.0, 0.0});
+    REQUIRE(local);
+    CHECK_FALSE(mir::TryParentLocalToWorldOffset(invalidLinear, *local));
+
+    mir::WorldMat3 overflowingLinear(1.0);
+    overflowingLinear[0][0] = maxWorld;
+    const auto twice = mir::ParentLocalTranslation::FromMeters({2.0, 0.0, 0.0});
+    REQUIRE(twice);
+    CHECK_FALSE(mir::TryParentLocalToWorldOffset(overflowingLinear, *twice));
+
+    const auto bounded = mir::WorldOffset::FromMeters({0.1, std::numeric_limits<double>::denorm_min(), 0.0});
+    REQUIRE(bounded);
+    const auto narrowed = mir::TryRendererLocalFloat(*bounded);
+    REQUIRE(narrowed);
+    CHECK(static_cast<double>(narrowed->x) != 0.1);
+    CHECK(narrowed->y == 0.0f);
+}

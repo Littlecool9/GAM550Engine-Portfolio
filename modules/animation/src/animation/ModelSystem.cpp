@@ -8,12 +8,12 @@
  */
 #include "animation/ModelSystem.h"
 #include <animation/ModelPlayer.h>
+#include <assets/AssetPath.h>
 #include <cmath>
 #include <core/ecs/EngineMode.h>
 #include <core/ecs/World.h>
 #include <core/ecs/components/WorldTransform.h>
 #include <core/log/Log.h>
-#include <filesystem>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <span>
 #include <stdexcept>
@@ -220,11 +220,20 @@ namespace mir
                 alive.insert(packed);
                 if (player.ModelName().empty() && player.ModelAsset().IsNull())
                     return;
-                const auto path =
-                    (std::filesystem::path(mRoot) / player.ModelName()).lexically_normal().generic_string();
+                const AssetPathResult logical = MakeLogicalAssetPath(mRoot, player.ModelName());
+                const std::string path = logical.Ok() ? logical.path : std::string(player.ModelName());
                 AssetId id = player.ModelAsset();
                 if (id.IsNull())
+                {
+                    if (!logical.Ok())
+                    {
+                        if (mFailed.insert(packed).second)
+                            MIR_LOG_ERROR("Model '{}': {}", player.ModelName(), Describe(logical.error));
+                        mRequestedModels[packed] = 0;
+                        return;
+                    }
                     id = MakeAssetId(path);
+                }
                 if (mRequestedModels[packed] != id.value)
                 {
                     mRequestedModels[packed] = id.value;
@@ -283,8 +292,13 @@ namespace mir
                         const auto &node = data.resources.model.nodes[i];
                         if (!visible[i] || node.mesh.IsNull())
                             continue;
-                        const auto world = transform.Matrix() * pose[i].world;
-                        const auto det = glm::determinant(glm::mat3(world));
+                        // The node pose is model-local and bounded; only the
+                        // entity's world position needs world precision.
+                        const auto world = TryComposePose(transform.Pose(), glm::mat3(pose[i].world),
+                                                          glm::vec3(pose[i].world[3]));
+                        if (!world)
+                            continue;
+                        const auto det = glm::determinant(world->linear);
                         if (std::abs(det) < 1e-10f)
                             continue;
                         auto matrices = SkinMatrices(data.resources.model, pose, uint32_t(i));
@@ -294,12 +308,12 @@ namespace mir
                         {
                             mDeformations.push_back(
                                 BuildDeformationData(mesh.primitives[p], pose[i].weights, matrices));
-                            DrawItem item{gpu[p].mesh,
-                                          world,
-                                          glm::inverseTranspose(glm::mat3(world)),
-                                          gpu[p].factor,
-                                          det < 0 ? gpu[p].mirrored : gpu[p].material,
-                                          mDeformations.back()};
+                            WorldDrawItem item{gpu[p].mesh,
+                                               *world,
+                                               glm::inverseTranspose(world->linear),
+                                               gpu[p].factor,
+                                               det < 0 ? gpu[p].mirrored : gpu[p].material,
+                                               mDeformations.back()};
                             item.transparent = gpu[p].transparent;
                             draws.items.push_back(item);
                         }

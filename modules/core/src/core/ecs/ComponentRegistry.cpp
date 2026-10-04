@@ -9,6 +9,7 @@
 
 #include "core/ecs/ComponentRegistry.h"
 
+#include "core/ecs/components/Name.h"
 #include "core/ecs/components/Transform.h"
 #include "core/ecs/components/WorldTransform.h"
 #include "core/log/Assert.h"
@@ -276,5 +277,6 @@ namespace mir
 
         registry.Register<Transform>(kTransformFields);
         registry.Register<WorldTransform>(kWorldTransformFields);
+        registry.Register<Name>(kNameFields);
     }
 }
