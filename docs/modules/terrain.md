@@ -5,7 +5,9 @@ the shared sample grid, finite map bounds, placement in the Scene world, and
 the identities of a terrain's source, baked format and release, and the
 versioned files a baked release is stored in, with a reader that fetches one
 tile by byte range. It does not bake, publish, stream, mesh or collide terrain
-yet; those are later P1 issues and P3.
+yet; those are later P1 issues and P3. Generating heights is offline work: the
+`terrain_bake` library in `tools/TerrainTool/` reads a source recipe and
+produces source heights on this module's grid; the engine never links it.
 
 `mir::terrain` · depends `mir::assets`, `mir::core` (public) · API `modules/terrain/include/terrain/` · maintainer Jackey Cen · reviewed 2026-10-01
 
@@ -112,7 +114,10 @@ source is a new release; a format bump changes the format version, not the
 source fingerprint. The bake mints the release id once, before encoding, with
 `MintTerrainReleaseId(asset, fingerprint, heightsHash, nonce)`; the nonce makes
 two bakes of identical heights distinct. The id is written into the index and
-every pack header, and names the release directory.
+every pack header, and names the release directory. The source fingerprint is
+minted by `FingerprintRecipe` in `tools/TerrainTool/` (#113): `Fnv1a64` of a
+canonical, sorted text of every recipe field, the generator id and version and
+the recipe schema version, so equal recipes match whatever their JSON spelling.
 
 **The files are little-endian and versioned for extension.** Every field is
 written byte by byte. The index header carries a major format
@@ -152,6 +157,12 @@ per read. Nothing here writes a release or the `current` pointer: the bake
 writes encoded bytes itself, and publishing (copy, verify, switch the pointer
 atomically, never delete a release that may be open) belongs to #116.
 
+**Generated heights are a function of the grid position only.** The generator
+(#113) evaluates each sample at `SamplePosition(i)` in double and rounds once to
+float, with no per-tile state, so neighbours share edge and corner samples bit
+for bit and tile order cannot change a sample. Its output is source height, not
+the final height a release stores (#114, #115).
+
 **Terrain-local and world convert only through core.** `AddressWorld` uses
 `TryWorldToTerrainLocal` and the mock places corners with
 `TryTerrainLocalToWorld`, so an overflow is refused instead of turning into an
@@ -169,7 +180,9 @@ decision (#114), which the query service and the mesh consume.
 *As of 2026-10-01.* Layout, addressing, placement, identities, the mock
 source, the release format, its in-memory encoder and the synchronous range
 reader work. Nothing in the engine loads terrain; the module is linked into
-`MjolnirEngine` but has no runtime caller yet.
+`MjolnirEngine` but has no runtime caller yet. Its first non-test caller is the
+offline `terrain_bake` library (#113: recipe, fingerprint, "mir.relief"
+generator), tested by `terrain_tool_tests`.
 
 Tests in `modules/terrain/tests/`: `TerrainLayout` (validation, clipped edge
 tiles, shared edge samples, padding), `TileAddressing` (floor on both sides of
@@ -198,6 +211,11 @@ pointer switch, the committed fixture in `tests/fixtures/releases/`).
    slow, a later major can move tile tables into the packs.
 
 ## Changed
+
+*2026-10-01* — **Source recipe and generator (#113).** `tools/TerrainTool/`
+adds `terrain_bake`: recipe validation that names every bad field, the source
+fingerprint, and a deterministic generator filling tile blocks on this grid.
+No change to the module itself.
 
 *2026-10-01* — **Versioned tile packs and a range reader (#112).** Was: release
 ids and format versions had types but no values, and nothing stored heights.
