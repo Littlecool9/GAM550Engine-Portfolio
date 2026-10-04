@@ -441,14 +441,19 @@ No tests. Everything here needs a device, and the module is verified by running.
    so a frame scales with the number of distinct materials rather than with draw
    count.
 3. **Lighting beyond flat ambient, one Sun, and `kMaxLights` (64) Point/Spot/
-   Area — issue #98 closed the "no per-entity `Light` component" gap, not
-   the rest.** No shadows from any light type - RT's `closestHitMain` now
-   reads the same Point/Spot/Area list `default.slang` does, but neither
-   path traces occlusion, so a light shines through geometry that should
-   block it. Area is Point in a trenchcoat — same range-based falloff, no
-   real rectangular-light integration; its `mAreaSize` is authored and
-   inspectable but nothing reads it yet. `SetAmbientColor` is still the only
-   ambient input; no per-entity control there either.
+   Area.** Sun/Point/Spot now cast real shadows in both pipelines (see
+   Changed) — Area still doesn't, and still doesn't need to: it's Point in a
+   trenchcoat, same range-based falloff, no real rectangular-light
+   integration; its `mAreaSize` is authored and inspectable but nothing reads
+   it yet. `SetAmbientColor` is still the only ambient input; no per-entity
+   control there either. Raster's shadow caps are deliberately small and
+   separately capped per light type — `kMaxSpotShadows` (4) and
+   `kMaxPointShadows` (2), beyond `kMaxLights` itself — since each caster is
+   a real render target and draw pass, not just a buffer slot; a light
+   beyond its cap simply casts no shadow (same "nearest to the primary
+   camera wins" selection as everything else that's capped here). No PCF
+   yet either — single-tap sampling, soft-edge filtering is a documented
+   follow-up, not built.
 4. **Per-config shader output paths.** Release currently ships unoptimised
    shaders, and the debug flags cannot become conditional while both
    configurations write to a path that carries no configuration component.
@@ -468,12 +473,15 @@ No tests. Everything here needs a device, and the module is verified by running.
    one on a timer would get a day/night cycle for free — see Rules). There's
    also no moon/stars, so full night is flat black rather than lit by
    anything but `SetAmbientColor`.
-8. **RT still isn't full parity with raster — issues #55, #80 and #98
-   closed the material-shading, sky, and full-light-list gaps, not the
-   rest.** `kMaxRtInstances` (256) is a fixed cap with no overflow handling
-   beyond silently dropping the rest; the TLAS rebuilds fully every
-   `TraceFrame` call with no dirty-tracking (see the Rules section above -
-   correct, just not efficient); only the two shaders that exist
+8. **RT still isn't full parity with raster.** Shadows are now one gap that's
+   *closed* rather than open (RT's occlusion rays and raster's shadow maps
+   agree on what's lit, by construction - see Changed); what's left:
+   `kMaxRtInstances` (256) is a fixed cap with no overflow handling beyond
+   silently dropping the rest; the TLAS rebuilds fully every `TraceFrame`
+   call with no dirty-tracking (see the Rules section above - correct, just
+   not efficient; shadow occlusion rays add up to `1 + lightingMeta.x` extra
+   `TraceRay` calls per shaded pixel on top of that, bounded by the view's
+   own active light count); only the two shaders that exist
    (`default`/`unlit`) get RT parity, so a third custom material shader
    would trace with whichever of those two `GpuMaterial::mUnlit` happens to
    pick, not its own look; and `TraceFrame` only ever traces `views[0]` - a
@@ -481,6 +489,23 @@ No tests. Everything here needs a device, and the module is verified by running.
    raster/RT, and RT inherits that gap rather than fixing it.
 
 ## Changed
+
+*2026-10-01* — **Sun/Point/Spot cast real shadows, in both pipelines.** Was:
+falloff/cone attenuation but no occlusion test - a light shone straight
+through geometry that should block it (backlog item 3). Now: `GpuLight.color.w`
+(previously-dead padding) holds a CPU-assigned `shadowSlot` (`-1` = unshadowed)
+that both pipelines gate on, so they agree on *what's* shadowed even though
+*how* differs completely. `RenderSystem` ranks Point/Spot by distance to the
+primary camera into `kMaxPointShadows`(2)/`kMaxSpotShadows`(4) slots; Area
+never competes for one. RT fires one occlusion `TraceRay` per shadowed light
+per pixel (reusing the existing hit group, `RAY_FLAG_SKIP_CLOSEST_HIT_SHADER`,
+recursion depth 1→2). Raster renders real shadow maps each frame before the
+main pass: Sun gets one fixed, non-cascaded orthographic map; Spot a
+`Texture2DArray`; Point a distance cube array (each face stores
+`length(worldPos - lightPos)` in a color attachment, not hardware depth, so
+shading samples by direction with no per-face matrices). Cost: up to 17 extra
+raster depth passes/frame worst case (backlog item 3); RT pays up to
+`1 + lightingMeta.x` extra `TraceRay`s/pixel (backlog item 8).
 
 *2026-09-30* — **Depth is reverse-Z, and a lens can have no far plane.** Was:
 `MakeViewProjection(cameraWorld, fov, near, far, aspect)` mapped near to depth 0

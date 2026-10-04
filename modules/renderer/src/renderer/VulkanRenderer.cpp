@@ -65,6 +65,9 @@ namespace mir
         if (!CreateCameraResources())
             return false;
 
+        if (!CreateShadowResources())
+            return false;
+
         if (!CreatePipelineLayout())
             return false;
 
@@ -128,6 +131,7 @@ namespace mir
             DestroyTextures();
             // before mAllocator: frees the camera UBO buffers
             DestroyCameraResources();
+            DestroyShadowResources();
 
             DestroySamplers();
 
