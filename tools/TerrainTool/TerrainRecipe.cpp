@@ -12,6 +12,7 @@
 
 #include <assets/AssetId.h>
 #include <core/fs/FileIO.h>
+#include <terrain/TileHeights.h>
 
 #include <nlohmann/json.hpp>
 
@@ -387,7 +388,7 @@ namespace mir::terrainbake
             spacing.reset();
         }
         const std::optional<int64_t> intervals =
-            layoutReader.Integer("intervalsPerTile", 1, std::numeric_limits<int32_t>::max());
+            layoutReader.Integer("intervalsPerTile", 1, kMaxTerrainTileIntervals);
         const ObjectReader boundsReader = layoutReader.Object("bounds", {"minX", "minZ", "maxX", "maxZ"});
         const std::optional<double> minX = boundsReader.FiniteNumber("minX");
         const std::optional<double> minZ = boundsReader.FiniteNumber("minZ");
