@@ -19,8 +19,8 @@
 
 namespace mir
 {
-    // One Jolt height field holds at most this many a side.
-    inline constexpr uint32_t kMaxTerrainAreaSamplesPerSide = 32768;
+    // The recipe refuses maps past it, so every published release loads.
+    inline constexpr uint32_t kMaxTerrainAreaSamplesPerSide = static_cast<uint32_t>(kMaxTerrainSamplesPerSide);
 
     // P1 collides with one shape over the whole map. Derived and rebuildable.
     struct TerrainAreaSamples
