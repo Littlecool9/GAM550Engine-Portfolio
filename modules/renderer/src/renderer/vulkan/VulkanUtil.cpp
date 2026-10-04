@@ -66,13 +66,6 @@ namespace mir::vk
             &outBuffer, &outAllocation, outInfo) == VK_SUCCESS;
     }
 
-    VkDeviceSize AlignUp(VkDeviceSize size, VkDeviceSize alignment)
-    {
-        if (alignment == 0)
-            return size;
-        return (size + alignment - 1) & ~(alignment - 1);
-    }
-
     VkRect2D ResolveViewRect(const VkRect2D &requested, VkExtent2D swapchainExtent)
     {
         VkRect2D rect = (requested.extent.width > 0 && requested.extent.height > 0)

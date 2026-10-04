@@ -24,8 +24,6 @@ namespace mir::vk
         VmaAllocation &outAllocation,
         VmaAllocationInfo *outInfo);
 
-    VkDeviceSize AlignUp(VkDeviceSize size, VkDeviceSize alignment);
-
     // An empty requested rect means the whole swapchain.
     VkRect2D ResolveViewRect(const VkRect2D &requested, VkExtent2D swapchainExtent);
 

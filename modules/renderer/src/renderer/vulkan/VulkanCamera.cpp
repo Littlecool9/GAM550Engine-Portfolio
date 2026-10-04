@@ -13,6 +13,7 @@
 #include "VulkanUtil.h"
 
 #include <core/log/Log.h>
+#include <core/math/Align.h>
 
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
@@ -60,7 +61,7 @@ namespace mir
     {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(mPhysicalDevice, &props);
-        mCameraAlignedSize = vk::AlignUp(sizeof(CameraData), props.limits.minUniformBufferOffsetAlignment);
+        mCameraAlignedSize = AlignUp(sizeof(CameraData), props.limits.minUniformBufferOffsetAlignment);
 
         VkShaderStageFlags cameraStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         VkShaderStageFlags lightListStages = VK_SHADER_STAGE_FRAGMENT_BIT;

@@ -9,14 +9,14 @@ struct VSOutput
     float3 localPos : TEXCOORD0; // light-relative: the light itself is the origin
 };
 
-struct PushData
+struct ShadowPushConstants
 {
     float4x4 viewProj;
     float4x4 model;
 }
 
 [[vk::push_constant]]
-PushData pushData;
+ShadowPushConstants pushData;
 
 [shader("vertex")]
 VSOutput vertexMain(VSInput input)

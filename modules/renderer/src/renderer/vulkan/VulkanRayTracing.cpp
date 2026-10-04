@@ -12,6 +12,7 @@
 
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
+#include <core/math/Align.h>
 
 #include <vk_mem_alloc.h>
 #include <imgui.h>
@@ -328,8 +329,8 @@ namespace mir
 
         constexpr uint32_t kGroupCount = 4;
         const uint32_t handleSize = mRtProperties.shaderGroupHandleSize;
-        const uint32_t handleSizeAligned = vk::AlignUp(handleSize, mRtProperties.shaderGroupHandleAlignment);
-        const VkDeviceSize regionSize = vk::AlignUp(handleSizeAligned, mRtProperties.shaderGroupBaseAlignment);
+        const uint32_t handleSizeAligned = AlignUp(handleSize, mRtProperties.shaderGroupHandleAlignment);
+        const VkDeviceSize regionSize = AlignUp(handleSizeAligned, mRtProperties.shaderGroupBaseAlignment);
         const VkDeviceSize sbtSize = regionSize * kGroupCount;
 
         std::vector<std::byte> handles(static_cast<size_t>(handleSize) * kGroupCount);

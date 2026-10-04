@@ -13,6 +13,8 @@
 #include "TypeId.h"
 #include "World.h"
 
+#include "core/math/Align.h"
+
 #include <cstddef>
 #include <cstring>
 #include <utility>
@@ -115,12 +117,6 @@ namespace mir
             uint32_t align;
             uint32_t valueOffset; // bytes from this header to the value
         };
-
-        // alignment is always a power of two, so the mask form is exact
-        static constexpr std::size_t AlignUp(std::size_t n, std::size_t alignment)
-        {
-            return (n + alignment - 1) & ~(alignment - 1);
-        }
 
         template <typename T>
         static void ApplyAdd(World &world, Entity entity, void *payload)
