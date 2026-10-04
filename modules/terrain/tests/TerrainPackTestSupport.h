@@ -38,8 +38,7 @@ namespace mir::test
         return MakeAssetId(logical.path);
     }
 
-    // Exact in float for the index ranges used here; a function of global
-    // indices, so neighbours agree on shared edge samples.
+    // Exact in float here; a function of global indices, so neighbours share edges.
     inline float AnalyticHeight(int64_t i, int64_t k, float salt = 0.0f)
     {
         return static_cast<float>(i * 3 - k * 5) * 0.25f + static_cast<float>((i * k) % 7) * 0.125f + salt;
@@ -80,7 +79,7 @@ namespace mir::test
         return {asset, TerrainSourceFingerprint(source), kTerrainFormatVersion, TerrainReleaseId(release)};
     }
 
-    // 256 m tiles at 4 m with non-aligned bounds: tiles (-2..0, -1..1), every outer tile clipped.
+    // Tiles (-2..0, -1..1), every outer tile clipped.
     inline TerrainLayout EdgeLayout()
     {
         const auto layout = TerrainLayout::CreateFromTileSize(256.0, 4.0, {-300.5, -10.0, 100.25, 260.0});
@@ -123,7 +122,6 @@ namespace mir::test
         return std::move(*read.value);
     }
 
-    // The message is attached to the CHECK that consumes the result.
     inline bool Mentions(const TerrainPackError &error, std::string_view text)
     {
         UNSCOPED_INFO(error.message);
@@ -150,7 +148,7 @@ namespace mir::test
         return v;
     }
 
-    // Recomputes the trailer so a test edit reaches the check it targets.
+    // Recomputes the trailer so an edit reaches the check it targets.
     inline void ResealIndex(std::vector<std::byte> &index)
     {
         const size_t body = index.size() - kTerrainIndexTrailerSize;
@@ -175,7 +173,6 @@ namespace mir::test
         return dir;
     }
 
-    // Writes the release where OpenTerrainRelease looks for it.
     inline std::filesystem::path WriteRelease(const std::filesystem::path &root, const TerrainReleaseInfo &info,
                                               const TerrainEncodedRelease &encoded)
     {

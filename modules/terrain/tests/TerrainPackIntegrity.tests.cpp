@@ -23,7 +23,6 @@ namespace
 {
     using Code = TerrainPackErrorCode;
 
-    // Opens with a replaced index; the open must fail without a handle.
     TerrainPackError OpenError(std::vector<std::byte> index, const TerrainEncodedRelease &encoded)
     {
         TerrainEncodedRelease copy = encoded;
@@ -40,7 +39,7 @@ TEST_CASE("A malformed or corrupt index is refused before any tile is read", "[t
     const AssetId asset = TerrainAsset("terrain/edge.terrain.json");
     const TerrainEncodedRelease encoded = EncodeEdge(asset, 0xE1);
     const uint32_t packCount = 4;
-    // Records in (z, x) order: 3 is tile (-2, 0) and 4 is (-1, 0), both in chunk_-1_0.tpack.
+    // Record 3 is tile (-2, 0), record 4 is (-1, 0); both in chunk_-1_0.tpack.
     const size_t rec3 = TileRecordAt(packCount, 3);
     const size_t rec4 = TileRecordAt(packCount, 4);
 
@@ -245,8 +244,7 @@ TEST_CASE("A corrupt, truncated or missing pack fails only the tiles it holds", 
     }
     SECTION("pack header names another release")
     {
-        // Same heights, so payloads match; only the pack header differs. Point
-        // the index's pack checksum at it so the header check is what fails.
+            // Same payloads; point the pack checksum at the other header so the header check fails.
         const TerrainEncodedRelease other = EncodeEdge(asset, 0xE2);
         std::vector<std::byte> index = encoded.index;
         StoreU64(index, kTerrainIndexHeaderSize + 2 * kTerrainPackRecordSize + 24,

@@ -1,7 +1,7 @@
 /**
  * @file TerrainPackFormat.cpp
  * @author Jackey Cen
- * @brief Versioned terrain release index and tile pack format: records, parsing and payload decoding.
+ * @brief Terrain release index and tile pack format: records, parsing and decoding.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -104,7 +104,7 @@ namespace mir
                                     "{} bytes cannot hold a {}-byte header and the checksum (truncated?)",
                                     bytes.size(), h.headerSize);
 
-            // Checked before any table is read, so a torn or edited index never yields records.
+            // Checked before any table is read, so an edited index never yields records.
             const size_t body = bytes.size() - kTerrainIndexTrailerSize;
             const uint64_t stored = LoadU64(bytes, body);
             const uint64_t actual = Fnv1a64(bytes.first(body));
@@ -192,7 +192,6 @@ namespace mir
             return r;
         }
 
-        // Everything a single record can get wrong on its own.
         TerrainPackError CheckTileRecord(const Header &h, const TerrainLayout &layout,
                                          std::span<const TerrainPackRecord> packs, const TerrainTileRecord &r)
         {

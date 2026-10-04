@@ -27,8 +27,7 @@ namespace
         return *layout;
     }
 
-    // The committed fixture: 2 m samples, 4 intervals (5 x 5 per tile), tiles
-    // (-2..1, -1..0) with clipped edges, two tiles per pack.
+    // The committed fixture: 2 m samples, n = 4, tiles (-2..1, -1..0), two tiles per pack.
     struct Fixture
     {
         AssetId asset = TerrainAsset("terrain/fixture.terrain.json");
@@ -161,7 +160,6 @@ TEST_CASE("A release opened before the pointer moves keeps reading its own files
     }
     CHECK(a.VerifyAllPacks().code == Code::None);
 
-    // A copy of the handle is the same release, not a new lookup.
     const TerrainReleaseHandle copy = a;
     CHECK(copy.Info().release == infoA.release);
     CHECK(ReadOk(copy, {-2, -1}) == tilesA[0]);

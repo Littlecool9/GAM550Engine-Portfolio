@@ -22,8 +22,7 @@ namespace
 {
     using Code = TerrainPackErrorCode;
 
-    // 256 m tiles at 4 m (65 x 65 samples). Tiles (-2..-1, -2..-1) all fall in
-    // chunk (-1, -1), so the default 16-tile chunk gives one four-tile pack.
+    // 256 m tiles at 4 m; tiles (-2..-1, -2..-1) all fall in chunk (-1, -1).
     TerrainLayout PrototypeLayout()
     {
         const auto layout = TerrainLayout::CreateFromTileSize(256.0, 4.0, {-512.0, -512.0, 0.0, 0.0});
@@ -77,7 +76,6 @@ TEST_CASE("Reading one tile of a multi-tile pack touches only its recorded range
     const TerrainEncodedRelease encoded = Encode(Info(asset, 0xA1), layout, BuildTiles(layout));
 
     auto [source, handle] = OpenInMemory(encoded);
-    // Opening reads the index once, whole.
     CHECK(source->Stats().reads == 1);
     CHECK(source->Stats().bytes == encoded.index.size());
 
@@ -164,7 +162,6 @@ TEST_CASE("Tile addresses and the heights hash do not depend on chunk size or al
     CHECK(paged.packs.size() == 4);
     CHECK(perTile.heightsHash == paged.heightsHash);
 
-    // Input order does not matter either.
     std::vector<TileHeights> reversed(tiles.rbegin(), tiles.rend());
     CHECK(TerrainHeightsHash(reversed) == perTile.heightsHash);
 
@@ -235,8 +232,7 @@ TEST_CASE("A newer minor with longer header, records and an extension section st
     const uint32_t packCount = 4;
     const uint32_t tileCount = 9;
 
-    // Format 1.1 as a future writer might produce it: 16 more header bytes, 8
-    // more per record, and an unknown section before the trailer.
+    // Format 1.1: a longer header and records, and an unknown section before the trailer.
     std::vector<std::byte> v11(v10.begin(), v10.begin() + kTerrainIndexHeaderSize);
     v11.insert(v11.end(), 16, std::byte{0xAB});
     StoreU32(v11, 8, 1);

@@ -1,7 +1,7 @@
 /**
  * @file TileHeights.h
  * @author Jackey Cen
- * @brief One tile's final float32 height samples, the block every terrain consumer shares.
+ * @brief One tile's final float32 height samples, shared by every terrain consumer.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -17,20 +17,16 @@
 
 namespace mir
 {
-    // Caps one block at 4097^2 samples (about 64 MiB) so a corrupt record cannot ask for more.
+    // 4097^2 samples (64 MiB): caps what a corrupt record can ask for.
     inline constexpr int32_t kMaxTerrainTileIntervals = 4096;
 
-    // (n + 1)^2 terrain-local heights in meters, row-major with x fastest:
-    // sample (i, k) of the layout is at (k - k0) * (n + 1) + (i - i0), where
-    // i0 = TileFirstSample(tile.x) and k0 = TileFirstSample(tile.z). Shared edge
-    // samples are stored in both neighbours, and padding samples like any other.
+    // (n + 1)^2 heights in meters, x fastest. Edge samples are stored in both neighbours.
     class TileHeights
     {
     public:
-        // Zero-filled; nullopt unless 1 <= n <= kMaxTerrainTileIntervals.
+    // Zero-filled.
         [[nodiscard]] static std::optional<TileHeights> Create(TileCoord tile, int32_t intervalsPerTile);
 
-        // Nullopt unless there are exactly (n + 1)^2 samples.
         [[nodiscard]] static std::optional<TileHeights> Create(TileCoord tile, int32_t intervalsPerTile,
                                                                std::vector<float> samples);
 
@@ -41,7 +37,7 @@ namespace mir
         std::span<const float> Samples() const { return mSamples; }
         std::span<float> Samples() { return mSamples; }
 
-        // Tile-local indices, 0..n on each axis.
+    // 0..n on each axis.
         float At(int32_t i, int32_t k) const;
         void Set(int32_t i, int32_t k, float height);
 

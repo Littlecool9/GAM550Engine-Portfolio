@@ -1,7 +1,7 @@
 /**
  * @file TerrainRelease.cpp
  * @author Jackey Cen
- * @brief Opening one immutable terrain release and reading single tiles from it by byte range.
+ * @brief Opens one immutable terrain release and reads tiles from it by byte range.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -37,7 +37,7 @@ namespace mir
             return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
         }
 
-        // Checks one whole pack's header against its index record; payloads are checked by the caller.
+        // Payloads are checked by the caller.
         TerrainPackError CheckPackHeader(const TerrainIndex &index, const TerrainPackRecord &record,
                                          std::span<const std::byte> bytes, uint32_t &headerSize)
         {
@@ -238,7 +238,6 @@ namespace mir
         if (!opened)
             return opened;
 
-        // The directory name is the identity a caller asked for; the index must agree.
         const TerrainReleaseInfo &info = opened.value->Info();
         if (info.asset != asset || info.release != release)
             return Fail<TerrainReleaseHandle>(Code::WrongIdentity,

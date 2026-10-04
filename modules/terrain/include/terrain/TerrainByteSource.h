@@ -1,7 +1,7 @@
 /**
  * @file TerrainByteSource.h
  * @author Jackey Cen
- * @brief Where one release's files are read from: a directory on disk or memory, with read counters.
+ * @brief Reads one release's files from disk or memory, with read counters.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -29,8 +29,7 @@ namespace mir
         uint64_t bytes = 0;
     };
 
-    // Files are named relative to one release directory. Every read is
-    // counted, so a caller can prove a lookup touched only its tile's range.
+    // File names are relative to one release directory. Every read is counted.
     class TerrainByteSource
     {
     public:
@@ -45,7 +44,6 @@ namespace mir
         TerrainByteStats Stats() const;
         void ResetStats();
 
-        // Where the files live, for diagnostics.
         virtual std::string Describe() const = 0;
 
     protected:
@@ -61,7 +59,6 @@ namespace mir
         mutable std::atomic<uint64_t> mBytes{0};
     };
 
-    // Reads through core FileIO, which logs a missing file or a short read.
     // Opens a file per read and keeps nothing open.
     class TerrainFileSource final : public TerrainByteSource
     {
@@ -81,8 +78,7 @@ namespace mir
         std::filesystem::path mDirectory;
     };
 
-    // Files held in memory, for tests and preloaded fixtures. Logs every
-    // request so a test can check the exact range a lookup asked for.
+    // Logs every request so a test can check the exact range read.
     class TerrainMemorySource final : public TerrainByteSource
     {
     public:

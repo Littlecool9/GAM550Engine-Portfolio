@@ -16,7 +16,7 @@
 
 namespace mir::detail
 {
-    // Byte by byte, so the files are the same on any host order.
+    // Byte by byte, independent of host order.
     class LeWriter
     {
     public:
@@ -51,7 +51,7 @@ namespace mir::detail
         std::vector<std::byte> &mOut;
     };
 
-    // Callers bounds-check the whole structure first; these index the span.
+    // Unchecked: callers bounds-check the whole structure first.
     inline uint32_t LoadU32(std::span<const std::byte> b, size_t at)
     {
         uint32_t v = 0;

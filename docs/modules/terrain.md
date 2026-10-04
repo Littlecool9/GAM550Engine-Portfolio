@@ -123,6 +123,20 @@ readers skip what they do not know. Anything an old reader cannot safely skip
 bumps the major. The tile payload has its own content version (1: raw float32),
 so a new payload encoding does not touch the container.
 
+Byte offsets of format 1.0. All sizes are multiples of 8, and every payload
+offset is a multiple of the index's `payloadAlignment`.
+
+| Block | Size | Fields (offset type name) |
+|---|---|---|
+| Index header | 120 | 0 `"MJTI"`, 4 u32 format, 8 u32 minor, 12 u32 headerSize, 16 u32 contentVersion, 20 u32 payloadAlignment, 24 u64 asset, 32 u64 release, 40 u64 sourceFingerprint, 48 f64 spacing, 56 i32 intervalsPerTile, 60 i32 chunkTiles, 64 f64 minX, 72 minZ, 80 maxX, 88 maxZ, 96 u32 packCount, 100 u32 packRecordSize, 104 u32 tileCount, 108 u32 tileRecordSize, 112 u64 heightsHash |
+| Pack record | 32 | 0 i32 chunkX, 4 i32 chunkZ, 8 u32 tileCount, 12 u32 zero, 16 u64 fileSize, 24 u64 file checksum |
+| Tile record | 88 | 0 i32 tileX, 4 i32 tileZ, 8 u32 pack, 12 u32 samplesPerSide, 16 u64 offset, 24 u64 length, 32 u64 payload checksum, 40 f64 spacing, 48 f32 minHeight, 52 f32 maxHeight, 56 f64 valid minX, 64 minZ, 72 maxX, 80 maxZ |
+| Pack header | 48 | 0 `"MJTP"`, 4 u32 format, 8 u32 minor, 12 u32 headerSize, 16 u64 asset, 24 u64 release, 32 i32 chunkX, 36 i32 chunkZ, 40 u32 tileCount, 44 u32 contentVersion |
+
+The index is the header, `packCount` pack records, `tileCount` tile records,
+optional extension bytes, and a u64 `Fnv1a64` trailer over every byte before
+it. A pack is its header followed by the payloads.
+
 **A damaged release never yields samples.** Opening parses and cross-checks the
 whole index: magic, versions, checksum, sizes, a record for every layout tile
 exactly once in (z, x) order, the chunk each tile belongs to, aligned offsets

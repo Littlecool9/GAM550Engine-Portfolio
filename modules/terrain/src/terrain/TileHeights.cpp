@@ -1,7 +1,7 @@
 /**
  * @file TileHeights.cpp
  * @author Jackey Cen
- * @brief One tile's final float32 height samples, the block every terrain consumer shares.
+ * @brief One tile's final float32 height samples, shared by every terrain consumer.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *

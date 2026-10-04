@@ -132,7 +132,6 @@ namespace mir
                 return Fail<R>(Code::InvalidInput, "tile {} is missing", Describe(expected));
         }
 
-        // Record order is (z, x); a map keyed (z, x) gives packs the same order.
         std::map<std::pair<int32_t, int32_t>, std::vector<uint32_t>> chunks;
         for (uint32_t t = 0; t < sorted.size(); ++t)
         {

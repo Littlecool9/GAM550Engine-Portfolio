@@ -25,8 +25,7 @@ namespace mir
     // first count amount of bytes of file
     std::optional<std::vector<std::byte>> ReadFirstBytes(const std::filesystem::path &path, std::size_t count);
 
-    // Exactly [offset, offset + length) without reading the rest; logs and fails if
-    // the file is missing, the range ends past the file or the end overflows.
+    // Reads only [offset, offset + length); logs and fails if the range runs past the file.
     std::optional<std::vector<std::byte>> ReadByteRange(const std::filesystem::path &path, std::uint64_t offset,
                                                         std::size_t length);
 

@@ -1,7 +1,7 @@
 /**
  * @file TerrainByteSource.cpp
  * @author Jackey Cen
- * @brief Where one release's files are read from: a directory on disk or memory, with read counters.
+ * @brief Reads one release's files from disk or memory, with read counters.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
