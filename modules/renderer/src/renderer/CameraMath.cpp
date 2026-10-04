@@ -142,7 +142,7 @@ namespace mir
 
         glm::mat4 proj{ 0.0f };
         proj[0][0] = focal; // aspect is always 1: every shadow face is square
-        proj[1][1] = -focal; // glm is Y up, Vulkan clip space is Y down
+        proj[1][1] = focal;
         proj[2][3] = -1.0f;  // clip w is the view depth
         // Forward Z (0=nearZ, 1=farZ)
         proj[2][2] = -farZ / (farZ - nearZ);
