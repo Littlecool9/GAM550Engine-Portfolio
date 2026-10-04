@@ -15,6 +15,9 @@
 
 namespace mir
 {
+    // P1 collides with one Jolt height field over the whole map, which holds at most this many samples a side.
+    inline constexpr int64_t kMaxTerrainSamplesPerSide = 32768;
+
     // Closed rectangle in terrain-local meters. Any finite values, including
     // negative ones and edges that fall inside a tile or between samples.
     struct TerrainLocalBounds

@@ -412,6 +412,20 @@ namespace mir::terrainbake
             if (!layout)
                 checker.Add("layout", "refused by TerrainLayout::Create: sample indices reach 2^53, tile indices "
                                       "leave int32, or the spacing is below 2^16 ulps of the largest coordinate");
+            else
+            {
+                // Counted over whole tiles, padding included: what a bake holds, and never fewer than the
+                // height field reads, so a recipe that passes here also loads.
+                const TileRange tiles = layout->Tiles();
+                const int64_t n = layout->IntervalsPerTile();
+                const int64_t samplesX = (int64_t(tiles.max.x) - tiles.min.x + 1) * n + 1;
+                const int64_t samplesZ = (int64_t(tiles.max.z) - tiles.min.z + 1) * n + 1;
+                if (samplesX > kMaxTerrainSamplesPerSide || samplesZ > kMaxTerrainSamplesPerSide)
+                    checker.Add("layout.bounds", std::to_string(samplesX) + " x " + std::to_string(samplesZ) +
+                                                     " tile samples exceed " +
+                                                     std::to_string(kMaxTerrainSamplesPerSide) +
+                                                     " a side, the most one height field holds");
+            }
         }
 
         // An unknown generator has no schema for its parameters.

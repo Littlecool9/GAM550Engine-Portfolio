@@ -8,6 +8,8 @@
  */
 #include <TerrainRecipe.h>
 
+#include <terrain/TileHeights.h>
+
 #include <catch2/catch_test_macros.hpp>
 #include <nlohmann/json.hpp>
 
@@ -265,6 +267,21 @@ TEST_CASE("Malformed documents, non-finite numbers and duplicate keys are report
     Json fine = Example();
     fine["layout"]["sampleSpacing"] = 1.0e-9;
     CHECK(HasIssue(Parse(fine), "layout", "TerrainLayout::Create"));
+
+    // Past this a tile block would exceed TileHeights' limit.
+    Json wide = Example();
+    wide["layout"]["intervalsPerTile"] = kMaxTerrainTileIntervals + 1;
+    CHECK(HasIssue(Parse(wide), "layout.intervalsPerTile", "out of range [1, 4096]"));
+
+    // 511 tiles of 64 intervals at 1 m are 32705 samples; one more tile is 32769.
+    Json large = Example();
+    large["parameters"]["tilt"] = {{"x", 0.0}, {"z", 0.0}};
+    large["layout"]["sampleSpacing"] = 1.0;
+    large["layout"]["intervalsPerTile"] = 64;
+    large["layout"]["bounds"] = {{"minX", 0.0}, {"minZ", 0.0}, {"maxX", 32704.0}, {"maxZ", 64.0}};
+    Valid(large);
+    large["layout"]["bounds"]["maxX"] = 32704.5;
+    CHECK(HasIssue(Parse(large), "layout.bounds", "32769 x 65 tile samples exceed 32768"));
 
     CHECK(HasIssue(LoadTerrainRecipe(std::string(TERRAIN_FIXTURE_DIR) + "/missing.terrain.json"), "", "cannot read"));
 }
