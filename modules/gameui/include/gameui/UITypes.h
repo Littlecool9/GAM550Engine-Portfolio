@@ -1,7 +1,8 @@
 /**
  * @file UITypes.h
  * @author Quy Dong Ta
- * @brief Value types shared by the game UI: a rect, a color and a style.
+ * @brief Value types shared by the game UI: a rect, a color, a sprite and a
+ *        style.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -9,6 +10,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdint>
 
 namespace mir
 {
@@ -51,6 +53,45 @@ namespace mir
 
     inline constexpr UIColor kUIWhite{1.0f, 1.0f, 1.0f, 1.0f};
 
+    //texture held by UITextures, 0 is no texture
+    struct UITexture
+    {
+        uint32_t mId = 0;
+
+        constexpr bool IsValid() const { return mId != 0; }
+        constexpr bool operator==(const UITexture &) const = default;
+    };
+
+    struct UIEdges
+    {
+        float mLeft = 0.0f;
+        float mTop = 0.0f;
+        float mRight = 0.0f;
+        float mBottom = 0.0f;
+
+        constexpr bool operator==(const UIEdges &) const = default;
+    };
+
+
+    struct UISprite
+    {
+        UITexture mTexture;
+
+
+        float mTextureWidth = 0.0f;
+        float mTextureHeight = 0.0f;
+
+
+        UIRect mSource;
+        UIEdges mSlice;
+
+        constexpr bool IsValid() const
+        {
+            return mTexture.IsValid() && mTextureWidth > 0.0f && mTextureHeight > 0.0f && !mSource.IsEmpty();
+        }
+        constexpr bool operator==(const UISprite &) const = default;
+    };
+
     struct UIStyle
     {
         UIColor mTextColor = kUIWhite;
@@ -58,5 +99,27 @@ namespace mir
         float mPanelRounding = 4.0f;
 
         float mFontSize = 0.0f;
+
+
+        float mTextHeight = 16.0f;
+
+        UIColor mWidgetColor{0.25f, 0.25f, 0.25f, 0.9f};
+        UIColor mWidgetHoveredColor{0.35f, 0.35f, 0.35f, 0.9f};
+        UIColor mWidgetHeldColor{0.15f, 0.15f, 0.15f, 0.95f};
+        UIColor mDisabledTextColor{0.55f, 0.55f, 0.55f, 1.0f};
+        UIColor mTrackColor{0.1f, 0.1f, 0.1f, 0.9f};
+        UIColor mFillColor{0.3f, 0.6f, 0.9f, 1.0f};
+        UIColor mFocusColor{1.0f, 0.8f, 0.2f, 1.0f};
+        float mWidgetRounding = 3.0f;
+        float mFocusThickness = 2.0f;
+        float mPadding = 8.0f;
+
+        UISprite mPanelSprite;
+        UISprite mWidgetSprite;
+        UISprite mWidgetHoveredSprite;
+        UISprite mWidgetHeldSprite;
+        UISprite mTrackSprite;
+        UISprite mFillSprite;
+        UISprite mFocusSprite;
     };
 } // namespace mir

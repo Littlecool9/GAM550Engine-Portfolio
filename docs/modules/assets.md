@@ -79,10 +79,13 @@ forces a recook instead of a silent mismatch at load.
 
 ## State
 
-*As of 2026-09-06.* Ids, the blob container, the manifest and the cache all work.
+*As of 2026-10-02.* Ids, the blob container, the manifest and the cache all work.
 
-Everything cooks as a raw passthrough blob. The type tag exists, and nothing sets
-it to anything but `kRawAssetTypeTag`.
+`.gltf` and `.glb` cook to typed model payloads, see
+[gltf-importer.md](../gltf-importer.md). A standalone `.png`, `.jpg` or `.jpeg`
+cooks to a `TextureAsset`, decoded to RGBA8, under the id of its own path; an
+image a glTF references is left to that model's import and stays a raw blob.
+Everything else cooks as a raw passthrough blob.
 
 Tests in `modules/assets/tests/`: `AssetBlob`, `AssetCache`, `AssetManifest`,
 `AssetPath`. The cooker side of path identity is checked in
@@ -103,6 +106,14 @@ logical paths for any root spelling").
    at the cost of a file per asset and a registry to keep in sync.
 
 ## Changed
+
+*2026-10-02* — **A standalone image cooks to a `TextureAsset`.** Was: every
+`.png` and `.jpg` outside a glTF import cooked as a raw blob, so the runtime
+would have had to decode it. Now: `AssetCooker` decodes it with the glTF
+importer's decoder, now `tools/AssetCooker/ImageImporter.h`, and writes
+`kTextureAssetTypeTag`. Its id is unchanged, and a corrupt image fails the
+cook. Because `gameui` draws UI textures straight from the cache and reads no
+file itself. See [gameui.md](gameui.md).
 
 *2026-09-30* — **One normalizer for logical paths (#110).** Was: about eight
 call sites in `app`, `animation` and `AssetCooker` joined root and relative path

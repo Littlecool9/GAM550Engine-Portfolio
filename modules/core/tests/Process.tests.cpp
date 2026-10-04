@@ -91,3 +91,9 @@ TEST_CASE("ChildProcess starts on demand and exposes its eventual exit code", "[
     CHECK(*exitCode == 7);
     CHECK_FALSE(child.Running());
 }
+
+TEST_CASE("CurrentProcessId names this process, the same each time", "[core][process]")
+{
+    CHECK(mir::CurrentProcessId() != 0);
+    CHECK(mir::CurrentProcessId() == mir::CurrentProcessId());
+}

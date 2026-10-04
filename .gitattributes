@@ -10,3 +10,5 @@
 *.ico binary
 *.spv binary
 *.ttf binary
+*.tindex binary
+*.tpack binary

@@ -39,6 +39,7 @@ namespace mir
         bool mCancel = false;
         bool mTabLeft = false;
         bool mTabRight = false;
+        bool mPause = false;
     };
 
     UINavInput ReadNavInput(const InputState &input);

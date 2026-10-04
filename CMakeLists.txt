@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.26)
+﻿cmake_minimum_required(VERSION 3.26)
 
 
 option(MIR_LARGE_WORLD "Double-precision world positions and Jolt" ON)
@@ -33,6 +33,11 @@ include(cmake/Fonts.cmake)
 include(cmake/Branding.cmake)
 
 option(BUILD_TESTING "Build unit tests (per module, run via ctest)" ON)
+
+# OFF builds MjolnirEngine as the game alone: editor, editortheme and ImGuizmo
+# are not built, and nothing links engine_editor. The windows-msvc-game-*
+# presets set it.
+option(MJOLNIR_WITH_EDITOR "Build the editor into MjolnirEngine" ON)
 if(BUILD_TESTING)
     enable_testing()
     find_package(Catch2 3 CONFIG REQUIRED)
@@ -41,21 +46,22 @@ if(BUILD_TESTING)
 endif()
 
 add_subdirectory(third_party)
-add_subdirectory(modules/audio)
+add_subdirectory(modules/animation)
 add_subdirectory(modules/app)
 add_subdirectory(modules/assets)
-add_subdirectory(modules/animation)
+add_subdirectory(modules/audio)
 add_subdirectory(modules/core)
 add_subdirectory(modules/editor)
 add_subdirectory(modules/editortheme)
+add_subdirectory(modules/gameshell)
 add_subdirectory(modules/gameui)
 add_subdirectory(modules/imguiruntime)
 add_subdirectory(modules/input)
 add_subdirectory(modules/physics)
 add_subdirectory(modules/renderer)
 add_subdirectory(modules/scene)
-add_subdirectory(modules/serial)
 add_subdirectory(modules/script)
+add_subdirectory(modules/serial)
 add_subdirectory(modules/terrain)
 add_subdirectory(modules/window)
 
@@ -66,10 +72,12 @@ target_sources(MjolnirEngine PRIVATE main.cpp)
 
 # Local development binding used by the editor's one-shot import workflow.
 # It is generated into the build tree and never written into game data.
-file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}" asset_workspace_source_root)
-file(GENERATE
-    OUTPUT "$<TARGET_FILE_DIR:MjolnirEngine>/asset_workspace.json"
-    CONTENT "{\n  \"version\": 1,\n  \"sourceRoot\": \"${asset_workspace_source_root}\",\n  \"assetCooker\": \"$<TARGET_FILE:AssetCooker>\"\n}\n")
+if(MJOLNIR_WITH_EDITOR)
+    file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}" asset_workspace_source_root)
+    file(GENERATE
+        OUTPUT "$<TARGET_FILE_DIR:MjolnirEngine>/asset_workspace.json"
+        CONTENT "{\n  \"version\": 1,\n  \"sourceRoot\": \"${asset_workspace_source_root}\",\n  \"assetCooker\": \"$<TARGET_FILE:AssetCooker>\"\n}\n")
+endif()
 
 if(MSVC)
     set_target_properties(MjolnirEngine PROPERTIES LINK_FLAGS "/ENTRY:mainCRTStartup")
@@ -181,6 +189,7 @@ target_link_libraries(MjolnirEngine PRIVATE
     mir::assets
     mir::audio
     mir::core
+    mir::gameshell
     mir::input
     mir::physics
     mir::scene
@@ -199,6 +208,26 @@ if(BUILD_TESTING)
             LABELS smoke
             TIMEOUT 120)
     endforeach()
+
+    # The game UI demo, which uploads the assets/ui/ art as ImGui textures and
+    # frees it at shutdown
+    if(EXISTS "${CMAKE_SOURCE_DIR}/games/HelloWorld/game.json")
+        add_test(NAME smoke.ui-demo
+            COMMAND MjolnirEngine --game games/HelloWorld --ui-demo --frames 120)
+        set_tests_properties(smoke.ui-demo PROPERTIES
+            LABELS smoke
+            TIMEOUT 120)
+    endif()
+
+    # Game mode: no editor, so the game plays from the first frame, with the
+    # HUD over it and its scripts running
+    if(EXISTS "${CMAKE_SOURCE_DIR}/games/HelloWorld/game.json")
+        add_test(NAME smoke.game-mode
+            COMMAND MjolnirEngine --game games/HelloWorld --no-editor --frames 120)
+        set_tests_properties(smoke.game-mode PROPERTIES
+            LABELS smoke
+            TIMEOUT 120)
+    endif()
 
     # Restarts HelloWorld -> EmptyScene -> HelloWorld, as Open Project does
     if(EXISTS "${CMAKE_SOURCE_DIR}/games/HelloWorld/game.json"

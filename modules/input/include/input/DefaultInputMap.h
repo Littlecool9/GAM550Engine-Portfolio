@@ -23,6 +23,8 @@ namespace mir
     inline constexpr std::string_view kUITabLeftAction = "UITabLeft";
     inline constexpr std::string_view kUITabRightAction = "UITabRight";
 
+    inline constexpr std::string_view kUIPauseAction = "UIPause";
+
     InputMap DefaultInputMap();
 
 

@@ -38,7 +38,10 @@ fields.
 whole-World capture and restore around a Play session, rather than an
 author's save file. `CaptureWorld` builds a throwaway `LoadedScene` covering
 every entity `World::ForEachAliveEntity` finds — not just ones some other
-`LoadedScene` tracks — and saves it to a fixed scratch directory. `RestoreWorld`
+`LoadedScene` tracks — and saves it to a scratch directory in the temp
+directory, named by the process id, so two copies of a game entering Play at
+once (a game build plays from its first frame) do not overwrite each other.
+`DiscardSnapshot` removes it; `App` calls it at shutdown. `RestoreWorld`
 destroys every entity currently alive, then `LoadScene`s that directory back,
 returning the fresh `LoadedScene` identity (new `Entity` handles) for the
 caller to adopt.
@@ -51,7 +54,7 @@ caller to adopt.
 | `LoadedScene` | `scene/SceneAsset.h` | `{mName, std::map<StableId, Entity>, mNextId}` |
 | `NewScene`, `AllocateStableId`, `CreateSceneEntity` | `scene/SceneAsset.h` | Authoring entry points |
 | `SaveScene`, `LoadScene`, `UnloadScene` | `scene/SceneIO.h` | Directory in, directory out, scoped destroy |
-| `PlaySnapshot`, `CaptureWorld`, `RestoreWorld` | `scene/PlaySnapshot.h` | Whole-World capture/restore around a Play session, built on `SaveScene`/`LoadScene` |
+| `PlaySnapshot`, `CaptureWorld`, `RestoreWorld`, `DiscardSnapshot` | `scene/PlaySnapshot.h` | Whole-World capture/restore around a Play session, built on `SaveScene`/`LoadScene`; `DiscardSnapshot` removes its directory |
 
 `CreateSceneEntity` is the one call an editor's "add entity" needs, so allocation
 and registration cannot happen for one without the other.
@@ -132,6 +135,12 @@ converge.
    of sweeping the whole registry per entity.
 
 ## Changed
+
+*2026-10-02* — **The Play snapshot directory is per process.** Was:
+`%TEMP%/mjolnir_play_snapshot`, shared, so game builds started together, which
+all enter Play at launch, failed to write it. Now:
+`mjolnir_play_snapshot_<process id>`, removed by the new `DiscardSnapshot`,
+which `App` calls at shutdown.
 
 *2026-09-18* — **Scene files read and write through `mir::serial`, and a
 malformed one no longer crashes.** Was: `SaveScene` and `LoadScene` used

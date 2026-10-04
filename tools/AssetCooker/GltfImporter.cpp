@@ -7,15 +7,13 @@
  *
  */
 #include "GltfImporter.h"
+#include "ImageImporter.h"
 #include <assets/ModelAsset.h>
 #include <core/log/Log.h>
 #include <fastgltf/core.hpp>
 #include <fastgltf/glm_element_traits.hpp>
 #include <fastgltf/tools.hpp>
 #include <nlohmann/json.hpp>
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_PNG
-#define STBI_ONLY_JPEG
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -23,7 +21,6 @@
 #include <memory>
 #include <numeric>
 #include <set>
-#include <stb_image.h>
 #include <stdexcept>
 
 namespace mir::cook
@@ -393,19 +390,7 @@ namespace mir::cook
             }
             else
                 bytes = BufferBytes(a.images[i].data);
-            Require(bytes.size() <= INT_MAX, "encoded image too large");
-            int w = 0, h = 0, n = 0;
-            Require(stbi_info_from_memory(reinterpret_cast<const stbi_uc *>(bytes.data()),
-                                          static_cast<int>(bytes.size()), &w, &h, &n) != 0 &&
-                        w > 0 && h > 0 && uint64_t(w) * h <= 64 * 1024 * 1024,
-                    "invalid/oversized PNG or JPEG");
-            std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> pixels(
-                stbi_load_from_memory(reinterpret_cast<const stbi_uc *>(bytes.data()), static_cast<int>(bytes.size()),
-                                      &w, &h, &n, 4),
-                stbi_image_free);
-            Require(pixels != nullptr, "image decode failed");
-            TextureAsset tex{
-                static_cast<uint32_t>(w), static_cast<uint32_t>(h), {pixels.get(), pixels.get() + size_t(w) * h * 4}};
+            const TextureAsset tex = DecodeImage(bytes);
             auto id = ids.Id(imageKeys[i]);
             images.push_back(id);
             emit(id, tex, "texture", std::string(a.images[i].name), uint32_t(i));

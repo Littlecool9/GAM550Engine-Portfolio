@@ -76,6 +76,11 @@ Lua source reaches it; no C++ outside this module includes it. The input,
 physics and audio bindings each extend that same `World` usertype rather than
 adding one of their own, and each is registered after `RegisterWorldBindings`.
 
+The input half is `world:is_down/just_pressed/just_released/axis/axis2d` and
+`world:active_device`. Scripts are gameplay, so the action reads go through
+`InputState::ForGame`: every action reads at rest while a game UI screen, such
+as the pause menu, holds the input. See [gameui.md](gameui.md).
+
 The audio half is `world:post_event/stop_event/set_rtpc/set_switch/set_state`.
 All but `set_state` take the entity and reach the `AkGameObject` its
 `AudioEmitter` carries; `set_state` takes none, because a Wwise state is global.
@@ -206,6 +211,10 @@ than something this module or `scene` does.
    flavour underneath.
 
 ## Changed
+
+*2026-10-02* — **Input bindings read `InputState::ForGame`.** Was: `Get`, so a
+script saw every press, including those that navigate an open pause menu. Now:
+at rest while the game UI holds the input. Nothing else changes for a script.
 
 *2026-09-05* — **Asset copying was fixed to run on an asset-only change.** Was: a
 `POST_BUILD` command in `cmake/Assets.cmake` that shared its target's up-to-date

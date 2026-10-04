@@ -27,6 +27,7 @@ namespace mir
         nav.mCancel = input.JustPressed(kUICancelAction);
         nav.mTabLeft = input.JustPressed(kUITabLeftAction);
         nav.mTabRight = input.JustPressed(kUITabRightAction);
+        nav.mPause = input.JustPressed(kUIPauseAction);
         return nav;
     }
 

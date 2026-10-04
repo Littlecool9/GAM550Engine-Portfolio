@@ -118,6 +118,32 @@ TEST_CASE("Active device is Mouse when only mouse input occurs - not stuck on Ke
     REQUIRE(f.state.ActiveDevice() == mir::DeviceKind::Mouse);
 }
 
+TEST_CASE("Active device is Mouse when the cursor moves with no button down", "[input]")
+{
+    Fixture f;
+    f.window.mRaw.gamepads[0].connected = true;
+    f.window.mRaw.gamepads[0].buttons[static_cast<size_t>(mir::GamepadButton::A)] = true;
+    f.Update();
+    REQUIRE(f.state.ActiveDevice() == mir::DeviceKind::Gamepad);
+
+    f.window.mRaw.gamepads[0].buttons[static_cast<size_t>(mir::GamepadButton::A)] = false;
+    f.Update(); // a cursor that has not moved is not mouse input
+    REQUIRE(f.state.ActiveDevice() == mir::DeviceKind::Gamepad);
+
+    f.window.mRaw.mouseX = 10.0;
+    f.Update();
+    REQUIRE(f.state.ActiveDevice() == mir::DeviceKind::Mouse);
+}
+
+TEST_CASE("The cursor's first position is not a move", "[input]")
+{
+    Fixture f;
+    f.window.mRaw.mouseX = 300.0;
+    f.window.mRaw.mouseY = 200.0;
+    f.Update();
+    REQUIRE(f.state.ActiveDevice() == mir::DeviceKind::Keyboard);
+}
+
 TEST_CASE("Gamepad activity takes priority over keyboard for active device", "[input]")
 {
     Fixture f;

@@ -15,7 +15,7 @@
 
 namespace mir
 {
-    void UIState::BeginFrame(const UIRect &area, const UIPointer &pointer, const UINavInput &nav)
+    void UIState::BeginFrame(const UIRect &area, const UIPointer &pointer, const UINavInput &nav, bool focusVisible)
     {
         mArea = area;
 
@@ -30,13 +30,19 @@ namespace mir
         mConfirm = nav.mConfirm && !pointer.mDown && !mDown;
         mNavDirection = mNavStepper.Step(nav);
 
+        mRevealFocus = focusVisible && !mFocusVisible;
+        mFocusVisible = focusVisible;
+        if (mRevealFocus)
+            mConfirm = false;
+
         mPressed = pointer.mDown && !mDown;
         mDown = pointer.mDown;
 
+        mNavAdjusted = false;
         mNextHot = UIId{};
         mActiveSeen = false;
         mDeclared.clear();
-        mFirstEnabled = UIId{};
+        mFirstFocusable = UIId{};
         mCollisions = 0;
     }
 
@@ -52,15 +58,19 @@ namespace mir
 
         mHot = mNextHot;
 
-        if ((mPointerMoved || mPressed) && IsEnabled(mNextHot))
+        if ((mPointerMoved || mPressed) && IsFocusable(mNextHot))
             mFocus = mNextHot;
 
-        if (mNavDirection)
+        if (mNavDirection && !mNavAdjusted)
         {
             if (mDeclared.contains(mFocus.Value()))
-                mFocus = FollowLink(mFocus, *mNavDirection);
-            else if (!mFirstEnabled.IsNull())
-                mFocus = mFirstEnabled;
+            {
+
+                if (!mRevealFocus)
+                    mFocus = FollowLink(mFocus, *mNavDirection);
+            }
+            else if (!mFirstFocusable.IsNull())
+                mFocus = mFirstFocusable;
         }
     }
 
@@ -71,7 +81,8 @@ namespace mir
             return {};
 
         const bool enabled = !options.mHidden && !options.mDisabled;
-        if (!mDeclared.try_emplace(id.Value(), Declared{options.mLinks, enabled}).second)
+        const bool focusable = enabled && !options.mPointerOnly;
+        if (!mDeclared.try_emplace(id.Value(), Declared{options.mLinks, focusable}).second)
         {
             ++mCollisions;
             if (mLoggedCollisions.insert(id.Value()).second)
@@ -80,8 +91,8 @@ namespace mir
                              id.Value());
         }
 
-        if (enabled && mFirstEnabled.IsNull())
-            mFirstEnabled = id;
+        if (focusable && mFirstFocusable.IsNull())
+            mFirstFocusable = id;
 
         const bool over = !options.mHidden && HitTest(rect, clip);
 
@@ -92,7 +103,9 @@ namespace mir
 
         UIInteraction result;
         result.mHovered = over && mHot == id;
-        result.mFocused = mFocus == id;
+
+        result.mFocused = mFocus == id && !options.mPointerOnly;
+        result.mShowFocus = result.mFocused && mFocusVisible;
 
         if (mActive == id)
         {
@@ -104,6 +117,15 @@ namespace mir
 
         if (mConfirm && result.mFocused && enabled)
             result.mClicked = true;
+
+        if (options.mAdjustsX && result.mFocused && enabled && mNavDirection && !mRevealFocus)
+        {
+            if (*mNavDirection == UINavDirection::Left)
+                result.mAdjust = -1;
+            else if (*mNavDirection == UINavDirection::Right)
+                result.mAdjust = 1;
+            mNavAdjusted = mNavAdjusted || result.mAdjust != 0;
+        }
 
         return result;
     }
@@ -122,17 +144,17 @@ namespace mir
             const auto it = mDeclared.find(next.Value());
             if (it == mDeclared.end())
                 return from;
-            if (it->second.mEnabled)
+            if (it->second.mFocusable)
                 return next;
             next = it->second.mLinks[index];
         }
         return from;
     }
 
-    bool UIState::IsEnabled(UIId id) const
+    bool UIState::IsFocusable(UIId id) const
     {
         const auto it = mDeclared.find(id.Value());
-        return it != mDeclared.end() && it->second.mEnabled;
+        return it != mDeclared.end() && it->second.mFocusable;
     }
 
     bool UIState::HitTest(const UIRect &rect, const UIRect &clip) const

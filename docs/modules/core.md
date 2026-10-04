@@ -90,6 +90,7 @@ const ComponentOps &health = ComponentRegistry::Instance().RegisterRuntime("Heal
 | `LaunchProcess`, `QuoteCommandLineArgument` | `platform/Process.h` | Start a process and optionally wait for its exit code; Windows argument quoting |
 | `ExecutableDir`, `ExecutablePath` | `fs/Paths.h` | The running executable's directory and full path |
 | `ReadBytes`, `ReadFirstBytes`, `ReadText` | `fs/FileIO.h` | A whole file, its first N bytes, or its text |
+| `ReadByteRange`, `FileSize` | `fs/FileIO.h` | Exactly one byte range of a file without reading the rest; a regular file's size |
 | `WriteBytes`, `WriteText` | `fs/FileIO.h` | Bytes or text to a path |
 | `WriteBytesAtomic`, `WriteTextAtomic` | `fs/FileIO.h` | The same, through a temp file and a rename |
 | `InitLog`, `FlushLog`, `ShutdownLog` | `log/Log.h` | Logger lifetime; `ShutdownLog` releases the log file for another process |
@@ -223,6 +224,12 @@ because its caller is probing a fixed-size header on a file that may legitimatel
 not exist yet — `AssetCooker` reads 32 bytes to decide whether a cooked blob is
 stale rather than reading the whole asset.
 
+`ReadByteRange` is for files read in pieces, such as terrain tile packs. It
+returns exactly `[offset, offset + length)` or nothing, and logs a missing file,
+a range past the end, or an end that overflows; it never returns a short
+buffer. `FileSize` fails, and logs, for anything that is not a regular file,
+because MSVC's `file_size` reports a size for a directory.
+
 **A failure is logged once, by the layer that knows why.** `FileIO` names the
 path and the reason, so a caller adds a line only for something that layer cannot
 know. `ReadSpirv` logs the word count it rejected but says nothing about a file it
@@ -289,6 +296,11 @@ hooks, and row migration when a script component's layout changes.
    `World::AddComponent` directly, rather than it being convention.
 
 ## Changed
+
+*2026-10-01* — **`ReadByteRange` and `FileSize` added.** Was: a file could be
+read whole or by its first N bytes only. Now: one exact byte range and a file's
+size, so the terrain release reader (#112) fetches one tile from a pack without
+reading the pack, still through the one file-byte layer.
 
 *2026-09-18* — **`fs/FileIO.h` added; `core` owns file bytes.** Was: the byte
 primitives lived in `assets/AssetFileIo.h`, so `input` and `renderer` linked

@@ -21,28 +21,29 @@ namespace mir
 {
     namespace
     {
+
         bool WorldIsActionDown(World &world, std::string_view action)
         {
             const InputState *state = world.TryResource<InputState>();
-            return state != nullptr && state->IsDown(action);
+            return state != nullptr && state->ForGame(action).down;
         }
 
         bool WorldJustPressed(World &world, std::string_view action)
         {
             const InputState *state = world.TryResource<InputState>();
-            return state != nullptr && state->JustPressed(action);
+            return state != nullptr && state->ForGame(action).justPressed;
         }
 
         bool WorldJustReleased(World &world, std::string_view action)
         {
             const InputState *state = world.TryResource<InputState>();
-            return state != nullptr && state->JustReleased(action);
+            return state != nullptr && state->ForGame(action).justReleased;
         }
 
         float WorldActionAxis(World &world, std::string_view action)
         {
             const InputState *state = world.TryResource<InputState>();
-            return state != nullptr ? state->Axis(action) : 0.0f;
+            return state != nullptr ? state->ForGame(action).x : 0.0f;
         }
 
         std::tuple<float, float> WorldActionAxis2D(World &world, std::string_view action)
@@ -51,7 +52,7 @@ namespace mir
             if (state == nullptr)
                 return {0.0f, 0.0f};
 
-            const ActionValue &value = state->Get(action);
+            const ActionValue &value = state->ForGame(action);
             return {value.x, value.y};
         }
 

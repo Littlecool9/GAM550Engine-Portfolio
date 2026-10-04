@@ -1,3 +1,8 @@
+# not part of a build without the editor (MJOLNIR_WITH_EDITOR OFF)
+if(NOT MJOLNIR_WITH_EDITOR)
+    return()
+endif()
+
 engine_add_module(editor)
 
 target_link_libraries(engine_editor

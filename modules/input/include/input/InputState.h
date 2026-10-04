@@ -36,9 +36,6 @@ namespace mir
         };
     }
 
-    // A World resource (see World::EmplaceResource) - one lives on the App's
-    // World, written by InputSystem in SystemPhase::PreUpdate before
-    // ScriptSystem runs, so scripts see this frame's settled state.
     class InputState
     {
     public:
@@ -68,6 +65,21 @@ namespace mir
             mUiCapturesMouse = mouse;
         }
 
+        // Gameplay's read: Get, but every action at rest while a game UI screen
+        // holds the input, such as an open pause menu. gameui decides that
+        // from its own state and writes it at the end of each of its frames.
+        // The game UI goes on reading Get, so the screen holding the input is
+        // still driven by every device. Not SetUiCapture, which drops a
+        // device's bindings for every reader, the game UI's own actions too.
+        const ActionValue &ForGame(std::string_view action) const
+        {
+            static const ActionValue kZero{};
+            return mGameInputHeld ? kZero : Get(action);
+        }
+
+        bool GameInputHeld() const { return mGameInputHeld; }
+        void SetGameInputHeld(bool held) { mGameInputHeld = held; }
+
         // InputSystem-only write access; everyone else reads through Get()/
         // IsDown()/etc above.
         std::unordered_map<std::string, ActionValue, detail::TransparentStringHash, std::equal_to<>> &Actions()
@@ -81,5 +93,6 @@ namespace mir
         DeviceKind mActiveDevice = DeviceKind::Keyboard;
         bool mUiCapturesKeyboard = false;
         bool mUiCapturesMouse = false;
+        bool mGameInputHeld = false;
     };
 }

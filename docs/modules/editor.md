@@ -246,6 +246,11 @@ Open Project asks for, but not the menu or the dialog themselves.
 
 ## Changed
 
+*2026-10-02* — **Optional.** Was: built and linked into every binary. Now: not
+built at all when `MJOLNIR_WITH_EDITOR` is OFF (the `windows-msvc-game-*`
+presets), along with `editortheme` and ImGuizmo; `app` is the only module that
+links it, and only with the option on. See [app.md](app.md#without-the-editor).
+
 *2026-09-30* — **The scene camera has no far plane.** Was: `EditorCamera::mLens`
 kept the default `farZ` of 100 m, so the scene view clipped everything beyond
 it. Now: its `farZ` is 0, which the reverse-Z projection reads as no far plane
