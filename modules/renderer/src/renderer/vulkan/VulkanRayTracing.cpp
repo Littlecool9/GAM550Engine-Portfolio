@@ -149,14 +149,18 @@ namespace mir
     {
         VkShaderModule raygenModule = vk::CreateShaderModule(mDevice, ShaderPath("raytrace.rayGenMain.spv"));
         VkShaderModule missModule = vk::CreateShaderModule(mDevice, ShaderPath("raytrace.missMain.spv"));
+        VkShaderModule shadowMissModule = vk::CreateShaderModule(mDevice, ShaderPath("raytrace.shadowMissMain.spv"));
         VkShaderModule hitModule = vk::CreateShaderModule(mDevice, ShaderPath("raytrace.closestHitMain.spv"));
 
-        if (raygenModule == VK_NULL_HANDLE || missModule == VK_NULL_HANDLE || hitModule == VK_NULL_HANDLE)
+        if (raygenModule == VK_NULL_HANDLE || missModule == VK_NULL_HANDLE ||
+            shadowMissModule == VK_NULL_HANDLE || hitModule == VK_NULL_HANDLE)
         {
             if (raygenModule != VK_NULL_HANDLE)
                 vkDestroyShaderModule(mDevice, raygenModule, nullptr);
             if (missModule != VK_NULL_HANDLE)
                 vkDestroyShaderModule(mDevice, missModule, nullptr);
+            if (shadowMissModule != VK_NULL_HANDLE)
+                vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
             if (hitModule != VK_NULL_HANDLE)
                 vkDestroyShaderModule(mDevice, hitModule, nullptr);
             return false;
@@ -166,7 +170,7 @@ namespace mir
             { .binding = 0,
              .descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
              .descriptorCount = 1,
-             .stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR },
+             .stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR | VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR },
             { .binding = 1,
              .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
              .descriptorCount = 1,
@@ -186,6 +190,7 @@ namespace mir
             MIR_LOG_CRITICAL("CreateRtPipeline: vkCreateDescriptorSetLayout failed");
             vkDestroyShaderModule(mDevice, raygenModule, nullptr);
             vkDestroyShaderModule(mDevice, missModule, nullptr);
+            vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
             vkDestroyShaderModule(mDevice, hitModule, nullptr);
             return false;
         }
@@ -206,6 +211,7 @@ namespace mir
             MIR_LOG_CRITICAL("CreateRtPipeline: vkCreateDescriptorPool failed");
             vkDestroyShaderModule(mDevice, raygenModule, nullptr);
             vkDestroyShaderModule(mDevice, missModule, nullptr);
+            vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
             vkDestroyShaderModule(mDevice, hitModule, nullptr);
             return false;
         }
@@ -223,6 +229,7 @@ namespace mir
                 MIR_LOG_CRITICAL("CreateRtPipeline: descriptor set allocation failed for frame {}", i);
                 vkDestroyShaderModule(mDevice, raygenModule, nullptr);
                 vkDestroyShaderModule(mDevice, missModule, nullptr);
+                vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
                 vkDestroyShaderModule(mDevice, hitModule, nullptr);
                 return false;
             }
@@ -247,11 +254,12 @@ namespace mir
             MIR_LOG_CRITICAL("CreateRtPipeline: vkCreatePipelineLayout failed");
             vkDestroyShaderModule(mDevice, raygenModule, nullptr);
             vkDestroyShaderModule(mDevice, missModule, nullptr);
+            vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
             vkDestroyShaderModule(mDevice, hitModule, nullptr);
             return false;
         }
 
-        const std::array<VkPipelineShaderStageCreateInfo, 3> stages{ {
+        const std::array<VkPipelineShaderStageCreateInfo, 4> stages{ {
             { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
              .stage = VK_SHADER_STAGE_RAYGEN_BIT_KHR,
              .module = raygenModule,
@@ -261,11 +269,15 @@ namespace mir
              .module = missModule,
              .pName = "missMain" },
             { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+             .stage = VK_SHADER_STAGE_MISS_BIT_KHR,
+             .module = shadowMissModule,
+             .pName = "shadowMissMain" },
+            { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
              .stage = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR,
              .module = hitModule,
              .pName = "closestHitMain" } } };
 
-        const std::array<VkRayTracingShaderGroupCreateInfoKHR, 3> groups{ {
+        const std::array<VkRayTracingShaderGroupCreateInfoKHR, 4> groups{ {
             { .sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
              .type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR,
              .generalShader = 0,
@@ -279,9 +291,15 @@ namespace mir
              .anyHitShader = VK_SHADER_UNUSED_KHR,
              .intersectionShader = VK_SHADER_UNUSED_KHR },
             { .sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
+             .type = VK_RAY_TRACING_SHADER_GROUP_TYPE_GENERAL_KHR,
+             .generalShader = 2,
+             .closestHitShader = VK_SHADER_UNUSED_KHR,
+             .anyHitShader = VK_SHADER_UNUSED_KHR,
+             .intersectionShader = VK_SHADER_UNUSED_KHR },
+            { .sType = VK_STRUCTURE_TYPE_RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
              .type = VK_RAY_TRACING_SHADER_GROUP_TYPE_TRIANGLES_HIT_GROUP_KHR,
              .generalShader = VK_SHADER_UNUSED_KHR,
-             .closestHitShader = 2,
+             .closestHitShader = 3,
              .anyHitShader = VK_SHADER_UNUSED_KHR,
              .intersectionShader = VK_SHADER_UNUSED_KHR } } };
 
@@ -291,7 +309,7 @@ namespace mir
             .pStages = stages.data(),
             .groupCount = static_cast<uint32_t>(groups.size()),
             .pGroups = groups.data(),
-            .maxPipelineRayRecursionDepth = 1,
+            .maxPipelineRayRecursionDepth = 2,
             .layout = mRtPipelineLayout };
 
         const VkResult pipelineResult = vkCreateRayTracingPipelinesKHR(
@@ -299,6 +317,7 @@ namespace mir
 
         vkDestroyShaderModule(mDevice, raygenModule, nullptr);
         vkDestroyShaderModule(mDevice, missModule, nullptr);
+        vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
         vkDestroyShaderModule(mDevice, hitModule, nullptr);
 
         if (pipelineResult != VK_SUCCESS)
@@ -307,13 +326,14 @@ namespace mir
             return false;
         }
 
+        constexpr uint32_t kGroupCount = 4;
         const uint32_t handleSize = mRtProperties.shaderGroupHandleSize;
         const uint32_t handleSizeAligned = vk::AlignUp(handleSize, mRtProperties.shaderGroupHandleAlignment);
         const VkDeviceSize regionSize = vk::AlignUp(handleSizeAligned, mRtProperties.shaderGroupBaseAlignment);
-        const VkDeviceSize sbtSize = regionSize * 3;
+        const VkDeviceSize sbtSize = regionSize * kGroupCount;
 
-        std::vector<std::byte> handles(static_cast<size_t>(handleSize) * 3);
-        if (vkGetRayTracingShaderGroupHandlesKHR(mDevice, mRtPipeline, 0, 3,
+        std::vector<std::byte> handles(static_cast<size_t>(handleSize) * kGroupCount);
+        if (vkGetRayTracingShaderGroupHandlesKHR(mDevice, mRtPipeline, 0, kGroupCount,
             handles.size(), handles.data()) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateRtPipeline: vkGetRayTracingShaderGroupHandlesKHR failed");
@@ -340,14 +360,13 @@ namespace mir
         }
 
         std::byte *const sbtMapped = static_cast<std::byte *>(sbtInfo.pMappedData);
-        std::memcpy(sbtMapped + 0 * regionSize, handles.data() + 0 * handleSize, handleSize);
-        std::memcpy(sbtMapped + 1 * regionSize, handles.data() + 1 * handleSize, handleSize);
-        std::memcpy(sbtMapped + 2 * regionSize, handles.data() + 2 * handleSize, handleSize);
+        for (uint32_t i = 0; i < kGroupCount; ++i)
+            std::memcpy(sbtMapped + i * regionSize, handles.data() + i * handleSize, handleSize);
 
         const VkDeviceAddress sbtBase = GetBufferAddress(mDevice, mSbtBuffer);
         mSbtRaygenRegion = { .deviceAddress = sbtBase + 0 * regionSize, .stride = regionSize, .size = regionSize };
-        mSbtMissRegion = { .deviceAddress = sbtBase + 1 * regionSize, .stride = regionSize, .size = regionSize };
-        mSbtHitRegion = { .deviceAddress = sbtBase + 2 * regionSize, .stride = regionSize, .size = regionSize };
+        mSbtMissRegion = { .deviceAddress = sbtBase + 1 * regionSize, .stride = regionSize, .size = 2 * regionSize };
+        mSbtHitRegion = { .deviceAddress = sbtBase + 3 * regionSize, .stride = regionSize, .size = regionSize };
         mSbtCallableRegion = {};
 
         return true;

@@ -96,6 +96,8 @@ namespace mir
         const uint32_t cameraOffset = static_cast<uint32_t>(viewIndex * mCameraAlignedSize);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
             1, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
+            3, 1, &mShadowDescriptorSets[mFrameIndex], 0, nullptr);
 
         VkPipeline boundPipeline = VK_NULL_HANDLE;
         VkDescriptorSet boundDescriptorSet = VK_NULL_HANDLE;
@@ -305,6 +307,7 @@ namespace mir
             .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
 
         vkBeginCommandBuffer(cmd, &beginInfo);
+        RecordShadowPasses(cmd);
         RecordCommands(cmd, imageIndex, views);
         vkEndCommandBuffer(cmd);
 

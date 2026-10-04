@@ -16,6 +16,7 @@
 
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <array>
@@ -41,7 +42,9 @@ namespace mir
             glm::vec4 atmosphereScattering; // xyz = Rayleigh coeff (m^-1), w = Mie coeff (m^-1)
             glm::vec4 atmosphereRadii;      // x = planet radius, y = atmosphere radius, z = Rayleigh scale height, w = Mie scale height (m)
             glm::vec4 atmosphereMisc;       // x = Mie anisotropy g, y = sun intensity
-            glm::vec4 lightingMeta;         // x = this view's Point/Spot/Area count, y = its first index in gLights
+            glm::vec4 lightingMeta;         // x = this view's Point/Spot/Area count, y = its first index in gLights,
+                                            // z = 1 if the Sun casts a shadow, w = this view's first spot shadow matrix
+            glm::mat4 sunShadowViewProj;
         };
 
         // Must match GpuLight in assets/shaders/LightingCommon.slang.
@@ -49,7 +52,7 @@ namespace mir
         {
             glm::vec4 positionAndRange;    // xyz = relative to the view's camera, w = range
             glm::vec4 directionAndSpotCos; // xyz = normalized aim direction, w = cos(half-angle); -1 = no cone
-            glm::vec4 color;               // rgb = color * intensity
+            glm::vec4 color;               // rgb = color * intensity, w = shadowSlot (see LightItem::shadowSlot)
         };
     }
 
@@ -227,6 +230,29 @@ namespace mir
         const uint32_t firstLight = viewIndex * kMaxLights;
         const uint32_t lightCount = WriteViewLights(view, viewIndex);
 
+        glm::mat4 sunShadowViewProjForView{ 1.0f };
+        if (mHasSunShadow)
+        {
+            const glm::vec3 anchorFromView =
+                TryCameraRelativeFloat(mSunShadowAnchor, view.cameraPosition).value_or(glm::vec3(0.0f));
+            sunShadowViewProjForView = mSunShadowViewProj * glm::translate(glm::mat4(1.0f), -anchorFromView);
+        }
+
+        const uint32_t spotShadowBase = viewIndex * kMaxSpotShadows;
+        glm::mat4 *const spotMatrixDst =
+            reinterpret_cast<glm::mat4 *>(mSpotShadowMatrixMapped[mFrameIndex]) + spotShadowBase;
+        for (uint32_t slot = 0; slot < kMaxSpotShadows; ++slot)
+        {
+            const SpotShadowCaster &caster = mSpotShadowCasters[slot];
+            if (!caster.active)
+                continue;
+            const glm::vec3 anchorFromView =
+                TryCameraRelativeFloat(caster.anchor, view.cameraPosition).value_or(glm::vec3(0.0f));
+            spotMatrixDst[slot] = caster.viewProj * glm::translate(glm::mat4(1.0f), -anchorFromView);
+        }
+        vmaFlushAllocation(mAllocator, mSpotShadowMatrixAllocations[mFrameIndex],
+            sizeof(glm::mat4) * spotShadowBase, sizeof(glm::mat4) * kMaxSpotShadows);
+
         const CameraData data{
             .viewProj = view.viewProj,
             .lightDirWS = glm::vec4(mLightDirection, 0.0f),
@@ -241,7 +267,9 @@ namespace mir
             .atmosphereRadii = glm::vec4(mAtmosphere.mPlanetRadiusKm * 1e3f, mAtmosphere.mAtmosphereRadiusKm * 1e3f,
                 mAtmosphere.mRayleighScaleHeightKm * 1e3f, mAtmosphere.mMieScaleHeightKm * 1e3f),
             .atmosphereMisc = glm::vec4(mAtmosphere.mMieG, mAtmosphere.mSunIntensity, 0.0f, 0.0f),
-            .lightingMeta = glm::vec4(static_cast<float>(lightCount), static_cast<float>(firstLight), 0.0f, 0.0f) };
+            .lightingMeta = glm::vec4(static_cast<float>(lightCount), static_cast<float>(firstLight),
+                mHasSunShadow ? 1.0f : 0.0f, static_cast<float>(spotShadowBase)),
+            .sunShadowViewProj = sunShadowViewProjForView };
         const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
 
         std::byte *const dst = mCameraMapped[mFrameIndex] + offset;
@@ -278,7 +306,7 @@ namespace mir
             dst[count++] = GpuLight{
                 .positionAndRange = glm::vec4(*position, light.range),
                 .directionAndSpotCos = glm::vec4(light.direction, light.spotCos),
-                .color = glm::vec4(light.color, 0.0f) };
+                .color = glm::vec4(light.color, static_cast<float>(light.shadowSlot)) };
         }
 
         if (count > 0)

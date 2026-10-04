@@ -92,7 +92,7 @@ namespace mir::vk
         VkImageLayout oldLayout, VkImageLayout newLayout,
         VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
         VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess,
-        uint32_t levelCount)
+        uint32_t levelCount, uint32_t layerCount)
     {
         const VkImageMemoryBarrier2 barrier{
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -108,7 +108,7 @@ namespace mir::vk
             .subresourceRange{
                 .aspectMask = aspectMask,
                 .levelCount = levelCount,
-                .layerCount = 1 } };
+                .layerCount = layerCount } };
 
         const VkDependencyInfo dep{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,

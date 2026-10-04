@@ -80,9 +80,9 @@ namespace mir
             .size = sizeof(vk::RasterPushConstants) };
 
         // set 0 = material (textures), set 1 = per-view camera UBO,
-        // set 2 = per-draw model data.
-        const std::array<VkDescriptorSetLayout, 3> setLayouts{
-            mMaterialSetLayout, mCameraSetLayout, mModelSetLayout };
+        // set 2 = per-draw model data, set 3 = shadow maps.
+        const std::array<VkDescriptorSetLayout, 4> setLayouts{
+            mMaterialSetLayout, mCameraSetLayout, mModelSetLayout, mShadowSetLayout };
 
         const VkPipelineLayoutCreateInfo layoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,

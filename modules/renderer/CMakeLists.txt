@@ -54,6 +54,7 @@ target_sources(engine_renderer PRIVATE
     src/renderer/vulkan/VulkanMaterial.cpp
     src/renderer/vulkan/VulkanMesh.cpp
     src/renderer/vulkan/VulkanRayTracing.cpp
+    src/renderer/vulkan/VulkanShadow.cpp
     src/renderer/vulkan/VulkanSwapchain.cpp
     src/renderer/vulkan/VulkanTexture.cpp
     src/renderer/vulkan/VulkanUtil.cpp

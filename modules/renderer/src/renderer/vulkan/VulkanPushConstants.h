@@ -31,4 +31,11 @@ namespace mir::vk
     {
         glm::uvec2 outputOffset;
     };
+
+    // Shadow depth passes have no camera UBO, so the light's viewProj rides along.
+    struct ShadowPushConstants
+    {
+        glm::mat4 viewProj; // 64
+        glm::mat4 model;    // 64
+    };
 }

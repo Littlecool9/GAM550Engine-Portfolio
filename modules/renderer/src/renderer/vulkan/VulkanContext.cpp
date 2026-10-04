@@ -115,7 +115,8 @@ namespace mir
             return features13.dynamicRendering == VK_TRUE &&
                 features13.synchronization2 == VK_TRUE &&
                 features12.timelineSemaphore == VK_TRUE &&
-                features11.shaderDrawParameters == VK_TRUE;
+                features11.shaderDrawParameters == VK_TRUE &&
+                features.features.imageCubeArray == VK_TRUE;
         }
 
         bool HasRayTracingSupport(VkPhysicalDevice device,
@@ -442,7 +443,8 @@ namespace mir
 
         VkPhysicalDeviceFeatures2 features{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
-            .pNext = mRayTracingSupported ? static_cast<void *>(&accelFeatures) : static_cast<void *>(&features11) };
+            .pNext = mRayTracingSupported ? static_cast<void *>(&accelFeatures) : static_cast<void *>(&features11),
+            .features{ .imageCubeArray = VK_TRUE } };
 
         const VkDeviceCreateInfo deviceInfo{
             .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
