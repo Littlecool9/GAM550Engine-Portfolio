@@ -48,6 +48,12 @@ namespace mir
         Scale,
     };
 
+    enum class GizmoSpace
+    {
+        Local,
+        World,
+    };
+
     struct ProjectMenuEntry
     {
         std::string mDir;
@@ -135,6 +141,7 @@ namespace mir
         bool mOpenConfirmRequested = false;
 
         GizmoOperation mGizmoOperation = GizmoOperation::Translate;
+        GizmoSpace mGizmoSpace = GizmoSpace::Local;
 
         bool mMouseWasDown = false;
 

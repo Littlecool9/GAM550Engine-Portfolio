@@ -61,11 +61,11 @@ namespace mir
 
         void DecomposeRotationScale(const glm::mat3 &linear, glm::quat &rotation, glm::vec3 &scale)
         {
-            scale = {glm::length(linear[0]), glm::length(linear[1]), glm::length(linear[2])};
+            scale = { glm::length(linear[0]), glm::length(linear[1]), glm::length(linear[2]) };
 
             const glm::mat3 rotationMatrix(linear[0] / (scale.x != 0.0f ? scale.x : 1.0f),
-                                           linear[1] / (scale.y != 0.0f ? scale.y : 1.0f),
-                                           linear[2] / (scale.z != 0.0f ? scale.z : 1.0f));
+                linear[1] / (scale.y != 0.0f ? scale.y : 1.0f),
+                linear[2] / (scale.z != 0.0f ? scale.z : 1.0f));
             rotation = glm::quat_cast(rotationMatrix);
         }
 
@@ -75,9 +75,9 @@ namespace mir
             float radius = 0.0f;
             for (int i = 0; i < 8; ++i)
             {
-                const glm::vec3 corner{(i & 1) != 0 ? bounds.mLocalMax.x : bounds.mLocalMin.x,
+                const glm::vec3 corner{ (i & 1) != 0 ? bounds.mLocalMax.x : bounds.mLocalMin.x,
                                        (i & 2) != 0 ? bounds.mLocalMax.y : bounds.mLocalMin.y,
-                                       (i & 4) != 0 ? bounds.mLocalMax.z : bounds.mLocalMin.z};
+                                       (i & 4) != 0 ? bounds.mLocalMax.z : bounds.mLocalMin.z };
                 radius = std::max(radius, glm::length(linear * corner));
             }
             return radius;
@@ -348,6 +348,16 @@ namespace mir
         if (mode.mMode != EngineMode::Edit)
             return;
 
+        if (!ImGui::GetIO().WantTextInput && !mWindow->RawInput().IsDown(MouseButton::Right))
+        {
+            if (ImGui::IsKeyPressed(ImGuiKey_W, false))
+                mGizmoOperation = GizmoOperation::Translate;
+            else if (ImGui::IsKeyPressed(ImGuiKey_E, false))
+                mGizmoOperation = GizmoOperation::Rotate;
+            else if (ImGui::IsKeyPressed(ImGuiKey_R, false))
+                mGizmoOperation = GizmoOperation::Scale;
+        }
+
         if (mSceneViewportRect.extent.width == 0 || mSceneViewportRect.extent.height == 0)
             return;
 
@@ -388,6 +398,14 @@ namespace mir
             modeButton("Rotate", GizmoOperation::Rotate);
             ImGui::SameLine();
             modeButton("Scale", GizmoOperation::Scale);
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_Button, EditorTheme::Color(StatusColor::Info, 0.35f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, EditorTheme::Color(StatusColor::Info, 0.5f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, EditorTheme::Color(StatusColor::Info, 0.7f));
+            if (ImGui::Button(mGizmoSpace == GizmoSpace::Local ? "Local" : "Global"))
+                mGizmoSpace = mGizmoSpace == GizmoSpace::Local ? GizmoSpace::World : GizmoSpace::Local;
+            ImGui::PopStyleColor(3);
+            ImGui::SetItemTooltip("Toggle the gizmo between local and world axes");
         }
         ImGui::End();
 
@@ -418,8 +436,9 @@ namespace mir
         ImGuizmo::SetDrawlist(ImGui::GetForegroundDrawList(ImGui::GetMainViewport()));
         ImGuizmo::SetRect(x, y, width, height);
 
+        const ImGuizmo::MODE gizmoMode = mGizmoSpace == GizmoSpace::Local ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
         if (!ImGuizmo::Manipulate(glm::value_ptr(view), glm::value_ptr(proj), ToImGuizmoOperation(mGizmoOperation),
-                                  ImGuizmo::LOCAL, glm::value_ptr(gizmoMatrix)))
+            gizmoMode, glm::value_ptr(gizmoMatrix)))
             return;
 
         // A root composes under the identity at the Scene origin.
