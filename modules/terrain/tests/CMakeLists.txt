@@ -5,6 +5,7 @@ engine_add_module_tests(terrain
     TerrainPackFormat.tests.cpp
     TerrainPackIntegrity.tests.cpp
     TerrainRelease.tests.cpp
+    TerrainSurface.tests.cpp
     TileAddressing.tests.cpp
     TileHeights.tests.cpp
 )

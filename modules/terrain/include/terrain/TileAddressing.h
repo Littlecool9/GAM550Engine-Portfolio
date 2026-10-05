@@ -48,7 +48,7 @@ namespace mir
         bool IsInside() const { return status == TileAddressStatus::Inside; }
     };
 
-    // How heights are interpolated inside a cell is the canonical surface's decision (#114).
+    // Heights inside the cell: EvaluateSurface in terrain/TerrainSurface.h.
     TileAddress AddressLocal(const TerrainLayout &layout, TerrainLocalPosition local);
 
     TileAddress AddressWorld(const TerrainLayout &layout, const TerrainPlacement &placement, WorldPosition world);
