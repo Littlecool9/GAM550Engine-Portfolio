@@ -14,6 +14,7 @@
 #include "vulkan/Device.h"
 #include "vulkan/FrameCapture.h"
 #include "vulkan/FrameSync.h"
+#include "vulkan/ImGuiOverlay.h"
 #include "vulkan/MaterialStore.h"
 #include "vulkan/ModelDescriptors.h"
 #include "vulkan/RayTracer.h"
@@ -26,8 +27,6 @@
 
 #include <core/log/Log.h>
 
-#include <imgui.h>
-#include <imgui_impl_vulkan.h>
 #include <glm/glm.hpp>
 
 #include <algorithm>
@@ -162,15 +161,7 @@ namespace mir
             .pDepthAttachment = &depthAttachment };
 
         vkCmdBeginRendering(cmd, &renderingInfo);
-
-        if (mDevice->ValidationEnabled())
-        {
-            const VkDebugUtilsLabelEXT label{
-                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
-                .pLabelName = "Triangle Pass",
-                .color{ 1.0f, 0.0f, 1.0f, 1.0f } };
-            vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
-        }
+        mDevice->BeginLabel(cmd, "Triangle Pass", { 1.0f, 0.0f, 1.0f, 1.0f });
 
         if (views.size() > vk::kMaxViewsPerFrame)
         {
@@ -182,23 +173,14 @@ namespace mir
         for (size_t i = 0; i < viewCount; ++i)
             RecordView(cmd, views[i], static_cast<uint32_t>(i));
 
-        if (mImguiDrawData != nullptr)
-            ImGui_ImplVulkan_RenderDrawData(mImguiDrawData, cmd);
+        mImGuiOverlay->RecordInPass(cmd);
 
-        if (mDevice->ValidationEnabled())
-            vkCmdEndDebugUtilsLabelEXT(cmd);
-
+        mDevice->EndLabel(cmd);
         vkCmdEndRendering(cmd);
 
         const bool captured = mCapture->Record(cmd, *mSwapchain, imageIndex);
-
-        // give it back
-        vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
-            captured ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-            captured ? VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            captured ? VK_ACCESS_2_TRANSFER_READ_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_NONE, 0);
+        mSwapchain->RecordPresentTransition(cmd, imageIndex,
+            captured ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     }
 
     std::optional<vk::FrameContext> VulkanRenderer::BeginFrame()
@@ -237,14 +219,7 @@ namespace mir
 
         const uint32_t cameraOffset = WriteCameraData(view, 0);
 
-        if (mDevice->ValidationEnabled())
-        {
-            const VkDebugUtilsLabelEXT label{
-                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
-                .pLabelName = "Ray Trace Pass",
-                .color{ 0.0f, 1.0f, 1.0f, 1.0f } };
-            vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
-        }
+        mDevice->BeginLabel(cmd, "Ray Trace Pass", { 0.0f, 1.0f, 1.0f, 1.0f });
 
         mRayTracer->Record(cmd, mFrameSync->Index(), view.items, rect, mCameraBuffer->Set(mFrameSync->Index()),
             cameraOffset, *mResources, *mMaterialStore);
@@ -283,47 +258,11 @@ namespace mir
                 1, &blitRegion, VK_FILTER_NEAREST);
         }
 
-        if (mImguiDrawData != nullptr)
-        {
-            vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+        const VkImageLayout layout =
+            mImGuiOverlay->RecordOver(cmd, *mSwapchain, imageIndex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        mSwapchain->RecordPresentTransition(cmd, imageIndex, layout);
 
-            const VkRenderingAttachmentInfo colorAttachment{
-                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = mSwapchain->View(imageIndex),
-                .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-                .storeOp = VK_ATTACHMENT_STORE_OP_STORE };
-
-            const VkRenderingInfo renderingInfo{
-                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                .renderArea{ .offset{ 0, 0 }, .extent = mSwapchain->Extent() },
-                .layerCount = 1,
-                .colorAttachmentCount = 1,
-                .pColorAttachments = &colorAttachment };
-
-            vkCmdBeginRendering(cmd, &renderingInfo);
-            ImGui_ImplVulkan_RenderDrawData(mImguiDrawData, cmd);
-            vkCmdEndRendering(cmd);
-
-            vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_NONE, 0);
-        }
-        else
-        {
-            vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_NONE, 0);
-        }
-
-        if (mDevice->ValidationEnabled())
-            vkCmdEndDebugUtilsLabelEXT(cmd);
+        mDevice->EndLabel(cmd);
     }
 
     void VulkanRenderer::TraceFrame(std::span<const RenderView> views)

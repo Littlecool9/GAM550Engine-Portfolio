@@ -8,6 +8,7 @@
  */
 #include "Swapchain.h"
 #include "Device.h"
+#include "VulkanUtil.h"
 
 #include <core/platform/Surface.h>
 
@@ -143,6 +144,25 @@ namespace mir::vk
             mOutOfDate = true;
         else if (result != VK_SUCCESS)
             MIR_LOG_ERROR("Present: vkQueuePresentKHR failed: {}", static_cast<int>(result));
+    }
+
+    void Swapchain::RecordPresentTransition(VkCommandBuffer cmd, uint32_t imageIndex, VkImageLayout from) const
+    {
+        VkPipelineStageFlags2 srcStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkAccessFlags2 srcAccess = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        if (from == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+        {
+            srcStage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            srcAccess = VK_ACCESS_2_TRANSFER_READ_BIT;
+        }
+        else if (from == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+        {
+            srcStage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            srcAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        }
+
+        ImageBarrier(cmd, mImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+            from, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, srcStage, srcAccess, VK_PIPELINE_STAGE_2_NONE, 0);
     }
 
     bool Swapchain::Create(const ISurfaceProvider &window)

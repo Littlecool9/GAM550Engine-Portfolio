@@ -582,4 +582,22 @@ namespace mir::vk
 
         vkSetDebugUtilsObjectNameEXT(mDevice, &info);
     }
+
+    void Device::BeginLabel(VkCommandBuffer cmd, const char *name, const float(&color)[4]) const
+    {
+        if (!mValidationEnabled)
+            return;
+
+        const VkDebugUtilsLabelEXT label{
+            .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
+            .pLabelName = name,
+            .color{ color[0], color[1], color[2], color[3] } };
+        vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
+    }
+
+    void Device::EndLabel(VkCommandBuffer cmd) const
+    {
+        if (mValidationEnabled)
+            vkCmdEndDebugUtilsLabelEXT(cmd);
+    }
 }

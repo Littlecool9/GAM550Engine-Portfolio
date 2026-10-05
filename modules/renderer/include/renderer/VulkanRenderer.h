@@ -47,6 +47,7 @@ namespace mir::vk
     class ModelDescriptors;
     class RayTracer;
     class FrameCapture;
+    class ImGuiOverlay;
 }
 
 namespace mir
@@ -127,9 +128,6 @@ namespace mir
         std::span<const DrawItem> items;
     };
 
-    // One camera's worth of draw items, clipped to a screen-space rect.
-    // Render space has world axes and this camera at the origin: viewProj holds
-    // only its rotation, and every item's model is relative to it.
     struct RenderView
     {
         VkRect2D rect{};
@@ -137,9 +135,8 @@ namespace mir
         glm::mat4 viewProj{ 1.0f };
         WorldPosition cameraPosition;
 
-        // The planes viewProj was built with; farZ 0 = no far plane. Ray
-        // tracing has no depth buffer, so it clips its rays to these.
         float nearZ = 0.1f;
+        // farZ 0 = no far plane
         float farZ = 0.0f;
     };
 
@@ -155,7 +152,7 @@ namespace mir
         void ShutdownImGuiVulkanBackend();
 
         // abstraction from imgui
-        void SetImGuiDrawData(ImDrawData *drawData) { mImguiDrawData = drawData; }
+        void SetImGuiDrawData(ImDrawData *drawData);
         MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
 
         bool DestroyMesh(MeshHandle handle);
@@ -254,7 +251,7 @@ namespace mir
 
         std::unique_ptr<vk::FrameCapture> mCapture;
 
-        bool mImGuiBackendInitialized = false;
-        ImDrawData *mImguiDrawData = nullptr;
+        std::unique_ptr<vk::ImGuiOverlay> mImGuiOverlay;
+
     };
 }

@@ -50,6 +50,8 @@ namespace mir::vk
 
         // No-op without validation, so release builds skip the call.
         void NameObject(VkObjectType type, uint64_t handle, const char *name) const;
+        void BeginLabel(VkCommandBuffer cmd, const char *name, const float(&color)[4]) const;
+        void EndLabel(VkCommandBuffer cmd) const;
 
     private:
         bool CreateInstance(const RendererDesc &desc);

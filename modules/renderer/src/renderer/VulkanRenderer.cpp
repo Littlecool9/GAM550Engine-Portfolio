@@ -11,6 +11,7 @@
 #include "vulkan/Device.h"
 #include "vulkan/FrameCapture.h"
 #include "vulkan/FrameSync.h"
+#include "vulkan/ImGuiOverlay.h"
 #include "vulkan/MaterialStore.h"
 #include "vulkan/ModelDescriptors.h"
 #include "vulkan/RayTracer.h"
@@ -32,7 +33,8 @@ namespace mir
         mShadowMaps(std::make_unique<vk::ShadowMaps>()),
         mModelDescriptors(std::make_unique<vk::ModelDescriptors>()),
         mRayTracer(std::make_unique<vk::RayTracer>()),
-        mCapture(std::make_unique<vk::FrameCapture>())
+        mCapture(std::make_unique<vk::FrameCapture>()),
+        mImGuiOverlay(std::make_unique<vk::ImGuiOverlay>())
     {}
     VulkanRenderer::~VulkanRenderer() = default;
 
@@ -225,6 +227,21 @@ namespace mir
 
         for (const TextureHandle handle : textures)
             mResources->DestroyTexture(handle);
+    }
+
+    bool VulkanRenderer::InitImGuiVulkanBackend()
+    {
+        return mImGuiOverlay->Initialize(*mDevice, *mSwapchain);
+    }
+
+    void VulkanRenderer::ShutdownImGuiVulkanBackend()
+    {
+        mImGuiOverlay->Shutdown();
+    }
+
+    void VulkanRenderer::SetImGuiDrawData(ImDrawData *drawData)
+    {
+        mImGuiOverlay->SetDrawData(drawData);
     }
 
     void VulkanRenderer::CaptureNextFrame(const std::filesystem::path &path)

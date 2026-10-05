@@ -46,6 +46,9 @@ namespace mir::vk
         // Waits on RenderComplete(imageIndex).
         void Present(uint32_t imageIndex);
 
+        // The frame's last barrier: hands the image to present from whatever wrote it last.
+        void RecordPresentTransition(VkCommandBuffer cmd, uint32_t imageIndex, VkImageLayout from) const;
+
         VkSwapchainKHR Handle() const { return mSwapchain; }
         VkFormat Format() const { return mFormat; }
         VkExtent2D Extent() const { return mExtent; }
