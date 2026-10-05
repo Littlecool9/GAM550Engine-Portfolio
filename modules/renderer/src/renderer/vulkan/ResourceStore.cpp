@@ -11,6 +11,7 @@
 #endif
 #include "ResourceStore.h"
 #include "Device.h"
+#include "Slots.h"
 #include "VulkanUtil.h"
 
 #include <core/log/Log.h>
@@ -156,7 +157,6 @@ namespace mir::vk
 
         GpuMesh mesh{};
         mesh.mIndexCount = static_cast<uint32_t>(indices.size());
-        mesh.mGeneration = 1;
 
         // Ray tracing reads both buffers through device addresses to build the BLAS.
         VkBufferUsageFlags extraUsage = 0;
@@ -199,20 +199,7 @@ namespace mir::vk
             return kNullMesh;
         }
 
-        uint32_t index;
-        if (!mFreeMeshIndices.empty())
-        {
-            index = mFreeMeshIndices.back();
-            mFreeMeshIndices.pop_back();
-            // DestroyMesh already bumped the slot's generation; keep it.
-            mesh.mGeneration = mMeshes[index].mGeneration;
-            mMeshes[index] = mesh;
-        }
-        else
-        {
-            index = static_cast<uint32_t>(mMeshes.size());
-            mMeshes.push_back(mesh);
-        }
+        const uint32_t index = PlaceSlot(mMeshes, mFreeMeshIndices, mesh);
 
         mDevice->NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mesh.mVertexBuffer),
             std::format("Mesh {} vertices", index).c_str());
@@ -222,7 +209,7 @@ namespace mir::vk
         MIR_LOG_INFO("Mesh {} uploaded: {} vertices, {} indices, {} bytes",
             index, vertices.size(), indices.size(), vertexBytes + indexBytes);
 
-        return MeshHandle{ index, mesh.mGeneration };
+        return MeshHandle{ index, mMeshes[index].mGeneration };
     }
 
     void ResourceStore::FreeMesh(GpuMesh &mesh)
@@ -240,10 +227,7 @@ namespace mir::vk
 
         GpuMesh &mesh = mMeshes[handle.mIndex];
         FreeMesh(mesh);
-
-        const uint32_t nextGeneration = mesh.mGeneration + 1;
-        mesh = GpuMesh{};
-        mesh.mGeneration = nextGeneration; // every outstanding copy of handle is now stale
+        RetireSlot(mesh);
 
         mFreeMeshIndices.push_back(handle.mIndex);
         return true;
@@ -261,15 +245,7 @@ namespace mir::vk
 
     const GpuMesh *ResourceStore::FindMesh(MeshHandle handle) const
     {
-        if (handle.IsNull() || handle.mIndex >= mMeshes.size())
-            return nullptr;
-
-        const GpuMesh &mesh = mMeshes[handle.mIndex];
-
-        if (mesh.mGeneration != handle.mGeneration)
-            return nullptr;
-
-        return &mesh;
+        return FindSlot(mMeshes, handle);
     }
 
     VkSampler ResourceStore::AcquireSampler(const SamplerDesc &desc)
@@ -301,7 +277,7 @@ namespace mir::vk
         VkSampler sampler = VK_NULL_HANDLE;
         if (vkCreateSampler(mDevice->Handle(), &info, nullptr, &sampler) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkCreateSampler failed");
+            MIR_LOG_CRITICAL("AcquireSampler: vkCreateSampler failed");
             return VK_NULL_HANDLE;
         }
 
@@ -351,13 +327,11 @@ namespace mir::vk
             return kNullTexture;
         }
 
-        VkPhysicalDeviceProperties properties{};
-        vkGetPhysicalDeviceProperties(mDevice->Physical(), &properties);
-        if (desc.width > properties.limits.maxImageDimension2D ||
-            desc.height > properties.limits.maxImageDimension2D)
+        const uint32_t maxDimension = mDevice->Properties().limits.maxImageDimension2D;
+        if (desc.width > maxDimension || desc.height > maxDimension)
         {
             MIR_LOG_ERROR("CreateTexture: {}x{} is past this device's maxImageDimension2D of {}",
-                desc.width, desc.height, properties.limits.maxImageDimension2D);
+                desc.width, desc.height, maxDimension);
             return kNullTexture;
         }
 
@@ -475,10 +449,7 @@ namespace mir::vk
 
         GpuTexture &texture = mTextures[handle.mIndex];
         FreeTexture(texture);
-
-        const uint32_t nextGeneration = texture.mGeneration + 1;
-        texture = GpuTexture{};
-        texture.mGeneration = nextGeneration;
+        RetireSlot(texture);
         return true;
     }
 
@@ -495,15 +466,7 @@ namespace mir::vk
 
     const GpuTexture *ResourceStore::FindTexture(TextureHandle handle) const
     {
-        if (handle.IsNull() || handle.mIndex >= mTextures.size())
-            return nullptr;
-
-        const GpuTexture &texture = mTextures[handle.mIndex];
-
-        if (texture.mGeneration != handle.mGeneration)
-            return nullptr;
-
-        return &texture;
+        return FindSlot(mTextures, handle);
     }
 
     void ResourceStore::DestroyTextures()

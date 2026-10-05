@@ -121,7 +121,7 @@ namespace mir::vk
         }
         else if (result != VK_SUCCESS)
         {
-            MIR_LOG_ERROR("vkAcquireNextImageKHR failed: {}", static_cast<int>(result));
+            MIR_LOG_ERROR("Acquire: vkAcquireNextImageKHR failed: {}", static_cast<int>(result));
             return false;
         }
 
@@ -142,7 +142,7 @@ namespace mir::vk
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
             mOutOfDate = true;
         else if (result != VK_SUCCESS)
-            MIR_LOG_ERROR("vkQueuePresentKHR failed: {}", static_cast<int>(result));
+            MIR_LOG_ERROR("Present: vkQueuePresentKHR failed: {}", static_cast<int>(result));
     }
 
     bool Swapchain::Create(const ISurfaceProvider &window)
@@ -158,8 +158,6 @@ namespace mir::vk
         uint32_t imageCount = caps.minImageCount + 1;
         if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount)
             imageCount = caps.maxImageCount;
-
-        VkSwapchainKHR oldSwapchain = mSwapchain;
 
         const VkSwapchainCreateInfoKHR info{
             .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -177,20 +175,14 @@ namespace mir::vk
             .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
             .presentMode = presentMode,
             // Allow the driver to skip shading pixels hidden by other windows.
-            .clipped = VK_TRUE,
-            // reuse old resources
-            .oldSwapchain = oldSwapchain };
+            .clipped = VK_TRUE };
 
         if (vkCreateSwapchainKHR(mDevice->Handle(), &info, nullptr, &mSwapchain) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkCreateSwapchainKHR failed");
+            MIR_LOG_CRITICAL("Create: vkCreateSwapchainKHR failed");
             mSwapchain = VK_NULL_HANDLE;
             return false;
         }
-
-        // Retired, not owned by the new swapchain: destroy it ourselves.
-        if (oldSwapchain != VK_NULL_HANDLE)
-            vkDestroySwapchainKHR(mDevice->Handle(), oldSwapchain, nullptr);
 
         mFormat = surfaceFormat.format;
         mExtent = extent;
@@ -238,7 +230,7 @@ namespace mir::vk
 
             if (vkCreateImageView(mDevice->Handle(), &info, nullptr, &mViews[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("vkCreateImageView failed for swapchain image {}", i);
+                MIR_LOG_CRITICAL("CreateImageViews: vkCreateImageView failed for swapchain image {}", i);
                 return false;
             }
         }
@@ -251,7 +243,7 @@ namespace mir::vk
         vkGetPhysicalDeviceFormatProperties(mDevice->Physical(), kDepthFormat, &formatProps);
         if ((formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) == 0)
         {
-            MIR_LOG_CRITICAL("VK_FORMAT_D32_SFLOAT unsupported as an optimal-tiling depth attachment");
+            MIR_LOG_CRITICAL("CreateDepthResources: VK_FORMAT_D32_SFLOAT unsupported as an optimal-tiling depth attachment");
             return false;
         }
 
@@ -275,7 +267,7 @@ namespace mir::vk
             if (vmaCreateImage(mDevice->Allocator(), &imageInfo, &allocInfo,
                 &mDepthImages[i], &mDepthAllocations[i], nullptr) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("vmaCreateImage failed for depth buffer {}", i);
+                MIR_LOG_CRITICAL("CreateDepthResources: vmaCreateImage failed for depth buffer {}", i);
                 return false;
             }
 
@@ -293,7 +285,7 @@ namespace mir::vk
 
             if (vkCreateImageView(mDevice->Handle(), &viewInfo, nullptr, &mDepthViews[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("vkCreateImageView failed for depth buffer {}", i);
+                MIR_LOG_CRITICAL("CreateDepthResources: vkCreateImageView failed for depth buffer {}", i);
                 return false;
             }
 
@@ -354,7 +346,7 @@ namespace mir::vk
         {
             if (vkCreateSemaphore(mDevice->Handle(), &info, nullptr, &sem) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("render-complete semaphore creation failed");
+                MIR_LOG_CRITICAL("CreateRenderCompleteSemaphores: render-complete semaphore creation failed");
                 return false;
             }
         }

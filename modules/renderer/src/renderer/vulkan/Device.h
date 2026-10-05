@@ -41,6 +41,8 @@ namespace mir::vk
         uint32_t QueueFamily() const { return mQueueFamily; }
         VmaAllocator Allocator() const { return mAllocator; }
 
+        const VkPhysicalDeviceProperties &Properties() const { return mProperties; }
+
         bool RayTracingSupported() const { return mRayTracingSupported; }
         const VkPhysicalDeviceRayTracingPipelinePropertiesKHR &RtProperties() const { return mRtProperties; }
 
@@ -62,6 +64,7 @@ namespace mir::vk
         VkSurfaceKHR mSurface = VK_NULL_HANDLE;
 
         VkPhysicalDevice mPhysical = VK_NULL_HANDLE;
+        VkPhysicalDeviceProperties mProperties{};
         VkDevice mDevice = VK_NULL_HANDLE;
 
         // queue for render + present

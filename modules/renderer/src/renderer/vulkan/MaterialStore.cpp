@@ -9,10 +9,10 @@
 #include "MaterialStore.h"
 #include "Device.h"
 #include "ResourceStore.h"
+#include "Slots.h"
 #include "VulkanUtil.h"
+#include "VulkanConstants.h"
 #include "VulkanPushConstants.h"
-
-#include <renderer/vulkan/VulkanConstants.h>
 
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
@@ -20,6 +20,7 @@
 #include <glm/glm.hpp>
 
 #include <array>
+#include <string>
 #include <string_view>
 
 namespace mir::vk
@@ -35,6 +36,9 @@ namespace mir::vk
         mDevice = &device;
 
         if (!CreatePipelineLayout(sharedLayouts))
+            return false;
+
+        if (!CreateSkyPipeline(sharedLayouts[0], colorFormat))
             return false;
 
         mDefaultMaterial = CreateMaterial(MaterialDesc{}, resources, colorFormat);
@@ -72,6 +76,18 @@ namespace mir::vk
             vkDestroyPipelineLayout(mDevice->Handle(), mPipelineLayout, nullptr);
             mPipelineLayout = VK_NULL_HANDLE;
         }
+
+        if (mSkyPipeline != VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(mDevice->Handle(), mSkyPipeline, nullptr);
+            mSkyPipeline = VK_NULL_HANDLE;
+        }
+
+        if (mSkyPipelineLayout != VK_NULL_HANDLE)
+        {
+            vkDestroyPipelineLayout(mDevice->Handle(), mSkyPipelineLayout, nullptr);
+            mSkyPipelineLayout = VK_NULL_HANDLE;
+        }
     }
 
     bool MaterialStore::CreatePipelineLayout(const std::array<VkDescriptorSetLayout, 3> &sharedLayouts)
@@ -95,7 +111,7 @@ namespace mir::vk
 
         if (vkCreateDescriptorSetLayout(mDevice->Handle(), &setLayoutInfo, nullptr, &mSetLayout) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkCreateDescriptorSetLayout failed");
+            MIR_LOG_CRITICAL("CreatePipelineLayout: vkCreateDescriptorSetLayout failed");
             return false;
         }
 
@@ -115,7 +131,7 @@ namespace mir::vk
 
         if (vkCreateDescriptorPool(mDevice->Handle(), &poolInfo, nullptr, &mDescriptorPool) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkCreateDescriptorPool failed");
+            MIR_LOG_CRITICAL("CreatePipelineLayout: vkCreateDescriptorPool failed");
             return false;
         }
 
@@ -138,17 +154,18 @@ namespace mir::vk
 
         if (vkCreatePipelineLayout(mDevice->Handle(), &layoutInfo, nullptr, &mPipelineLayout) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkCreatePipelineLayout failed");
+            MIR_LOG_CRITICAL("CreatePipelineLayout: vkCreatePipelineLayout failed");
             return false;
         }
 
         return true;
     }
 
-    VkPipeline MaterialStore::BuildPipeline(const MaterialDesc &desc, VkFormat colorFormat)
+    VkPipeline MaterialStore::CreateGraphicsPipeline(const PipelineState &state, VkFormat colorFormat)
     {
-        VkShaderModule vertModule = CreateShaderModule(mDevice->Handle(), ShaderPath(desc.shaderName + ".vertexMain.spv"));
-        VkShaderModule fragModule = CreateShaderModule(mDevice->Handle(), ShaderPath(desc.shaderName + ".fragmentMain.spv"));
+        const std::string shaderName(state.shaderName);
+        VkShaderModule vertModule = CreateShaderModule(mDevice->Handle(), ShaderPath(shaderName + ".vertexMain.spv"));
+        VkShaderModule fragModule = CreateShaderModule(mDevice->Handle(), ShaderPath(shaderName + ".fragmentMain.spv"));
 
         if (vertModule == VK_NULL_HANDLE || fragModule == VK_NULL_HANDLE)
         {
@@ -169,32 +186,9 @@ namespace mir::vk
              .module = fragModule,
              .pName = "fragmentMain" } };
 
-        const VkVertexInputBindingDescription vertexBinding{
-            .binding = 0,
-            .stride = sizeof(Vertex),
-            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX };
-
-        const std::array<VkVertexInputAttributeDescription, 6> vertexAttributes{ { { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, pos) },
-                                                                                 { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, color) },
-                                                                                 { .location = 2, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, normal) },
-                                                                                 { .location = 3, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, uv) },
-                                                                                 { .location = 4, .binding = 0, .format = VK_FORMAT_R32_SFLOAT, .offset = offsetof(Vertex, alpha) },
-                                                                                 { .location = 5, .binding = 0, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = offsetof(Vertex, tangent) } } };
-
-        const VkPipelineVertexInputStateCreateInfo vertexInput{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-            .vertexBindingDescriptionCount = 1,
-            .pVertexBindingDescriptions = &vertexBinding,
-            // Only the model shader reads uv, alpha and tangent. Declaring
-            // them for the others is legal but makes the validation layer
-            // complain about attributes no shader consumes.
-            .vertexAttributeDescriptionCount =
-                desc.shaderName == kModelShaderName ? static_cast<uint32_t>(vertexAttributes.size()) : 3u,
-            .pVertexAttributeDescriptions = vertexAttributes.data() };
-
         const VkPipelineInputAssemblyStateCreateInfo inputAssembly{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-            .topology = desc.topology,
+            .topology = state.topology,
             .primitiveRestartEnable = VK_FALSE };
 
         const VkPipelineViewportStateCreateInfo viewportState{
@@ -204,45 +198,16 @@ namespace mir::vk
             .scissorCount = 1,
             .pScissors = nullptr };
 
-        const VkPipelineRasterizationStateCreateInfo rasterizer{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-            .depthClampEnable = VK_FALSE,
-            .rasterizerDiscardEnable = VK_FALSE,
-            .polygonMode = desc.polygonMode,
-            .cullMode = desc.cullMode,
-            .frontFace = desc.frontFace,
-            .depthBiasEnable = VK_FALSE,
-            .lineWidth = 1.0f };
-
         const VkPipelineMultisampleStateCreateInfo multisample{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
             .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
             .sampleShadingEnable = VK_FALSE };
 
-        const VkPipelineColorBlendAttachmentState blendAttachment{
-            .blendEnable = desc.alphaMode == MaterialAlphaMode::Blend ? VK_TRUE : VK_FALSE,
-            .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
-            .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-            .colorBlendOp = VK_BLEND_OP_ADD,
-            .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-            .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-            .alphaBlendOp = VK_BLEND_OP_ADD,
-            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                              VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT };
-
-        const VkPipelineDepthStencilStateCreateInfo depthStencil{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-            .depthTestEnable = VK_TRUE,
-            .depthWriteEnable = desc.alphaMode == MaterialAlphaMode::Blend ? VK_FALSE : VK_TRUE,
-            .depthCompareOp = VK_COMPARE_OP_GREATER, // reverse-Z: nearer is larger
-            .depthBoundsTestEnable = VK_FALSE,
-            .stencilTestEnable = VK_FALSE };
-
         const VkPipelineColorBlendStateCreateInfo colorBlend{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
             .logicOpEnable = VK_FALSE,
             .attachmentCount = 1,
-            .pAttachments = &blendAttachment };
+            .pAttachments = &state.blend };
 
         const VkDynamicState dynamicStates[]{
             VK_DYNAMIC_STATE_VIEWPORT,
@@ -264,15 +229,15 @@ namespace mir::vk
             .pNext = &renderingInfo,
             .stageCount = 2,
             .pStages = stages,
-            .pVertexInputState = &vertexInput,
+            .pVertexInputState = &state.vertexInput,
             .pInputAssemblyState = &inputAssembly,
             .pViewportState = &viewportState,
-            .pRasterizationState = &rasterizer,
+            .pRasterizationState = &state.rasterizer,
             .pMultisampleState = &multisample,
-            .pDepthStencilState = &depthStencil,
+            .pDepthStencilState = &state.depthStencil,
             .pColorBlendState = &colorBlend,
             .pDynamicState = &dynamicState,
-            .layout = mPipelineLayout,
+            .layout = state.layout,
             .renderPass = VK_NULL_HANDLE,
             .subpass = 0 };
 
@@ -285,11 +250,121 @@ namespace mir::vk
 
         if (result != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkCreateGraphicsPipelines failed: {}", static_cast<int>(result));
+            MIR_LOG_CRITICAL("CreateGraphicsPipeline: vkCreateGraphicsPipelines failed for {}: {}",
+                shaderName, static_cast<int>(result));
             return VK_NULL_HANDLE;
         }
 
         return pipeline;
+    }
+
+    VkPipeline MaterialStore::BuildPipeline(const MaterialDesc &desc, VkFormat colorFormat)
+    {
+        const VkVertexInputBindingDescription vertexBinding{
+            .binding = 0,
+            .stride = sizeof(Vertex),
+            .inputRate = VK_VERTEX_INPUT_RATE_VERTEX };
+
+        const std::array<VkVertexInputAttributeDescription, 6> vertexAttributes{ { { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, pos) },
+                                                                                 { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, color) },
+                                                                                 { .location = 2, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, normal) },
+                                                                                 { .location = 3, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, uv) },
+                                                                                 { .location = 4, .binding = 0, .format = VK_FORMAT_R32_SFLOAT, .offset = offsetof(Vertex, alpha) },
+                                                                                 { .location = 5, .binding = 0, .format = VK_FORMAT_R32G32B32A32_SFLOAT, .offset = offsetof(Vertex, tangent) } } };
+
+        const bool blend = desc.alphaMode == MaterialAlphaMode::Blend;
+
+        const PipelineState state{
+            .shaderName = desc.shaderName,
+            .vertexInput{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+                .vertexBindingDescriptionCount = 1,
+                .pVertexBindingDescriptions = &vertexBinding,
+                // Only the model shader reads uv, alpha and tangent. Declaring
+                // them for the others is legal but makes the validation layer
+                // complain about attributes no shader consumes.
+                .vertexAttributeDescriptionCount =
+                    desc.shaderName == kModelShaderName ? static_cast<uint32_t>(vertexAttributes.size()) : 3u,
+                .pVertexAttributeDescriptions = vertexAttributes.data() },
+            .topology = desc.topology,
+            .rasterizer{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                .depthClampEnable = VK_FALSE,
+                .rasterizerDiscardEnable = VK_FALSE,
+                .polygonMode = desc.polygonMode,
+                .cullMode = desc.cullMode,
+                .frontFace = desc.frontFace,
+                .depthBiasEnable = VK_FALSE,
+                .lineWidth = 1.0f },
+            .blend{
+                .blendEnable = blend ? VK_TRUE : VK_FALSE,
+                .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+                .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                .colorBlendOp = VK_BLEND_OP_ADD,
+                .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+                .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                .alphaBlendOp = VK_BLEND_OP_ADD,
+                .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                  VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT },
+            .depthStencil{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+                .depthTestEnable = VK_TRUE,
+                .depthWriteEnable = blend ? VK_FALSE : VK_TRUE,
+                .depthCompareOp = VK_COMPARE_OP_GREATER, // reverse-Z: nearer is larger
+                .depthBoundsTestEnable = VK_FALSE,
+                .stencilTestEnable = VK_FALSE },
+            .layout = mPipelineLayout };
+
+        return CreateGraphicsPipeline(state, colorFormat);
+    }
+
+    bool MaterialStore::CreateSkyPipeline(VkDescriptorSetLayout cameraSetLayout, VkFormat colorFormat)
+    {
+        const VkPipelineLayoutCreateInfo layoutInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 1,
+            .pSetLayouts = &cameraSetLayout };
+
+        if (vkCreatePipelineLayout(mDevice->Handle(), &layoutInfo, nullptr, &mSkyPipelineLayout) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("CreateSkyPipeline: vkCreatePipelineLayout failed");
+            return false;
+        }
+
+        // No vertex input: the shader builds a fullscreen triangle. Depth GEQUAL
+        // with no write passes only where nothing drew, at the reverse-Z clear of 0.
+        const PipelineState state{
+            .shaderName = "sky",
+            .vertexInput{ .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO },
+            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .rasterizer{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                .depthClampEnable = VK_FALSE,
+                .rasterizerDiscardEnable = VK_FALSE,
+                .polygonMode = VK_POLYGON_MODE_FILL,
+                .cullMode = VK_CULL_MODE_NONE,
+                .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+                .depthBiasEnable = VK_FALSE,
+                .lineWidth = 1.0f },
+            .blend{
+                .blendEnable = VK_FALSE,
+                .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                  VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT },
+            .depthStencil{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+                .depthTestEnable = VK_TRUE,
+                .depthWriteEnable = VK_FALSE,
+                .depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL,
+                .depthBoundsTestEnable = VK_FALSE,
+                .stencilTestEnable = VK_FALSE },
+            .layout = mSkyPipelineLayout };
+
+        mSkyPipeline = CreateGraphicsPipeline(state, colorFormat);
+        if (mSkyPipeline == VK_NULL_HANDLE)
+            return false;
+
+        mDevice->NameObject(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(mSkyPipeline), "Sky pipeline");
+        return true;
     }
 
     MaterialHandle MaterialStore::CreateMaterial(const MaterialDesc &desc, ResourceStore &resources, VkFormat colorFormat)
@@ -367,24 +442,11 @@ namespace mir::vk
             desc.cullMode == VK_CULL_MODE_NONE ? 1.0f : 0.0f, 0.0f };
         const bool modelShader = desc.shaderName == kModelShaderName;
 
-        uint32_t index;
-        uint32_t generation;
-        if (!mFreeIndices.empty())
-        {
-            index = mFreeIndices.back();
-            mFreeIndices.pop_back();
-            generation = mMaterials[index].mGeneration;
-            mMaterials[index] = GpuMaterial{ pipeline, descriptorSet, parameters, modelShader, generation, unlit };
-        }
-        else
-        {
-            index = static_cast<uint32_t>(mMaterials.size());
-            generation = 1;
-            mMaterials.push_back(GpuMaterial{ pipeline, descriptorSet, parameters, modelShader, generation, unlit });
-        }
+        const uint32_t index = PlaceSlot(mMaterials, mFreeIndices,
+            GpuMaterial{ pipeline, descriptorSet, parameters, modelShader, 0, unlit });
 
         MIR_LOG_INFO("Material created: {} (index {})", desc.shaderName, index);
-        return MaterialHandle{ index, generation };
+        return MaterialHandle{ index, mMaterials[index].mGeneration };
     }
 
     void MaterialStore::FreeMaterial(GpuMaterial &material)
@@ -403,10 +465,7 @@ namespace mir::vk
 
         GpuMaterial &material = mMaterials[handle.mIndex];
         FreeMaterial(material);
-
-        const uint32_t nextGeneration = material.mGeneration + 1;
-        material = GpuMaterial{};
-        material.mGeneration = nextGeneration; // every outstanding copy of handle is now stale
+        RetireSlot(material);
 
         mFreeIndices.push_back(handle.mIndex);
         return true;
@@ -450,15 +509,7 @@ namespace mir::vk
 
     const GpuMaterial *MaterialStore::FindMaterial(MaterialHandle handle) const
     {
-        if (handle.IsNull() || handle.mIndex >= mMaterials.size())
-            return nullptr;
-
-        const GpuMaterial &material = mMaterials[handle.mIndex];
-
-        if (material.mGeneration != handle.mGeneration)
-            return nullptr;
-
-        return &material;
+        return FindSlot(mMaterials, handle);
     }
 
     const GpuMaterial *MaterialStore::FindOrDefault(MaterialHandle handle) const

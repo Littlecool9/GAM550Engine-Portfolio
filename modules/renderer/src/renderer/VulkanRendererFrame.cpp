@@ -1,7 +1,7 @@
 /**
  * @file VulkanRendererFrame.cpp
  * @author Sumin Park
- * @brief Per-frame command recording and submission for the raster path.
+ * @brief The frame loop for raster and ray traced frames, and the raster pass recording.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -12,6 +12,7 @@
 #include <renderer/VulkanRenderer.h>
 #include "vulkan/CameraBuffer.h"
 #include "vulkan/Device.h"
+#include "vulkan/FrameCapture.h"
 #include "vulkan/FrameSync.h"
 #include "vulkan/MaterialStore.h"
 #include "vulkan/ModelDescriptors.h"
@@ -19,6 +20,7 @@
 #include "vulkan/ResourceStore.h"
 #include "vulkan/ShadowMaps.h"
 #include "vulkan/Swapchain.h"
+#include "vulkan/VulkanConstants.h"
 #include "vulkan/VulkanUtil.h"
 #include "vulkan/VulkanPushConstants.h"
 
@@ -110,8 +112,8 @@ namespace mir
         // background pixels, with early-z doing the rejection.
         if (mSkyVisible)
         {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipeline);
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipelineLayout,
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mMaterialStore->SkyPipeline());
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mMaterialStore->SkyPipelineLayout(),
                 0, 1, &cameraSet, 1, &cameraOffset);
             vkCmdDraw(cmd, 3, 1, 0, 0);
         }
@@ -188,7 +190,7 @@ namespace mir
 
         vkCmdEndRendering(cmd);
 
-        const bool captured = RecordCapture(cmd, imageIndex);
+        const bool captured = mCapture->Record(cmd, *mSwapchain, imageIndex);
 
         // give it back
         vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
@@ -224,8 +226,7 @@ namespace mir
         RecordCommands(frame->cmd, frame->imageIndex, views);
         const bool submitted = mFrameSync->End(*mSwapchain, *frame);
 
-        if (mCaptureBuffer != VK_NULL_HANDLE)
-            FinishCapture(submitted);
+        mCapture->Finish(submitted, *mSwapchain);
     }
 
     void VulkanRenderer::RecordRtFrame(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views)
@@ -348,17 +349,6 @@ namespace mir
     {
         const uint32_t frame = mFrameSync->Index();
         const vk::ViewShadowInfo shadow = mShadowMaps->WriteView(frame, view, viewIndex);
-        return mCameraBuffer->WriteView(frame, view, viewIndex, Lighting(), shadow);
-    }
-
-    vk::SceneLighting VulkanRenderer::Lighting() const
-    {
-        return vk::SceneLighting{
-            .lightDirection = mLightDirection,
-            .lightColor = mLightColor,
-            .ambientColor = mAmbientColor,
-            .fogColor = mFogColor,
-            .fogDensity = mFogDensity,
-            .atmosphere = mAtmosphere };
+        return mCameraBuffer->WriteView(frame, view, viewIndex, shadow);
     }
 }

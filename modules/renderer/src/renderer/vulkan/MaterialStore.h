@@ -16,6 +16,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 #include <vector>
 
 namespace mir::vk
@@ -40,8 +41,8 @@ namespace mir::vk
     class MaterialStore
     {
     public:
-        // sharedLayouts are sets 1-3, borrowed for the pipeline layout; their owners destroy them.
-        // Also creates the default material.
+        // sharedLayouts are sets 1-3, borrowed for the pipeline layouts; their owners destroy them.
+        // Also creates the default material and the sky pipeline, which reads set 1 alone.
         bool Initialize(Device &device, ResourceStore &resources, VkFormat colorFormat,
             const std::array<VkDescriptorSetLayout, 3> &sharedLayouts);
         void Shutdown();
@@ -59,9 +60,26 @@ namespace mir::vk
         MaterialHandle DefaultMaterial() const { return mDefaultMaterial; }
         VkPipelineLayout PipelineLayout() const { return mPipelineLayout; }
 
+        VkPipeline SkyPipeline() const { return mSkyPipeline; }
+        VkPipelineLayout SkyPipelineLayout() const { return mSkyPipelineLayout; }
+
     private:
         bool CreatePipelineLayout(const std::array<VkDescriptorSetLayout, 3> &sharedLayouts);
+        // The state a material pipeline and the sky pipeline differ in.
+        struct PipelineState
+        {
+            std::string_view shaderName;
+            VkPipelineVertexInputStateCreateInfo vertexInput{};
+            VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+            VkPipelineRasterizationStateCreateInfo rasterizer{};
+            VkPipelineColorBlendAttachmentState blend{};
+            VkPipelineDepthStencilStateCreateInfo depthStencil{};
+            VkPipelineLayout layout = VK_NULL_HANDLE;
+        };
+
+        VkPipeline CreateGraphicsPipeline(const PipelineState &state, VkFormat colorFormat);
         VkPipeline BuildPipeline(const MaterialDesc &desc, VkFormat colorFormat);
+        bool CreateSkyPipeline(VkDescriptorSetLayout cameraSetLayout, VkFormat colorFormat);
         // GPU objects only; the slot and its generation are the caller's.
         void FreeMaterial(GpuMaterial &material);
         void DestroyMaterials();
@@ -69,6 +87,9 @@ namespace mir::vk
         Device *mDevice = nullptr;
 
         VkPipelineLayout mPipelineLayout = VK_NULL_HANDLE;
+
+        VkPipelineLayout mSkyPipelineLayout = VK_NULL_HANDLE;
+        VkPipeline mSkyPipeline = VK_NULL_HANDLE;
 
         // set 0: binding 0 = base color, binding 1 = normal map.
         VkDescriptorSetLayout mSetLayout = VK_NULL_HANDLE;

@@ -30,7 +30,7 @@ namespace mir::vk
         {
             if (vkCreateCommandPool(mDevice->Handle(), &poolInfo, nullptr, &mCmdPools[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("vkCreateCommandPool failed for frame {}", i);
+                MIR_LOG_CRITICAL("Initialize: vkCreateCommandPool failed for frame {}", i);
                 return false;
             }
 
@@ -42,13 +42,13 @@ namespace mir::vk
 
             if (vkAllocateCommandBuffers(mDevice->Handle(), &allocInfo, &mCmdBuffers[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("vkAllocateCommandBuffers failed for frame {}", i);
+                MIR_LOG_CRITICAL("Initialize: vkAllocateCommandBuffers failed for frame {}", i);
                 return false;
             }
 
             if (vkCreateSemaphore(mDevice->Handle(), &semInfo, nullptr, &mImageAcquired[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("image-acquired semaphore failed for frame {}", i);
+                MIR_LOG_CRITICAL("Initialize: image-acquired semaphore failed for frame {}", i);
                 return false;
             }
         }
@@ -65,7 +65,7 @@ namespace mir::vk
 
         if (vkCreateSemaphore(mDevice->Handle(), &timelineInfo, nullptr, &mTimeline) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("timeline semaphore creation failed");
+            MIR_LOG_CRITICAL("Initialize: timeline semaphore creation failed");
             return false;
         }
 
@@ -118,7 +118,7 @@ namespace mir::vk
         // wait for next image to comeback from framesin flight
         if (vkWaitSemaphores(mDevice->Handle(), &waitInfo, UINT64_MAX) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkWaitSemaphores failed; rendering stopped");
+            MIR_LOG_CRITICAL("Begin: vkWaitSemaphores failed; rendering stopped");
             mStopped = true;
             --mNextSignalValue;
             return std::nullopt;
@@ -180,7 +180,7 @@ namespace mir::vk
         const VkResult result = vkQueueSubmit2(mDevice->Queue(), 1, &submit, VK_NULL_HANDLE);
         if (result != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkQueueSubmit2 failed: {}; rendering stopped", static_cast<int>(result));
+            MIR_LOG_CRITICAL("End: vkQueueSubmit2 failed: {}; rendering stopped", static_cast<int>(result));
             mStopped = true;
             return false;
         }

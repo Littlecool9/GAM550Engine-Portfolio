@@ -61,9 +61,7 @@ namespace mir::vk
     {
         mDevice = &device;
 
-        VkPhysicalDeviceProperties props{};
-        vkGetPhysicalDeviceProperties(mDevice->Physical(), &props);
-        mCameraAlignedSize = AlignUp(sizeof(CameraData), props.limits.minUniformBufferOffsetAlignment);
+        mCameraAlignedSize = AlignUp(sizeof(CameraData), mDevice->Properties().limits.minUniformBufferOffsetAlignment);
 
         VkShaderStageFlags cameraStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         VkShaderStageFlags lightListStages = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -91,7 +89,7 @@ namespace mir::vk
 
         if (vkCreateDescriptorSetLayout(mDevice->Handle(), &setLayoutInfo, nullptr, &mSetLayout) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CameraBuffer::Initialize: vkCreateDescriptorSetLayout failed");
+            MIR_LOG_CRITICAL("Initialize: vkCreateDescriptorSetLayout failed");
             return false;
         }
 
@@ -107,7 +105,7 @@ namespace mir::vk
 
         if (vkCreateDescriptorPool(mDevice->Handle(), &poolInfo, nullptr, &mPool) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CameraBuffer::Initialize: vkCreateDescriptorPool failed");
+            MIR_LOG_CRITICAL("Initialize: vkCreateDescriptorPool failed");
             return false;
         }
 
@@ -123,7 +121,7 @@ namespace mir::vk
                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
                 mCameraBuffers[i], mCameraAllocations[i], &allocInfo))
             {
-                MIR_LOG_CRITICAL("CameraBuffer::Initialize: camera buffer allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("Initialize: camera buffer allocation failed for frame {}", i);
                 return false;
             }
             mCameraMapped[i] = static_cast<std::byte *>(allocInfo.pMappedData);
@@ -135,7 +133,7 @@ namespace mir::vk
                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
                 mLightBuffers[i], mLightAllocations[i], &lightAllocInfo))
             {
-                MIR_LOG_CRITICAL("CameraBuffer::Initialize: light buffer allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("Initialize: light buffer allocation failed for frame {}", i);
                 return false;
             }
             mLightMapped[i] = static_cast<std::byte *>(lightAllocInfo.pMappedData);
@@ -148,7 +146,7 @@ namespace mir::vk
 
             if (vkAllocateDescriptorSets(mDevice->Handle(), &setAllocInfo, &mSets[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("CameraBuffer::Initialize: descriptor set allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("Initialize: descriptor set allocation failed for frame {}", i);
                 return false;
             }
 
@@ -227,7 +225,7 @@ namespace mir::vk
     }
 
     uint32_t CameraBuffer::WriteView(uint32_t frame, const RenderView &view, uint32_t viewIndex,
-        const SceneLighting &lighting, const ViewShadowInfo &shadow)
+        const ViewShadowInfo &shadow)
     {
         // The atmosphere needs the camera's altitude over its planet, where
         // float's 1/64 m at the map edge is invisible; no geometry reads it.
@@ -239,18 +237,18 @@ namespace mir::vk
 
         const CameraData data{
             .viewProj = view.viewProj,
-            .lightDirWS = glm::vec4(lighting.lightDirection, 0.0f),
-            .lightColor = glm::vec4(lighting.lightColor, 0.0f),
-            .ambientColor = glm::vec4(lighting.ambientColor, 0.0f),
+            .lightDirWS = glm::vec4(mLightDirection, 0.0f),
+            .lightColor = glm::vec4(mLightColor, 0.0f),
+            .ambientColor = glm::vec4(mAmbientColor, 0.0f),
             .invViewProj = glm::inverse(view.viewProj),
             .cameraPos = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f),
-            .fogColor = glm::vec4(lighting.fogColor, lighting.fogDensity),
+            .fogColor = glm::vec4(mFogColor, mFogDensity),
             .cameraWorldPos = glm::vec4(cameraWorld, 1.0f),
             .clipPlanes = glm::vec4(view.nearZ, view.farZ, 0.0f, 0.0f),
-            .atmosphereScattering = glm::vec4(lighting.atmosphere.mRayleighCoeff * 1e-6f, lighting.atmosphere.mMieCoeff * 1e-6f),
-            .atmosphereRadii = glm::vec4(lighting.atmosphere.mPlanetRadiusKm * 1e3f, lighting.atmosphere.mAtmosphereRadiusKm * 1e3f,
-                lighting.atmosphere.mRayleighScaleHeightKm * 1e3f, lighting.atmosphere.mMieScaleHeightKm * 1e3f),
-            .atmosphereMisc = glm::vec4(lighting.atmosphere.mMieG, lighting.atmosphere.mSunIntensity, 0.0f, 0.0f),
+            .atmosphereScattering = glm::vec4(mAtmosphere.mRayleighCoeff * 1e-6f, mAtmosphere.mMieCoeff * 1e-6f),
+            .atmosphereRadii = glm::vec4(mAtmosphere.mPlanetRadiusKm * 1e3f, mAtmosphere.mAtmosphereRadiusKm * 1e3f,
+                mAtmosphere.mRayleighScaleHeightKm * 1e3f, mAtmosphere.mMieScaleHeightKm * 1e3f),
+            .atmosphereMisc = glm::vec4(mAtmosphere.mMieG, mAtmosphere.mSunIntensity, 0.0f, 0.0f),
             .lightingMeta = glm::vec4(static_cast<float>(lightCount), static_cast<float>(firstLight),
                 shadow.hasSunShadow ? 1.0f : 0.0f, static_cast<float>(shadow.spotShadowBase)),
             .sunShadowViewProj = shadow.sunShadowViewProj };
@@ -264,6 +262,18 @@ namespace mir::vk
         // before the render commands using it are submitted.
         vmaFlushAllocation(mDevice->Allocator(), mCameraAllocations[frame], offset, sizeof(CameraData));
         return static_cast<uint32_t>(offset);
+    }
+
+    void CameraBuffer::SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color)
+    {
+        mLightDirection = glm::normalize(direction);
+        mLightColor = color;
+    }
+
+    void CameraBuffer::SetFog(const glm::vec3 &color, float density)
+    {
+        mFogColor = color;
+        mFogDensity = density;
     }
 
     void CameraBuffer::SetLights(std::span<const LightItem> lights)

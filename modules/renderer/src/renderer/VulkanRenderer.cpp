@@ -6,9 +6,10 @@
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
-#include "vulkan/Device.h"
-#include "renderer/VulkanRenderer.h"
+#include <renderer/VulkanRenderer.h>
 #include "vulkan/CameraBuffer.h"
+#include "vulkan/Device.h"
+#include "vulkan/FrameCapture.h"
 #include "vulkan/FrameSync.h"
 #include "vulkan/MaterialStore.h"
 #include "vulkan/ModelDescriptors.h"
@@ -16,13 +17,8 @@
 #include "vulkan/ResourceStore.h"
 #include "vulkan/ShadowMaps.h"
 #include "vulkan/Swapchain.h"
-#include "vulkan/VulkanUtil.h"
 
 #include <core/log/Log.h>
-
-#include <vk_mem_alloc.h>
-
-#include <algorithm>
 
 namespace mir
 {
@@ -35,7 +31,8 @@ namespace mir
         mCameraBuffer(std::make_unique<vk::CameraBuffer>()),
         mShadowMaps(std::make_unique<vk::ShadowMaps>()),
         mModelDescriptors(std::make_unique<vk::ModelDescriptors>()),
-        mRayTracer(std::make_unique<vk::RayTracer>())
+        mRayTracer(std::make_unique<vk::RayTracer>()),
+        mCapture(std::make_unique<vk::FrameCapture>())
     {}
     VulkanRenderer::~VulkanRenderer() = default;
 
@@ -47,7 +44,7 @@ namespace mir
     {
         if (desc.window == nullptr)
         {
-            MIR_LOG_ERROR("no window");
+            MIR_LOG_ERROR("Initialize: no window");
             return false;
         }
 
@@ -60,6 +57,9 @@ namespace mir
             return false;
 
         if (!mFrameSync->Initialize(*mDevice))
+            return false;
+
+        if (!mCapture->Initialize(*mDevice))
             return false;
 
         if (!mResources->Initialize(*mDevice))
@@ -78,14 +78,9 @@ namespace mir
             { mCameraBuffer->SetLayout(), mModelDescriptors->SetLayout(), mShadowMaps->SetLayout() }))
             return false;
 
-        if (!CreateSkyPipeline())
-            return false;
-
         if (mDevice->RayTracingSupported() &&
             !mRayTracer->Initialize(*mDevice, mSwapchain->Extent(), mCameraBuffer->SetLayout()))
             return false;
-
-        mDevice->NameObject(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(mSkyPipeline), "Sky pipeline");
 
         return true;
     }
@@ -117,22 +112,10 @@ namespace mir
             mMaterialStore->Shutdown();
             mRayTracer->Shutdown();
             mResources->Shutdown();
-            DestroyCaptureBuffer();
+            mCapture->Shutdown();
             mModelDescriptors->Shutdown();
             mCameraBuffer->Shutdown();
             mShadowMaps->Shutdown();
-
-            if (mSkyPipeline != VK_NULL_HANDLE)
-            {
-                vkDestroyPipeline(mDevice->Handle(), mSkyPipeline, nullptr);
-                mSkyPipeline = VK_NULL_HANDLE;
-            }
-
-            if (mSkyPipelineLayout != VK_NULL_HANDLE)
-            {
-                vkDestroyPipelineLayout(mDevice->Handle(), mSkyPipelineLayout, nullptr);
-                mSkyPipelineLayout = VK_NULL_HANDLE;
-            }
 
             mSwapchain->Shutdown();
         }
@@ -165,8 +148,15 @@ namespace mir
         // drawing from this buffer - see ReleaseSceneResources.
         vkDeviceWaitIdle(mDevice->Handle());
 
+        return DestroyMeshAndBlas(handle);
+    }
+
+    bool VulkanRenderer::DestroyMeshAndBlas(MeshHandle handle)
+    {
+        if (!mResources->DestroyMesh(handle))
+            return false;
         mRayTracer->DestroyMeshBlas(handle.mIndex);
-        return mResources->DestroyMesh(handle);
+        return true;
     }
 
     TextureHandle VulkanRenderer::CreateTexture(const TextureDesc &desc)
@@ -228,16 +218,38 @@ namespace mir
 
         // Stale handles, the default material and the default textures are skipped.
         for (const MeshHandle handle : meshes)
-        {
-            if (mResources->DestroyMesh(handle))
-                mRayTracer->DestroyMeshBlas(handle.mIndex);
-        }
+            DestroyMeshAndBlas(handle);
 
         for (const MaterialHandle handle : materials)
             mMaterialStore->DestroyMaterial(handle);
 
         for (const TextureHandle handle : textures)
             mResources->DestroyTexture(handle);
+    }
+
+    void VulkanRenderer::CaptureNextFrame(const std::filesystem::path &path)
+    {
+        mCapture->Request(path);
+    }
+
+    void VulkanRenderer::SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color)
+    {
+        mCameraBuffer->SetDirectionalLight(direction, color);
+    }
+
+    void VulkanRenderer::SetAmbientColor(const glm::vec3 &color)
+    {
+        mCameraBuffer->SetAmbientColor(color);
+    }
+
+    void VulkanRenderer::SetFog(const glm::vec3 &color, float density)
+    {
+        mCameraBuffer->SetFog(color, density);
+    }
+
+    void VulkanRenderer::SetAtmosphere(const Sky &sky)
+    {
+        mCameraBuffer->SetAtmosphere(sky);
     }
 
     void VulkanRenderer::SetLights(std::span<const LightItem> lights)

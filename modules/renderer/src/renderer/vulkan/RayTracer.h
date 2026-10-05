@@ -9,7 +9,7 @@
 #pragma once
 
 #include <renderer/VulkanRenderer.h>
-#include <renderer/vulkan/VulkanConstants.h>
+#include "VulkanConstants.h"
 
 #include <volk.h>
 

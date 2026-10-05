@@ -9,13 +9,16 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <core/log/Log.h>
-#include <utility>
-#include <vector>
 #include "ModelDescriptors.h"
 #include "Device.h"
 #include "VulkanUtil.h"
+
+#include <core/log/Log.h>
+
 #include <vk_mem_alloc.h>
+
+#include <utility>
+#include <vector>
 
 namespace mir::vk
 {
@@ -42,7 +45,7 @@ namespace mir::vk
         info.pBindings = &binding;
         if (vkCreateDescriptorSetLayout(mDevice->Handle(), &info, nullptr, &mSetLayout) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkCreateDescriptorSetLayout failed for the model set");
+            MIR_LOG_CRITICAL("Initialize: vkCreateDescriptorSetLayout failed for the model set");
             return false;
         }
         // One set per model draw per frame; the whole pool is reset each frame.
@@ -54,7 +57,7 @@ namespace mir::vk
         for (auto &p : mPools)
             if (vkCreateDescriptorPool(mDevice->Handle(), &pool, nullptr, &p) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("vkCreateDescriptorPool failed for the model set");
+                MIR_LOG_CRITICAL("Initialize: vkCreateDescriptorPool failed for the model set");
                 return false;
             }
         return true;
@@ -67,18 +70,16 @@ namespace mir::vk
             data.resize(3, glm::vec4(0));
         // Slot 2 is the material channel; BuildDeformationData leaves it free.
         data[2] = materialParameters;
-        VkPhysicalDeviceProperties props{};
-        vkGetPhysicalDeviceProperties(mDevice->Physical(), &props);
-        if (data.size() * sizeof(glm::vec4) > props.limits.maxStorageBufferRange)
+        if (data.size() * sizeof(glm::vec4) > mDevice->Properties().limits.maxStorageBufferRange)
         {
-            MIR_LOG_ERROR("model exceeds maxStorageBufferRange");
+            MIR_LOG_ERROR("Bind: model exceeds maxStorageBufferRange");
             return false;
         }
         FrameBuffer buffer{};
         if (!CreateUploadBuffer(mDevice->Allocator(), std::as_bytes(std::span(data)),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.buffer, buffer.allocation))
         {
-            MIR_LOG_ERROR("model frame buffer allocation failed");
+            MIR_LOG_ERROR("Bind: model frame buffer allocation failed");
             return false;
         }
         mBuffers[frame].push_back(buffer);
@@ -89,7 +90,7 @@ namespace mir::vk
         VkDescriptorSet set;
         if (vkAllocateDescriptorSets(mDevice->Handle(), &alloc, &set) != VK_SUCCESS)
         {
-            MIR_LOG_ERROR("model descriptor capacity exceeded ({} draws per frame)", kMaxModelDrawsPerFrame);
+            MIR_LOG_ERROR("Bind: model descriptor capacity exceeded ({} draws per frame)", kMaxModelDrawsPerFrame);
             return false;
         }
         VkDescriptorBufferInfo bufferInfo{ buffer.buffer, 0, VK_WHOLE_SIZE };
@@ -108,7 +109,7 @@ namespace mir::vk
         for (auto b : mBuffers[frame])
             vmaDestroyBuffer(mDevice->Allocator(), b.buffer, b.allocation);
         mBuffers[frame].clear();
-        if (mPools[frame])
+        if (mPools[frame] != VK_NULL_HANDLE)
             vkResetDescriptorPool(mDevice->Handle(), mPools[frame], 0);
     }
 
@@ -125,13 +126,13 @@ namespace mir::vk
         ResetFrames();
         for (VkDescriptorPool &pool : mPools)
         {
-            if (pool)
+            if (pool != VK_NULL_HANDLE)
             {
                 vkDestroyDescriptorPool(mDevice->Handle(), pool, nullptr);
                 pool = VK_NULL_HANDLE;
             }
         }
-        if (mSetLayout)
+        if (mSetLayout != VK_NULL_HANDLE)
         {
             vkDestroyDescriptorSetLayout(mDevice->Handle(), mSetLayout, nullptr);
             mSetLayout = VK_NULL_HANDLE;

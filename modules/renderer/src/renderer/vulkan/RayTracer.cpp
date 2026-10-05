@@ -185,7 +185,7 @@ namespace mir::vk
             if (vmaCreateImage(mDevice->Allocator(), &imageInfo, &allocInfo,
                 &mOutputImages[i], &mOutputAllocations[i], nullptr) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("vmaCreateImage failed for RT output image {}", i);
+                MIR_LOG_CRITICAL("CreateOutputImages: vmaCreateImage failed for RT output image {}", i);
                 return false;
             }
 
@@ -203,7 +203,7 @@ namespace mir::vk
 
             if (vkCreateImageView(mDevice->Handle(), &viewInfo, nullptr, &mOutputViews[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("vkCreateImageView failed for RT output image {}", i);
+                MIR_LOG_CRITICAL("CreateOutputImages: vkCreateImageView failed for RT output image {}", i);
                 return false;
             }
 
@@ -274,7 +274,7 @@ namespace mir::vk
 
         if (vkCreateDescriptorSetLayout(mDevice->Handle(), &setLayoutInfo, nullptr, &mSetLayout) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("RayTracer::CreatePipeline: vkCreateDescriptorSetLayout failed");
+            MIR_LOG_CRITICAL("CreatePipeline: vkCreateDescriptorSetLayout failed");
             vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
             vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
             vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
@@ -295,7 +295,7 @@ namespace mir::vk
 
         if (vkCreateDescriptorPool(mDevice->Handle(), &poolInfo, nullptr, &mPool) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("RayTracer::CreatePipeline: vkCreateDescriptorPool failed");
+            MIR_LOG_CRITICAL("CreatePipeline: vkCreateDescriptorPool failed");
             vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
             vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
             vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
@@ -313,7 +313,7 @@ namespace mir::vk
 
             if (vkAllocateDescriptorSets(mDevice->Handle(), &setAllocInfo, &mSets[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("RayTracer::CreatePipeline: descriptor set allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("CreatePipeline: descriptor set allocation failed for frame {}", i);
                 vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
                 vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
                 vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
@@ -338,7 +338,7 @@ namespace mir::vk
 
         if (vkCreatePipelineLayout(mDevice->Handle(), &pipelineLayoutInfo, nullptr, &mPipelineLayout) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("RayTracer::CreatePipeline: vkCreatePipelineLayout failed");
+            MIR_LOG_CRITICAL("CreatePipeline: vkCreatePipelineLayout failed");
             vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
             vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
             vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
@@ -409,7 +409,7 @@ namespace mir::vk
 
         if (pipelineResult != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("RayTracer::CreatePipeline: vkCreateRayTracingPipelinesKHR failed: {}", static_cast<int>(pipelineResult));
+            MIR_LOG_CRITICAL("CreatePipeline: vkCreateRayTracingPipelinesKHR failed: {}", static_cast<int>(pipelineResult));
             return false;
         }
 
@@ -423,7 +423,7 @@ namespace mir::vk
         if (vkGetRayTracingShaderGroupHandlesKHR(mDevice->Handle(), mPipeline, 0, kGroupCount,
             handles.size(), handles.data()) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("RayTracer::CreatePipeline: vkGetRayTracingShaderGroupHandlesKHR failed");
+            MIR_LOG_CRITICAL("CreatePipeline: vkGetRayTracingShaderGroupHandlesKHR failed");
             return false;
         }
 
@@ -442,7 +442,7 @@ namespace mir::vk
         if (vmaCreateBufferWithAlignment(mDevice->Allocator(), &sbtBufferInfo, &sbtAllocInfo,
             mDevice->RtProperties().shaderGroupBaseAlignment, &mSbtBuffer, &mSbtAllocation, &sbtInfo) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("RayTracer::CreatePipeline: SBT buffer allocation failed");
+            MIR_LOG_CRITICAL("CreatePipeline: SBT buffer allocation failed");
             return false;
         }
 
@@ -513,7 +513,7 @@ namespace mir::vk
                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
                 mInstanceBuffers[i], mInstanceAllocations[i], &instanceInfo))
             {
-                MIR_LOG_CRITICAL("RayTracer::CreateScene: instance buffer allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("CreateScene: instance buffer allocation failed for frame {}", i);
                 return false;
             }
             mInstanceMapped[i] = static_cast<std::byte *>(instanceInfo.pMappedData);
@@ -525,7 +525,7 @@ namespace mir::vk
                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
                 mInstanceInfoBuffers[i], mInstanceInfoAllocations[i], &instanceRtInfo))
             {
-                MIR_LOG_CRITICAL("RayTracer::CreateScene: instance info buffer allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("CreateScene: instance info buffer allocation failed for frame {}", i);
                 return false;
             }
             mInstanceInfoMapped[i] = static_cast<std::byte *>(instanceRtInfo.pMappedData);
@@ -553,7 +553,7 @@ namespace mir::vk
                 VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
                 mTlasBuffers[i], mTlasAllocations[i], mTlas[i]))
             {
-                MIR_LOG_CRITICAL("RayTracer::CreateScene: TLAS creation failed for frame {}", i);
+                MIR_LOG_CRITICAL("CreateScene: TLAS creation failed for frame {}", i);
                 return false;
             }
 
@@ -561,7 +561,7 @@ namespace mir::vk
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 0, mTlasScratchBuffers[i], mTlasScratchAllocations[i], nullptr))
             {
-                MIR_LOG_CRITICAL("RayTracer::CreateScene: TLAS scratch buffer allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("CreateScene: TLAS scratch buffer allocation failed for frame {}", i);
                 return false;
             }
             mTlasScratchAddresses[i] = GetBufferAddress(mDevice->Handle(), mTlasScratchBuffers[i]);

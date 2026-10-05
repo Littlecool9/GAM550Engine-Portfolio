@@ -8,7 +8,7 @@
  */
 #pragma once
 
-#include <renderer/vulkan/VulkanConstants.h>
+#include "VulkanConstants.h"
 
 #include <glm/vec4.hpp>
 #include <volk.h>

@@ -43,7 +43,7 @@ namespace mir::vk
 
         if (vkCreateSampler(mDevice->Handle(), &samplerInfo, nullptr, &mSampler) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateSampler failed");
+            MIR_LOG_CRITICAL("Initialize: vkCreateSampler failed");
             return false;
         }
 
@@ -67,7 +67,7 @@ namespace mir::vk
             if (vmaCreateImage(mDevice->Allocator(), &imageInfo, &allocInfo,
                 &mSunImages[i], &mSunAllocations[i], nullptr) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vmaCreateImage failed for Sun shadow map {}", i);
+                MIR_LOG_CRITICAL("Initialize: vmaCreateImage failed for Sun shadow map {}", i);
                 return false;
             }
 
@@ -85,7 +85,7 @@ namespace mir::vk
 
             if (vkCreateImageView(mDevice->Handle(), &viewInfo, nullptr, &mSunViews[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateImageView failed for Sun shadow map {}", i);
+                MIR_LOG_CRITICAL("Initialize: vkCreateImageView failed for Sun shadow map {}", i);
                 return false;
             }
 
@@ -113,7 +113,7 @@ namespace mir::vk
             if (vmaCreateImage(mDevice->Allocator(), &imageInfo, &allocInfo,
                 &mSpotImages[i], &mSpotAllocations[i], nullptr) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vmaCreateImage failed for Spot shadow array {}", i);
+                MIR_LOG_CRITICAL("Initialize: vmaCreateImage failed for Spot shadow array {}", i);
                 return false;
             }
 
@@ -129,7 +129,7 @@ namespace mir::vk
 
             if (vkCreateImageView(mDevice->Handle(), &arrayViewInfo, nullptr, &mSpotArrayViews[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateImageView failed for Spot shadow array {}", i);
+                MIR_LOG_CRITICAL("Initialize: vkCreateImageView failed for Spot shadow array {}", i);
                 return false;
             }
 
@@ -148,7 +148,7 @@ namespace mir::vk
 
                 if (vkCreateImageView(mDevice->Handle(), &layerViewInfo, nullptr, &mSpotLayerViews[i][slot]) != VK_SUCCESS)
                 {
-                    MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateImageView failed for Spot shadow slot {}/{}",
+                    MIR_LOG_CRITICAL("Initialize: vkCreateImageView failed for Spot shadow slot {}/{}",
                         i, slot);
                     return false;
                 }
@@ -164,7 +164,7 @@ namespace mir::vk
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
                 mSpotMatrixBuffers[i], mSpotMatrixAllocations[i], &spotMatrixAllocInfo))
             {
-                MIR_LOG_CRITICAL("ShadowMaps::Initialize: Spot shadow matrix buffer allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("Initialize: Spot shadow matrix buffer allocation failed for frame {}", i);
                 return false;
             }
             mSpotMatrixMapped[i] = static_cast<std::byte *>(spotMatrixAllocInfo.pMappedData);
@@ -192,7 +192,7 @@ namespace mir::vk
             if (vmaCreateImage(mDevice->Allocator(), &depthImageInfo, &allocInfo,
                 &mPointDepthImages[i], &mPointDepthAllocations[i], nullptr) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vmaCreateImage failed for Point shadow depth {}", i);
+                MIR_LOG_CRITICAL("Initialize: vmaCreateImage failed for Point shadow depth {}", i);
                 return false;
             }
 
@@ -213,7 +213,7 @@ namespace mir::vk
             if (vmaCreateImage(mDevice->Allocator(), &colorImageInfo, &allocInfo,
                 &mPointColorImages[i], &mPointColorAllocations[i], nullptr) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vmaCreateImage failed for Point shadow distance {}", i);
+                MIR_LOG_CRITICAL("Initialize: vmaCreateImage failed for Point shadow distance {}", i);
                 return false;
             }
 
@@ -233,7 +233,7 @@ namespace mir::vk
                 if (vkCreateImageView(mDevice->Handle(), &depthLayerViewInfo, nullptr,
                     &mPointDepthLayerViews[i][layer]) != VK_SUCCESS)
                 {
-                    MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateImageView failed for Point depth {}/{}",
+                    MIR_LOG_CRITICAL("Initialize: vkCreateImageView failed for Point depth {}/{}",
                         i, layer);
                     return false;
                 }
@@ -252,7 +252,7 @@ namespace mir::vk
                 if (vkCreateImageView(mDevice->Handle(), &colorLayerViewInfo, nullptr,
                     &mPointColorLayerViews[i][layer]) != VK_SUCCESS)
                 {
-                    MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateImageView failed for Point color {}/{}",
+                    MIR_LOG_CRITICAL("Initialize: vkCreateImageView failed for Point color {}/{}",
                         i, layer);
                     return false;
                 }
@@ -270,7 +270,7 @@ namespace mir::vk
 
             if (vkCreateImageView(mDevice->Handle(), &cubeArrayViewInfo, nullptr, &mPointCubeArrayViews[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateImageView failed for Point cube array {}", i);
+                MIR_LOG_CRITICAL("Initialize: vkCreateImageView failed for Point cube array {}", i);
                 return false;
             }
 
@@ -322,7 +322,7 @@ namespace mir::vk
 
         if (vkCreateDescriptorSetLayout(mDevice->Handle(), &setLayoutInfo, nullptr, &mSetLayout) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateDescriptorSetLayout failed");
+            MIR_LOG_CRITICAL("Initialize: vkCreateDescriptorSetLayout failed");
             return false;
         }
 
@@ -338,7 +338,7 @@ namespace mir::vk
 
         if (vkCreateDescriptorPool(mDevice->Handle(), &poolInfo, nullptr, &mPool) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateDescriptorPool failed");
+            MIR_LOG_CRITICAL("Initialize: vkCreateDescriptorPool failed");
             return false;
         }
 
@@ -352,7 +352,7 @@ namespace mir::vk
 
             if (vkAllocateDescriptorSets(mDevice->Handle(), &setAllocInfo, &mSets[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("ShadowMaps::Initialize: descriptor set allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("Initialize: descriptor set allocation failed for frame {}", i);
                 return false;
             }
 
@@ -409,7 +409,7 @@ namespace mir::vk
 
         if (vkCreatePipelineLayout(mDevice->Handle(), &layoutInfo, nullptr, &mDepthPipelineLayout) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreatePipelineLayout failed");
+            MIR_LOG_CRITICAL("Initialize: vkCreatePipelineLayout failed");
             vkDestroyShaderModule(mDevice->Handle(), vertModule, nullptr);
             return false;
         }
@@ -506,7 +506,7 @@ namespace mir::vk
 
         if (pipelineResult != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateGraphicsPipelines failed: {}",
+            MIR_LOG_CRITICAL("Initialize: vkCreateGraphicsPipelines failed: {}",
                 static_cast<int>(pipelineResult));
             return false;
         }
@@ -569,7 +569,7 @@ namespace mir::vk
 
         if (distancePipelineResult != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateGraphicsPipelines (Point) failed: {}",
+            MIR_LOG_CRITICAL("Initialize: vkCreateGraphicsPipelines (Point) failed: {}",
                 static_cast<int>(distancePipelineResult));
             return false;
         }

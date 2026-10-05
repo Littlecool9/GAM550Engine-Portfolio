@@ -194,7 +194,7 @@ namespace mir::vk
     {
         if (volkInitialize() != VK_SUCCESS)
         {
-            MIR_LOG_ERROR("volk initialized failed");
+            MIR_LOG_ERROR("Initialize: volk initialized failed");
             return false;
         }
 
@@ -288,7 +288,7 @@ namespace mir::vk
         const char *platformExt = vk::PlatformSurfaceExtension(backend);
         if (platformExt == nullptr)
         {
-            MIR_LOG_CRITICAL("No Vulkan surface extension for window backend {}",
+            MIR_LOG_CRITICAL("CreateInstance: No Vulkan surface extension for window backend {}",
                 static_cast<int>(backend));
             return false;
         }
@@ -300,7 +300,7 @@ namespace mir::vk
         {
             if (!HasExtension(availableExts, name))
             {
-                MIR_LOG_CRITICAL("Required instance extension missing: {}", name);
+                MIR_LOG_CRITICAL("CreateInstance: Required instance extension missing: {}", name);
                 return false;
             }
         }
@@ -319,7 +319,7 @@ namespace mir::vk
             }
             else
             {
-                MIR_LOG_WARN("Validation unavailable (layer: {}, debug_utils: {}); "
+                MIR_LOG_WARN("CreateInstance: Validation unavailable (layer: {}, debug_utils: {}); "
                     "install the Vulkan SDK to enable it",
                     hasLayer, hasDebugUtils);
             }
@@ -354,7 +354,7 @@ namespace mir::vk
 
         if (vkCreateInstance(&createInfo, nullptr, &mInstance) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkCreateInstance failed");
+            MIR_LOG_CRITICAL("CreateInstance: vkCreateInstance failed");
             return false;
         }
 
@@ -366,7 +366,7 @@ namespace mir::vk
 
         if (vkCreateDebugUtilsMessengerEXT(mInstance, &info, nullptr, &mDebugMessenger) != VK_SUCCESS)
         {
-            MIR_LOG_ERROR("vkCreateDebugUtilsMessengerEXT failed");
+            MIR_LOG_ERROR("CreateDebugMessenger: vkCreateDebugUtilsMessengerEXT failed");
             return false;
         }
         return true;
@@ -377,7 +377,7 @@ namespace mir::vk
 
         if (mSurface == VK_NULL_HANDLE)
         {
-            MIR_LOG_CRITICAL("Vulkan surface creation failed");
+            MIR_LOG_CRITICAL("CreateSurface: Vulkan surface creation failed");
             return false;
         }
         return true;
@@ -389,7 +389,7 @@ namespace mir::vk
         vkEnumeratePhysicalDevices(mInstance, &count, nullptr);
         if (count == 0)
         {
-            MIR_LOG_CRITICAL("No Vulkan-capable GPU found");
+            MIR_LOG_CRITICAL("FindPhysicalDevice: No Vulkan-capable GPU found");
             return false;
         }
 
@@ -447,12 +447,12 @@ namespace mir::vk
 
         if (mPhysical == VK_NULL_HANDLE)
         {
-            MIR_LOG_CRITICAL("No suitable GPU among {} candidate(s)", count);
+            MIR_LOG_CRITICAL("FindPhysicalDevice: No suitable GPU among {} candidate(s)", count);
             return false;
         }
 
-        VkPhysicalDeviceProperties props{};
-        vkGetPhysicalDeviceProperties(mPhysical, &props);
+        vkGetPhysicalDeviceProperties(mPhysical, &mProperties);
+        const VkPhysicalDeviceProperties &props = mProperties;
         MIR_LOG_INFO("GPU: {} | {} | Vulkan {}.{}.{} | graphics+present family {}",
             props.deviceName,
             props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? "discrete" : "integrated",
@@ -465,7 +465,7 @@ namespace mir::vk
         if (mRayTracingSupported)
             MIR_LOG_INFO("Ray tracing: {} supports VK_KHR_acceleration_structure + VK_KHR_ray_tracing_pipeline", props.deviceName);
         else
-            MIR_LOG_WARN("Ray tracing unavailable on {}: missing the acceleration-structure/ray-tracing-pipeline "
+            MIR_LOG_WARN("FindPhysicalDevice: Ray tracing unavailable on {}: missing the acceleration-structure/ray-tracing-pipeline "
                 "extensions or feature bits - raster only", props.deviceName);
 
         return true;
@@ -537,7 +537,7 @@ namespace mir::vk
 
         if (vkCreateDevice(mPhysical, &deviceInfo, nullptr, &mDevice) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkCreateDevice Failed");
+            MIR_LOG_CRITICAL("CreateLogicalDevice: vkCreateDevice Failed");
             return false;
         }
 
@@ -562,7 +562,7 @@ namespace mir::vk
 
         if (vmaCreateAllocator(&allocatorInfo, &mAllocator) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vmaCreateAllocator failed");
+            MIR_LOG_CRITICAL("CreateAllocator: vmaCreateAllocator failed");
             return false;
         }
         return true;

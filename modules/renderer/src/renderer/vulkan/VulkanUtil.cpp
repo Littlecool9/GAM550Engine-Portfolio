@@ -33,7 +33,7 @@ namespace mir::vk
 
             if (bytes->empty() || bytes->size() % sizeof(uint32_t) != 0)
             {
-                MIR_LOG_CRITICAL("Bad SPIR-V size ({} bytes): {}", bytes->size(), path.string());
+                MIR_LOG_CRITICAL("ReadSpirv: Bad SPIR-V size ({} bytes): {}", bytes->size(), path.string());
                 return std::nullopt;
             }
 
@@ -144,7 +144,7 @@ namespace mir::vk
         VkShaderModule module = VK_NULL_HANDLE;
         if (vkCreateShaderModule(device, &info, nullptr, &module) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkCreateShaderModule failed: {}", path.string());
+            MIR_LOG_CRITICAL("CreateShaderModule: vkCreateShaderModule failed: {}", path.string());
             return VK_NULL_HANDLE;
         }
         return module;

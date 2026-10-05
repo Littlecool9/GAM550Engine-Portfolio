@@ -15,7 +15,6 @@
 #include <renderer/Mesh.h>
 #include <renderer/Texture.h>
 #include <renderer/components/Sky.h>
-#include <renderer/vulkan/VulkanConstants.h>
 
 #include <volk.h>
 
@@ -26,16 +25,12 @@
 #include <glm/vec4.hpp>
 
 #include <array>
-#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
 #include <vector>
-
-VK_DEFINE_HANDLE(VmaAllocator)
-VK_DEFINE_HANDLE(VmaAllocation)
 
 struct ImDrawData;
 
@@ -51,7 +46,7 @@ namespace mir::vk
     class ShadowMaps;
     class ModelDescriptors;
     class RayTracer;
-    struct SceneLighting;
+    class FrameCapture;
 }
 
 namespace mir
@@ -171,7 +166,7 @@ namespace mir
 
         bool DestroyMaterial(MaterialHandle handle);
 
-        void CaptureNextFrame(const std::filesystem::path &path) { mCapturePath = path; }
+        void CaptureNextFrame(const std::filesystem::path &path);
 
         void ReleaseSceneResources();
 
@@ -189,8 +184,8 @@ namespace mir
 
         bool RayTracingSupported() const;
 
-        constexpr static uint32_t kMaxSpotShadows = vk::kMaxSpotShadows;
-        constexpr static uint32_t kMaxPointShadows = vk::kMaxPointShadows;
+        constexpr static uint32_t kMaxSpotShadows = 4;
+        constexpr static uint32_t kMaxPointShadows = 2;
 
         constexpr static float kSunShadowHalfExtent = 25.0f;
         constexpr static float kSunShadowNearZ = 0.5f;
@@ -200,21 +195,13 @@ namespace mir
 
         void SetClearColor(const glm::vec4 &color) { mClearColor = color; }
 
-        void SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color)
-        {
-            mLightDirection = glm::normalize(direction);
-            mLightColor = color;
-        }
+        void SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color);
 
-        void SetAmbientColor(const glm::vec3 &color) { mAmbientColor = color; }
+        void SetAmbientColor(const glm::vec3 &color);
 
-        void SetFog(const glm::vec3 &color, float density)
-        {
-            mFogColor = color;
-            mFogDensity = density;
-        }
+        void SetFog(const glm::vec3 &color, float density);
 
-        void SetAtmosphere(const Sky &sky) { mAtmosphere = sky; }
+        void SetAtmosphere(const Sky &sky);
 
         void SetSkyVisible(bool visible) { mSkyVisible = visible; }
 
@@ -235,11 +222,8 @@ namespace mir
         bool RecreateSwapchain();
         // Shared prelude of DrawFrame and TraceFrame; nullopt skips the frame.
         std::optional<vk::FrameContext> BeginFrame();
-        bool RecordCapture(VkCommandBuffer cmd, uint32_t imageIndex);
-        // Writes the PNG only for a submitted frame; frees the capture buffer either way.
-        void FinishCapture(bool submitted);
-        void DestroyCaptureBuffer();
-        bool CreateSkyPipeline();
+        // No wait: the caller idles the device first. False for a null or stale handle.
+        bool DestroyMeshAndBlas(MeshHandle handle);
 
         void RecordRtFrame(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
 
@@ -247,21 +231,10 @@ namespace mir
         void RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex);
         // Writes set 1 and set 3's per-view data; returns the camera's dynamic offset.
         uint32_t WriteCameraData(const RenderView &view, uint32_t viewIndex);
-        vk::SceneLighting Lighting() const;
 
     private:
-        constexpr static auto kFramesInFlight = vk::kFramesInFlight;
-
         glm::vec4 mClearColor{ 0.02f, 0.02f, 0.02f, 1.0f };
 
-        glm::vec3 mLightDirection{ glm::normalize(glm::vec3(0.4f, 0.7f, 0.5f)) };
-        glm::vec3 mLightColor{ 0.85f, 0.85f, 0.85f };
-        glm::vec3 mAmbientColor{ 0.25f, 0.25f, 0.25f };
-
-        glm::vec3 mFogColor{ 0.02f, 0.02f, 0.02f };
-        float mFogDensity = 0.0f;
-
-        Sky mAtmosphere{};
         bool mSkyVisible = false;
 
         const ISurfaceProvider *mWindow;
@@ -279,13 +252,7 @@ namespace mir
         // Initialized only on a device with ray tracing; its Shutdown is a no-op otherwise.
         std::unique_ptr<vk::RayTracer> mRayTracer;
 
-        std::filesystem::path mCapturePath;
-        VkBuffer mCaptureBuffer = VK_NULL_HANDLE;
-        VmaAllocation mCaptureAllocation = VK_NULL_HANDLE;
-
-        VkPipelineLayout mSkyPipelineLayout = VK_NULL_HANDLE;
-        VkPipeline mSkyPipeline = VK_NULL_HANDLE;
-
+        std::unique_ptr<vk::FrameCapture> mCapture;
 
         bool mImGuiBackendInitialized = false;
         ImDrawData *mImguiDrawData = nullptr;

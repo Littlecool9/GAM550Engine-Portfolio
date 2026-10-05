@@ -11,7 +11,7 @@
 #include "CameraBuffer.h"
 
 #include <renderer/VulkanRenderer.h>
-#include <renderer/vulkan/VulkanConstants.h>
+#include "VulkanConstants.h"
 
 #include <glm/mat4x4.hpp>
 #include <volk.h>
@@ -50,6 +50,9 @@ namespace mir::vk
         VkDescriptorSet Set(uint32_t frame) const { return mSets[frame]; }
 
     private:
+        constexpr static uint32_t kMaxSpotShadows = VulkanRenderer::kMaxSpotShadows;
+        constexpr static uint32_t kMaxPointShadows = VulkanRenderer::kMaxPointShadows;
+
         constexpr static uint32_t kSunShadowResolution = 2048;
         constexpr static uint32_t kSpotShadowResolution = 1024;
         constexpr static uint32_t kPointShadowResolution = 512;

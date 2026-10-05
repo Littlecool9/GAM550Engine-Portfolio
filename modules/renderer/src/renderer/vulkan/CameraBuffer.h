@@ -9,8 +9,9 @@
 #pragma once
 
 #include <renderer/VulkanRenderer.h>
-#include <renderer/vulkan/VulkanConstants.h>
+#include "VulkanConstants.h"
 
+#include <glm/geometric.hpp>
 #include <glm/mat4x4.hpp>
 #include <glm/vec3.hpp>
 
@@ -27,17 +28,6 @@ namespace mir::vk
 {
     class Device;
 
-    // Scene-wide state every view repeats in its camera data; the facade owns it.
-    struct SceneLighting
-    {
-        glm::vec3 lightDirection{ 0.0f };
-        glm::vec3 lightColor{ 0.0f };
-        glm::vec3 ambientColor{ 0.0f };
-        glm::vec3 fogColor{ 0.0f };
-        float fogDensity = 0.0f;
-        Sky atmosphere{};
-    };
-
     // What the camera data needs from the shadow maps for one view.
     struct ViewShadowInfo
     {
@@ -52,12 +42,15 @@ namespace mir::vk
         bool Initialize(Device &device);
         void Shutdown();
 
-        // Only staged: a frame slot's buffer may still be in use until that slot's wait.
+        // All only staged: a frame slot's buffer may still be in use until that slot's wait.
         void SetLights(std::span<const LightItem> lights);
+        void SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color);
+        void SetAmbientColor(const glm::vec3 &color) { mAmbientColor = color; }
+        void SetFog(const glm::vec3 &color, float density);
+        void SetAtmosphere(const Sky &sky) { mAtmosphere = sky; }
 
         // Fills this view's slice of the frame's buffers; returns its dynamic offset into binding 0.
-        uint32_t WriteView(uint32_t frame, const RenderView &view, uint32_t viewIndex,
-            const SceneLighting &lighting, const ViewShadowInfo &shadow);
+        uint32_t WriteView(uint32_t frame, const RenderView &view, uint32_t viewIndex, const ViewShadowInfo &shadow);
 
         VkDescriptorSetLayout SetLayout() const { return mSetLayout; }
         VkDescriptorSet Set(uint32_t frame) const { return mSets[frame]; }
@@ -83,5 +76,13 @@ namespace mir::vk
         VmaAllocation mLightAllocations[kFramesInFlight]{};
         std::byte *mLightMapped[kFramesInFlight]{};
         std::vector<LightItem> mLights;
+
+        // Scene-wide state every view repeats in its camera data.
+        glm::vec3 mLightDirection{ glm::normalize(glm::vec3(0.4f, 0.7f, 0.5f)) };
+        glm::vec3 mLightColor{ 0.85f, 0.85f, 0.85f };
+        glm::vec3 mAmbientColor{ 0.25f, 0.25f, 0.25f };
+        glm::vec3 mFogColor{ 0.02f, 0.02f, 0.02f };
+        float mFogDensity = 0.0f;
+        Sky mAtmosphere{};
     };
 }

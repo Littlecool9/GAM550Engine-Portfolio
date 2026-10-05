@@ -9,6 +9,7 @@
 #include <renderer/VulkanRenderer.h>
 #include "vulkan/Device.h"
 #include "vulkan/Swapchain.h"
+#include "vulkan/VulkanConstants.h"
 
 #include <core/log/Log.h>
 
@@ -22,7 +23,7 @@ namespace mir
         void CheckImGuiVulkanResult(VkResult result)
         {
             if (result != VK_SUCCESS)
-                MIR_LOG_ERROR("ImGui Vulkan backend call failed: {}", static_cast<int>(result));
+                MIR_LOG_ERROR("CheckImGuiVulkanResult: ImGui Vulkan backend call failed: {}", static_cast<int>(result));
         }
     }
 
@@ -51,7 +52,7 @@ namespace mir
 
         if (!ImGui_ImplVulkan_Init(&initInfo))
         {
-            MIR_LOG_ERROR("ImGui_ImplVulkan_Init failed");
+            MIR_LOG_ERROR("InitImGuiVulkanBackend: ImGui_ImplVulkan_Init failed");
             return false;
         }
 
