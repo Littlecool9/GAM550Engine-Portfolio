@@ -316,6 +316,13 @@ logged error.
 
 ## Changed
 
+*2026-10-05* — **A failed renderer initialization shuts the renderer down.**
+Was: `App::Initialize` reset the window and returned when
+`VulkanRenderer::Initialize` failed, so whatever the renderer had created
+before the failure was never freed. Now: it calls `mRenderer.Shutdown()` first,
+then resets the window, which the renderer's surface needs until its own
+shutdown.
+
 *2026-10-02* — **A build without the editor.** Was: `app` linked `mir::editor`
 PUBLIC unconditionally, so every binary carried the editor. Now: the
 `MJOLNIR_WITH_EDITOR` option, ON by default, and the `windows-msvc-game-*`
