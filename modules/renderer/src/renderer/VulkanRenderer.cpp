@@ -8,8 +8,11 @@
  */
 #include "renderer/VulkanRenderer.h"
 #include "vulkan/FrameSync.h"
+#include "vulkan/MaterialStore.h"
+#include "vulkan/ResourceStore.h"
 #include "vulkan/VulkanDevice.h"
 #include "vulkan/VulkanSwapchain.h"
+#include "vulkan/VulkanUtil.h"
 
 #include <core/log/Log.h>
 
@@ -22,7 +25,9 @@ namespace mir
     VulkanRenderer::VulkanRenderer()
         : mDevice(std::make_unique<vk::VulkanDevice>()),
         mSwapchain(std::make_unique<vk::VulkanSwapchain>()),
-        mFrameSync(std::make_unique<vk::FrameSync>())
+        mFrameSync(std::make_unique<vk::FrameSync>()),
+        mResources(std::make_unique<vk::ResourceStore>()),
+        mMaterialStore(std::make_unique<vk::MaterialStore>())
     {}
     VulkanRenderer::~VulkanRenderer() = default;
 
@@ -52,7 +57,7 @@ namespace mir
         if (!mFrameSync->Initialize(*mDevice))
             return false;
 
-        if (!CreateDefaultTextures())
+        if (!mResources->Initialize(*mDevice))
             return false;
 
         if (!CreateCameraResources())
@@ -61,7 +66,11 @@ namespace mir
         if (!CreateShadowResources())
             return false;
 
-        if (!CreatePipelineLayout())
+        if (!CreateModelDescriptors())
+            return false;
+
+        if (!mMaterialStore->Initialize(*mDevice, *mResources, mSwapchain->Format(),
+            { mCameraSetLayout, mModelSetLayout, mShadowSetLayout }))
             return false;
 
         if (!CreateSkyPipeline())
@@ -76,11 +85,6 @@ namespace mir
             WriteRtDescriptorSets();
         }
 
-        mDefaultMaterial = CreateMaterial(MaterialDesc{});
-        if (mDefaultMaterial.IsNull())
-            return false;
-
-        mDevice->NameObject(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(mMaterials[mDefaultMaterial.mIndex].mPipeline), "Default material pipeline");
         mDevice->NameObject(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(mSkyPipeline), "Sky pipeline");
 
         return true;
@@ -113,35 +117,13 @@ namespace mir
 
             mFrameSync->Shutdown();
 
-            // before the device allocator
-            DestroyMeshes();
-            // before mMaterialDescriptorPool: frees each material's set
-            DestroyMaterials();
+            mMaterialStore->Shutdown();
+            DestroyBlases();
+            mResources->Shutdown();
             DestroyModelResources(true);
-            DestroyTextures();
             // before the device allocator: frees the camera UBO buffers
             DestroyCameraResources();
             DestroyShadowResources();
-
-            DestroySamplers();
-
-            if (mMaterialDescriptorPool != VK_NULL_HANDLE)
-            {
-                vkDestroyDescriptorPool(mDevice->Handle(), mMaterialDescriptorPool, nullptr);
-                mMaterialDescriptorPool = VK_NULL_HANDLE;
-            }
-
-            if (mMaterialSetLayout != VK_NULL_HANDLE)
-            {
-                vkDestroyDescriptorSetLayout(mDevice->Handle(), mMaterialSetLayout, nullptr);
-                mMaterialSetLayout = VK_NULL_HANDLE;
-            }
-
-            if (mPipelineLayout != VK_NULL_HANDLE)
-            {
-                vkDestroyPipelineLayout(mDevice->Handle(), mPipelineLayout, nullptr);
-                mPipelineLayout = VK_NULL_HANDLE;
-            }
 
             if (mSkyPipeline != VK_NULL_HANDLE)
             {
@@ -196,6 +178,83 @@ namespace mir
         mDevice->Shutdown();
     }
 
+    MeshHandle VulkanRenderer::CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices)
+    {
+        const MeshHandle handle = mResources->CreateMesh(vertices, indices);
+        if (handle.IsNull() || !mDevice->RayTracingSupported())
+            return handle;
+
+        if (mBlases.size() <= handle.mIndex)
+            mBlases.resize(handle.mIndex + 1);
+        MeshBlas &blas = mBlases[handle.mIndex];
+
+        VkBuffer scratch = VK_NULL_HANDLE;
+        VmaAllocation scratchAllocation = VK_NULL_HANDLE;
+        bool built = false;
+        const bool submitted = vk::SubmitAndWait(*mDevice, [&](VkCommandBuffer cmd)
+            {
+                built = BuildBLAS(*mResources->FindMesh(handle), static_cast<uint32_t>(vertices.size()), cmd,
+                    blas, scratch, scratchAllocation);
+            });
+
+        if (scratch != VK_NULL_HANDLE)
+            vmaDestroyBuffer(mDevice->Allocator(), scratch, scratchAllocation);
+
+        if (!built || !submitted)
+        {
+            DestroyBLAS(blas);
+            MIR_LOG_ERROR("CreateMesh: BLAS build failed, mesh will raster only");
+        }
+
+        return handle;
+    }
+
+    bool VulkanRenderer::DestroyMesh(MeshHandle handle)
+    {
+        if (mResources->FindMesh(handle) == nullptr)
+        {
+            MIR_LOG_ERROR("DestroyMesh: handle is null or stale");
+            return false;
+        }
+
+        // in-flight frames (up to kFramesInFlight - 1 old ones) may still be
+        // drawing from this buffer - see ReleaseSceneResources.
+        vkDeviceWaitIdle(mDevice->Handle());
+
+        DestroyMeshBlas(handle.mIndex);
+        return mResources->DestroyMesh(handle);
+    }
+
+    TextureHandle VulkanRenderer::CreateTexture(const TextureDesc &desc)
+    {
+        return mResources->CreateTexture(desc);
+    }
+
+    MaterialHandle VulkanRenderer::CreateMaterial(const MaterialDesc &desc)
+    {
+        return mMaterialStore->CreateMaterial(desc, *mResources, mSwapchain->Format());
+    }
+
+    bool VulkanRenderer::DestroyMaterial(MaterialHandle handle)
+    {
+        if (handle == mMaterialStore->DefaultMaterial())
+        {
+            MIR_LOG_ERROR("DestroyMaterial: refusing to destroy the default material");
+            return false;
+        }
+
+        if (mMaterialStore->FindMaterial(handle) == nullptr)
+        {
+            MIR_LOG_ERROR("DestroyMaterial: handle is null or stale");
+            return false;
+        }
+
+        // in-flight frames may still be drawing with this pipeline/set
+        vkDeviceWaitIdle(mDevice->Handle());
+
+        return mMaterialStore->DestroyMaterial(handle);
+    }
+
     void VulkanRenderer::ReleaseSceneResources()
     {
         if (mDevice->Handle() == VK_NULL_HANDLE)
@@ -204,52 +263,14 @@ namespace mir
         // in-flight frames may still use them
         vkDeviceWaitIdle(mDevice->Handle());
 
-        const std::size_t meshCount = mMeshes.size();
-        DestroyMeshes();
+        DestroyBlases();
+        const std::size_t meshCount = mResources->ReleaseMeshes();
         DestroyModelResources(false);
+        // The default textures and material stay: CreateMaterial and draws fall back to them.
+        const std::size_t textureCount = mResources->ReleaseTextures();
+        const std::size_t materialCount = mMaterialStore->ReleaseMaterials();
 
-        // keep the two default textures: CreateMaterial falls back to them
-        const std::size_t keptTextures = std::min<std::size_t>(mTextures.size(), 2);
-        std::size_t releasedTextures = 0;
-        for (std::size_t i = keptTextures; i < mTextures.size(); ++i)
-        {
-            GpuTexture &texture = mTextures[i];
-            if (texture.mView != VK_NULL_HANDLE)
-                vkDestroyImageView(mDevice->Handle(), texture.mView, nullptr);
-            if (texture.mImage != VK_NULL_HANDLE)
-                vmaDestroyImage(mDevice->Allocator(), texture.mImage, texture.mAllocation);
-            ++releasedTextures;
-        }
-        mTextures.resize(keptTextures);
-
-        if (mDefaultMaterial.IsNull() || mDefaultMaterial.mIndex >= mMaterials.size())
-        {
-            const std::size_t materialCount = mMaterials.size();
-            DestroyMaterials();
-            MIR_LOG_INFO("Released {} meshes, {} materials and {} textures", meshCount, materialCount, releasedTextures);
-            return;
-        }
-
-        // keep the default material: DrawFrame falls back to it
-        const GpuMaterial defaultMaterial = mMaterials[mDefaultMaterial.mIndex];
-        std::size_t released = 0;
-        for (std::size_t i = 0; i < mMaterials.size(); ++i)
-        {
-            if (i == mDefaultMaterial.mIndex)
-                continue;
-            if (mMaterials[i].mDescriptorSet != VK_NULL_HANDLE)
-                vkFreeDescriptorSets(mDevice->Handle(), mMaterialDescriptorPool, 1, &mMaterials[i].mDescriptorSet);
-            if (mMaterials[i].mPipeline != VK_NULL_HANDLE)
-                vkDestroyPipeline(mDevice->Handle(), mMaterials[i].mPipeline, nullptr);
-            ++released;
-        }
-
-        mMaterials.clear();
-        mMaterials.push_back(defaultMaterial);
-        mFreeMaterialIndices.clear();
-        mDefaultMaterial = MaterialHandle{ 0, defaultMaterial.mGeneration };
-
-        MIR_LOG_INFO("Released {} meshes, {} materials and {} textures", meshCount, released, releasedTextures);
+        MIR_LOG_INFO("Released {} meshes, {} materials and {} textures", meshCount, materialCount, textureCount);
     }
 
     void VulkanRenderer::ReleaseModelResources(std::span<const MeshHandle> meshes,
@@ -261,54 +282,17 @@ namespace mir
 
         vkDeviceWaitIdle(mDevice->Handle());
 
+        // Stale handles, the default material and the default textures are skipped.
         for (const MeshHandle handle : meshes)
         {
-            if (handle.IsNull() || handle.mIndex >= mMeshes.size())
-                continue;
-            GpuMesh &mesh = mMeshes[handle.mIndex];
-            if (mesh.mGeneration != handle.mGeneration)
-                continue;
-            if (mesh.mVertexBuffer != VK_NULL_HANDLE)
-                vmaDestroyBuffer(mDevice->Allocator(), mesh.mVertexBuffer, mesh.mVertexAllocation);
-            if (mesh.mIndexBuffer != VK_NULL_HANDLE)
-                vmaDestroyBuffer(mDevice->Allocator(), mesh.mIndexBuffer, mesh.mIndexAllocation);
-            mesh = {};
-            // Bumped so a handle to the old contents stops resolving.
-            mesh.mGeneration = handle.mGeneration + 1;
-            mFreeMeshIndices.push_back(handle.mIndex);
+            if (mResources->DestroyMesh(handle))
+                DestroyMeshBlas(handle.mIndex);
         }
 
         for (const MaterialHandle handle : materials)
-        {
-            if (handle.IsNull() || handle == mDefaultMaterial || handle.mIndex >= mMaterials.size())
-                continue;
-            GpuMaterial &material = mMaterials[handle.mIndex];
-            if (material.mGeneration != handle.mGeneration)
-                continue;
-            // The sampler belongs to the renderer's cache, not to the material.
-            if (material.mDescriptorSet != VK_NULL_HANDLE)
-                vkFreeDescriptorSets(mDevice->Handle(), mMaterialDescriptorPool, 1, &material.mDescriptorSet);
-            if (material.mPipeline != VK_NULL_HANDLE)
-                vkDestroyPipeline(mDevice->Handle(), material.mPipeline, nullptr);
-            material = {};
-            material.mGeneration = handle.mGeneration + 1;
-            mFreeMaterialIndices.push_back(handle.mIndex);
-        }
+            mMaterialStore->DestroyMaterial(handle);
 
         for (const TextureHandle handle : textures)
-        {
-            // Index 0 and 1 are the defaults every material falls back to.
-            if (handle.IsNull() || handle.mIndex < 2 || handle.mIndex >= mTextures.size())
-                continue;
-            GpuTexture &texture = mTextures[handle.mIndex];
-            if (texture.mGeneration != handle.mGeneration)
-                continue;
-            if (texture.mView != VK_NULL_HANDLE)
-                vkDestroyImageView(mDevice->Handle(), texture.mView, nullptr);
-            if (texture.mImage != VK_NULL_HANDLE)
-                vmaDestroyImage(mDevice->Allocator(), texture.mImage, texture.mAllocation);
-            texture = {};
-            texture.mGeneration = handle.mGeneration + 1;
-        }
+            mResources->DestroyTexture(handle);
     }
 }

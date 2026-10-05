@@ -10,6 +10,7 @@
 #define NOMINMAX
 #endif
 #include "VulkanUtil.h"
+#include "VulkanDevice.h"
 
 #include <core/fs/FileIO.h>
 #include <core/log/Log.h>
@@ -147,5 +148,49 @@ namespace mir::vk
             return VK_NULL_HANDLE;
         }
         return module;
+    }
+
+    bool SubmitAndWait(const VulkanDevice &device, const std::function<void(VkCommandBuffer)> &record)
+    {
+        VkCommandPool pool = VK_NULL_HANDLE;
+        const VkCommandPoolCreateInfo poolInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+            .queueFamilyIndex = device.QueueFamily() };
+
+        if (vkCreateCommandPool(device.Handle(), &poolInfo, nullptr, &pool) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("SubmitAndWait: command pool creation failed");
+            return false;
+        }
+
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        const VkCommandBufferAllocateInfo allocInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = pool,
+            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1 };
+        vkAllocateCommandBuffers(device.Handle(), &allocInfo, &cmd);
+
+        const VkCommandBufferBeginInfo beginInfo{
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
+        vkBeginCommandBuffer(cmd, &beginInfo);
+        record(cmd);
+        vkEndCommandBuffer(cmd);
+
+        const VkSubmitInfo submitInfo{
+            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &cmd };
+
+        const bool submitted = vkQueueSubmit(device.Queue(), 1, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS;
+        if (submitted)
+            vkQueueWaitIdle(device.Queue());
+        else
+            MIR_LOG_CRITICAL("SubmitAndWait: vkQueueSubmit failed");
+
+        // Destroying the pool frees its command buffer too.
+        vkDestroyCommandPool(device.Handle(), pool, nullptr);
+        return submitted;
     }
 }

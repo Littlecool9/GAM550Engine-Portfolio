@@ -11,6 +11,8 @@
 #endif
 #include <renderer/VulkanRenderer.h>
 #include "FrameSync.h"
+#include "MaterialStore.h"
+#include "ResourceStore.h"
 #include "VulkanDevice.h"
 #include "VulkanSwapchain.h"
 #include "VulkanUtil.h"
@@ -42,9 +44,9 @@ namespace mir
 
         WriteCameraData(view, viewIndex);
         const uint32_t cameraOffset = static_cast<uint32_t>(viewIndex * mCameraAlignedSize);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mMaterialStore->PipelineLayout(),
             1, 1, &mCameraDescriptorSets[mFrameSync->Index()], 1, &cameraOffset);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mMaterialStore->PipelineLayout(),
             3, 1, &mShadowDescriptorSets[mFrameSync->Index()], 0, nullptr);
 
         VkPipeline boundPipeline = VK_NULL_HANDLE;
@@ -53,16 +55,12 @@ namespace mir
         // no mesh/material batching yet, just draw per item
         for (const DrawItem &item : view.items)
         {
-            const GpuMesh *const mesh = FindMesh(item.mesh);
+            const vk::GpuMesh *const mesh = mResources->FindMesh(item.mesh);
             if (mesh == nullptr)
                 continue;
 
-            const GpuMaterial *material = FindMaterial(item.material);
-            // A slot emptied by ReleaseModelResources is still in range, so
-            // check the pipeline rather than the handle alone.
-            if (material == nullptr || material->mPipeline == VK_NULL_HANDLE)
-                material = FindMaterial(mDefaultMaterial);
-            if (material == nullptr || material->mPipeline == VK_NULL_HANDLE)
+            const vk::GpuMaterial *const material = mMaterialStore->FindOrDefault(item.material);
+            if (material == nullptr)
                 continue;
 
             if (material->mModelShader && !BindModelDescriptors(cmd, *material, item))
@@ -76,7 +74,7 @@ namespace mir
 
             if (material->mDescriptorSet != boundDescriptorSet)
             {
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mMaterialStore->PipelineLayout(),
                     0, 1, &material->mDescriptorSet, 0, nullptr);
                 boundDescriptorSet = material->mDescriptorSet;
             }
@@ -93,7 +91,7 @@ namespace mir
                 .normalCol2 = glm::vec4(item.normalMatrix[2], 0.0f),
                 .tint = item.tint };
 
-            vkCmdPushConstants(cmd, mPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+            vkCmdPushConstants(cmd, mMaterialStore->PipelineLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                 0, sizeof(vk::RasterPushConstants), &pushData);
 
             vkCmdDrawIndexed(cmd, mesh->mIndexCount, 1, 0, 0, 0);

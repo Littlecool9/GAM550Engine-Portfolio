@@ -1,7 +1,7 @@
 /**
- * @file VulkanTexture.cpp
+ * @file ResourceStore.cpp
  * @author Sumin Park
- * @brief Textures, mip generation, samplers and default textures.
+ * @brief Mesh and texture uploads, mip generation, samplers and default textures.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -9,7 +9,7 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <renderer/VulkanRenderer.h>
+#include "ResourceStore.h"
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
 
@@ -20,11 +20,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <format>
 #include <utility>
 #include <vector>
 
-namespace mir
+namespace mir::vk
 {
     namespace
     {
@@ -105,7 +106,173 @@ namespace mir
         }
     }
 
-    VkSampler VulkanRenderer::AcquireSampler(const SamplerDesc &desc)
+    bool ResourceStore::Initialize(VulkanDevice &device)
+    {
+        mDevice = &device;
+        return CreateDefaultTextures();
+    }
+
+    void ResourceStore::Shutdown()
+    {
+        if (mDevice == nullptr)
+            return;
+
+        ReleaseMeshes();
+        DestroyTextures();
+        DestroySamplers();
+    }
+
+    MeshHandle ResourceStore::CreateMesh(std::span<const Vertex> vertices,
+        std::span<const uint32_t> indices)
+    {
+        if (vertices.empty() || indices.empty())
+        {
+            MIR_LOG_ERROR("CreateMesh: vertices and indices must both be non-empty");
+            return kNullMesh;
+        }
+
+        const VkDeviceSize vertexBytes = vertices.size_bytes();
+        const VkDeviceSize indexBytes = indices.size_bytes();
+
+        // temporarily pack multiple data to one buffer for faster creation
+        VkBuffer staging = VK_NULL_HANDLE;
+        VmaAllocation stagingAllocation = VK_NULL_HANDLE;
+        VmaAllocationInfo stagingInfo{};
+
+        if (!CreateBuffer(mDevice->Allocator(), vertexBytes + indexBytes,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+            VMA_ALLOCATION_CREATE_MAPPED_BIT,
+            staging, stagingAllocation, &stagingInfo))
+        {
+            MIR_LOG_CRITICAL("CreateMesh: staging buffer allocation failed");
+            return kNullMesh;
+        }
+
+        std::byte *const mapped = static_cast<std::byte *>(stagingInfo.pMappedData);
+        std::memcpy(mapped, vertices.data(), vertexBytes);
+        std::memcpy(mapped + vertexBytes, indices.data(), indexBytes);
+        vmaFlushAllocation(mDevice->Allocator(), stagingAllocation, 0, VK_WHOLE_SIZE);
+
+        GpuMesh mesh{};
+        mesh.mIndexCount = static_cast<uint32_t>(indices.size());
+        mesh.mGeneration = 1;
+
+        // Ray tracing reads both buffers through device addresses to build the BLAS.
+        VkBufferUsageFlags extraUsage = 0;
+        if (mDevice->RayTracingSupported())
+            extraUsage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+
+        // No host-access flags on either: that is what puts them in VRAM.
+        const bool buffersCreated =
+            CreateBuffer(mDevice->Allocator(), vertexBytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | extraUsage,
+                0, mesh.mVertexBuffer, mesh.mVertexAllocation, nullptr) &&
+            CreateBuffer(mDevice->Allocator(), indexBytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | extraUsage,
+                0, mesh.mIndexBuffer, mesh.mIndexAllocation, nullptr);
+
+        if (!buffersCreated)
+        {
+            MIR_LOG_CRITICAL("CreateMesh: device buffer allocation failed");
+            FreeMesh(mesh);
+            vmaDestroyBuffer(mDevice->Allocator(), staging, stagingAllocation);
+            return kNullMesh;
+        }
+
+        const bool uploaded = SubmitAndWait(*mDevice, [&](VkCommandBuffer cmd)
+            {
+                const VkBufferCopy vertexCopy{ .srcOffset = 0, .dstOffset = 0, .size = vertexBytes };
+                vkCmdCopyBuffer(cmd, staging, mesh.mVertexBuffer, 1, &vertexCopy);
+
+                // srcOffset picks the second half of the same staging allocation.
+                const VkBufferCopy indexCopy{ .srcOffset = vertexBytes, .dstOffset = 0, .size = indexBytes };
+                vkCmdCopyBuffer(cmd, staging, mesh.mIndexBuffer, 1, &indexCopy);
+            });
+
+        vmaDestroyBuffer(mDevice->Allocator(), staging, stagingAllocation);
+
+        if (!uploaded)
+        {
+            FreeMesh(mesh);
+            return kNullMesh;
+        }
+
+        uint32_t index;
+        if (!mFreeMeshIndices.empty())
+        {
+            index = mFreeMeshIndices.back();
+            mFreeMeshIndices.pop_back();
+            // DestroyMesh already bumped the slot's generation; keep it.
+            mesh.mGeneration = mMeshes[index].mGeneration;
+            mMeshes[index] = mesh;
+        }
+        else
+        {
+            index = static_cast<uint32_t>(mMeshes.size());
+            mMeshes.push_back(mesh);
+        }
+
+        mDevice->NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mesh.mVertexBuffer),
+            std::format("Mesh {} vertices", index).c_str());
+        mDevice->NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mesh.mIndexBuffer),
+            std::format("Mesh {} indices", index).c_str());
+
+        MIR_LOG_INFO("Mesh {} uploaded: {} vertices, {} indices, {} bytes",
+            index, vertices.size(), indices.size(), vertexBytes + indexBytes);
+
+        return MeshHandle{ index, mesh.mGeneration };
+    }
+
+    void ResourceStore::FreeMesh(GpuMesh &mesh)
+    {
+        if (mesh.mVertexBuffer != VK_NULL_HANDLE)
+            vmaDestroyBuffer(mDevice->Allocator(), mesh.mVertexBuffer, mesh.mVertexAllocation);
+        if (mesh.mIndexBuffer != VK_NULL_HANDLE)
+            vmaDestroyBuffer(mDevice->Allocator(), mesh.mIndexBuffer, mesh.mIndexAllocation);
+    }
+
+    bool ResourceStore::DestroyMesh(MeshHandle handle)
+    {
+        if (FindMesh(handle) == nullptr)
+            return false;
+
+        GpuMesh &mesh = mMeshes[handle.mIndex];
+        FreeMesh(mesh);
+
+        const uint32_t nextGeneration = mesh.mGeneration + 1;
+        mesh = GpuMesh{};
+        mesh.mGeneration = nextGeneration; // every outstanding copy of handle is now stale
+
+        mFreeMeshIndices.push_back(handle.mIndex);
+        return true;
+    }
+
+    std::size_t ResourceStore::ReleaseMeshes()
+    {
+        const std::size_t count = mMeshes.size();
+        for (GpuMesh &mesh : mMeshes)
+            FreeMesh(mesh);
+        mMeshes.clear();
+        mFreeMeshIndices.clear();
+        return count;
+    }
+
+    const GpuMesh *ResourceStore::FindMesh(MeshHandle handle) const
+    {
+        if (handle.IsNull() || handle.mIndex >= mMeshes.size())
+            return nullptr;
+
+        const GpuMesh &mesh = mMeshes[handle.mIndex];
+
+        if (mesh.mGeneration != handle.mGeneration)
+            return nullptr;
+
+        return &mesh;
+    }
+
+    VkSampler ResourceStore::AcquireSampler(const SamplerDesc &desc)
     {
         const uint64_t key = (static_cast<uint64_t>(desc.magFilter) << 40) |
             (static_cast<uint64_t>(desc.minFilter) << 32) |
@@ -142,14 +309,14 @@ namespace mir
         return sampler;
     }
 
-    void VulkanRenderer::DestroySamplers()
+    void ResourceStore::DestroySamplers()
     {
         for (const auto &[key, sampler] : mSamplers)
             vkDestroySampler(mDevice->Handle(), sampler, nullptr);
         mSamplers.clear();
     }
 
-    bool VulkanRenderer::CreateDefaultTextures()
+    bool ResourceStore::CreateDefaultTextures()
     {
         const std::array<std::byte, 4> white{
             std::byte{ 255 }, std::byte{ 255 }, std::byte{ 255 }, std::byte{ 255 } };
@@ -174,7 +341,7 @@ namespace mir
         return true;
     }
 
-    TextureHandle VulkanRenderer::CreateTexture(const TextureDesc &desc)
+    TextureHandle ResourceStore::CreateTexture(const TextureDesc &desc)
     {
         const VkDeviceSize expectedBytes = VkDeviceSize{ desc.width } * desc.height * 4;
         if (desc.width == 0 || desc.height == 0 || desc.pixels.size_bytes() != expectedBytes)
@@ -202,7 +369,7 @@ namespace mir
         VkBuffer staging = VK_NULL_HANDLE;
         VmaAllocation stagingAllocation = VK_NULL_HANDLE;
 
-        if (!vk::CreateUploadBuffer(mDevice->Allocator(), pixels,
+        if (!CreateUploadBuffer(mDevice->Allocator(), pixels,
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT, staging, stagingAllocation))
         {
             MIR_LOG_CRITICAL("CreateTexture: staging buffer allocation failed");
@@ -237,58 +404,30 @@ namespace mir
             return kNullTexture;
         }
 
-        VkCommandPool uploadPool = VK_NULL_HANDLE;
-        const VkCommandPoolCreateInfo poolInfo{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-            .queueFamilyIndex = mDevice->QueueFamily() };
+        const bool uploaded = SubmitAndWait(*mDevice, [&](VkCommandBuffer cmd)
+            {
+                ImageBarrier(cmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, levelCount);
 
-        if (vkCreateCommandPool(mDevice->Handle(), &poolInfo, nullptr, &uploadPool) != VK_SUCCESS)
+                vkCmdCopyBufferToImage(cmd, staging, texture.mImage,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    static_cast<uint32_t>(regions.size()), regions.data());
+
+                ImageBarrier(cmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT, levelCount);
+            });
+
+        vmaDestroyBuffer(mDevice->Allocator(), staging, stagingAllocation);
+
+        if (!uploaded)
         {
-            MIR_LOG_CRITICAL("CreateTexture: upload command pool creation failed");
-            vmaDestroyImage(mDevice->Allocator(), texture.mImage, texture.mAllocation);
-            vmaDestroyBuffer(mDevice->Allocator(), staging, stagingAllocation);
+            FreeTexture(texture);
             return kNullTexture;
         }
-
-        VkCommandBuffer uploadCmd = VK_NULL_HANDLE;
-        const VkCommandBufferAllocateInfo cmdAllocInfo{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .commandPool = uploadPool,
-            .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1 };
-        vkAllocateCommandBuffers(mDevice->Handle(), &cmdAllocInfo, &uploadCmd);
-
-        const VkCommandBufferBeginInfo beginInfo{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
-        vkBeginCommandBuffer(uploadCmd, &beginInfo);
-
-        vk::ImageBarrier(uploadCmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
-            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, levelCount);
-
-        vkCmdCopyBufferToImage(uploadCmd, staging, texture.mImage,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            static_cast<uint32_t>(regions.size()), regions.data());
-
-        vk::ImageBarrier(uploadCmd, texture.mImage, VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT, levelCount);
-
-        vkEndCommandBuffer(uploadCmd);
-
-        const VkSubmitInfo submitInfo{
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &uploadCmd };
-
-        vkQueueSubmit(mDevice->Queue(), 1, &submitInfo, VK_NULL_HANDLE);
-        vkQueueWaitIdle(mDevice->Queue());
-
-        vkDestroyCommandPool(mDevice->Handle(), uploadPool, nullptr);
-        vmaDestroyBuffer(mDevice->Allocator(), staging, stagingAllocation);
 
         const VkImageViewCreateInfo viewInfo{
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -305,7 +444,7 @@ namespace mir
         if (vkCreateImageView(mDevice->Handle(), &viewInfo, nullptr, &texture.mView) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateTexture: vkCreateImageView failed");
-            vmaDestroyImage(mDevice->Allocator(), texture.mImage, texture.mAllocation);
+            FreeTexture(texture);
             return kNullTexture;
         }
 
@@ -321,7 +460,40 @@ namespace mir
         return TextureHandle{ index, texture.mGeneration };
     }
 
-    const VulkanRenderer::GpuTexture *VulkanRenderer::FindTexture(TextureHandle handle) const
+    void ResourceStore::FreeTexture(GpuTexture &texture)
+    {
+        if (texture.mView != VK_NULL_HANDLE)
+            vkDestroyImageView(mDevice->Handle(), texture.mView, nullptr);
+        if (texture.mImage != VK_NULL_HANDLE)
+            vmaDestroyImage(mDevice->Allocator(), texture.mImage, texture.mAllocation);
+    }
+
+    bool ResourceStore::DestroyTexture(TextureHandle handle)
+    {
+        if (handle == mDefaultWhiteTexture || handle == mDefaultNormalTexture || FindTexture(handle) == nullptr)
+            return false;
+
+        GpuTexture &texture = mTextures[handle.mIndex];
+        FreeTexture(texture);
+
+        const uint32_t nextGeneration = texture.mGeneration + 1;
+        texture = GpuTexture{};
+        texture.mGeneration = nextGeneration;
+        return true;
+    }
+
+    std::size_t ResourceStore::ReleaseTextures()
+    {
+        // The defaults are created first, so they hold the first two slots.
+        const std::size_t kept = std::min<std::size_t>(mTextures.size(), 2);
+        for (std::size_t i = kept; i < mTextures.size(); ++i)
+            FreeTexture(mTextures[i]);
+        const std::size_t released = mTextures.size() - kept;
+        mTextures.resize(kept);
+        return released;
+    }
+
+    const GpuTexture *ResourceStore::FindTexture(TextureHandle handle) const
     {
         if (handle.IsNull() || handle.mIndex >= mTextures.size())
             return nullptr;
@@ -334,15 +506,10 @@ namespace mir
         return &texture;
     }
 
-    void VulkanRenderer::DestroyTextures()
+    void ResourceStore::DestroyTextures()
     {
         for (GpuTexture &texture : mTextures)
-        {
-            if (texture.mView != VK_NULL_HANDLE)
-                vkDestroyImageView(mDevice->Handle(), texture.mView, nullptr);
-            if (texture.mImage != VK_NULL_HANDLE)
-                vmaDestroyImage(mDevice->Allocator(), texture.mImage, texture.mAllocation);
-        }
+            FreeTexture(texture);
         mTextures.clear();
         mDefaultWhiteTexture = kNullTexture;
         mDefaultNormalTexture = kNullTexture;

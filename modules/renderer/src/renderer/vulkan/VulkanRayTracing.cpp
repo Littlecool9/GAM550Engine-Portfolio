@@ -8,6 +8,8 @@
  */
 #include <renderer/VulkanRenderer.h>
 #include "FrameSync.h"
+#include "MaterialStore.h"
+#include "ResourceStore.h"
 #include "VulkanDevice.h"
 #include "VulkanSwapchain.h"
 #include "VulkanUtil.h"
@@ -547,8 +549,8 @@ namespace mir
                 break;
             }
 
-            const GpuMesh *const mesh = FindMesh(item.mesh);
-            if (mesh == nullptr || mesh->mBlas == VK_NULL_HANDLE)
+            const vk::GpuMesh *const mesh = mResources->FindMesh(item.mesh);
+            if (mesh == nullptr || item.mesh.mIndex >= mBlases.size() || mBlases[item.mesh.mIndex].mBlas == VK_NULL_HANDLE)
                 continue;
 
             instances[instanceCount] = VkAccelerationStructureInstanceKHR{
@@ -557,11 +559,9 @@ namespace mir
                 .mask = 0xFF,
                 .instanceShaderBindingTableRecordOffset = 0,
                 .flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR,
-                .accelerationStructureReference = mesh->mBlasAddress };
+                .accelerationStructureReference = mBlases[item.mesh.mIndex].mAddress };
 
-            const GpuMaterial *material = FindMaterial(item.material);
-            if (material == nullptr)
-                material = FindMaterial(mDefaultMaterial);
+            const vk::GpuMaterial *const material = mMaterialStore->FindOrDefault(item.material);
 
             instanceInfos[instanceCount] = RtInstanceInfo{
                 .vertexAddress = GetBufferAddress(mDevice->Handle(), mesh->mVertexBuffer),
@@ -633,23 +633,36 @@ namespace mir
         return true;
     }
 
-    void VulkanRenderer::DestroyBLAS(GpuMesh &mesh)
+    void VulkanRenderer::DestroyBLAS(MeshBlas &blas)
     {
-        if (mesh.mBlas != VK_NULL_HANDLE)
+        if (blas.mBlas != VK_NULL_HANDLE)
         {
-            vkDestroyAccelerationStructureKHR(mDevice->Handle(), mesh.mBlas, nullptr);
-            mesh.mBlas = VK_NULL_HANDLE;
+            vkDestroyAccelerationStructureKHR(mDevice->Handle(), blas.mBlas, nullptr);
+            blas.mBlas = VK_NULL_HANDLE;
         }
-        if (mesh.mBlasBuffer != VK_NULL_HANDLE)
+        if (blas.mBuffer != VK_NULL_HANDLE)
         {
-            vmaDestroyBuffer(mDevice->Allocator(), mesh.mBlasBuffer, mesh.mBlasAllocation);
-            mesh.mBlasBuffer = VK_NULL_HANDLE;
-            mesh.mBlasAllocation = VK_NULL_HANDLE;
+            vmaDestroyBuffer(mDevice->Allocator(), blas.mBuffer, blas.mAllocation);
+            blas.mBuffer = VK_NULL_HANDLE;
+            blas.mAllocation = VK_NULL_HANDLE;
         }
-        mesh.mBlasAddress = 0;
+        blas.mAddress = 0;
     }
 
-    bool VulkanRenderer::BuildBLAS(GpuMesh &mesh, uint32_t vertexCount, uint32_t indexCount, VkCommandBuffer cmd,
+    void VulkanRenderer::DestroyMeshBlas(uint32_t meshIndex)
+    {
+        if (meshIndex < mBlases.size())
+            DestroyBLAS(mBlases[meshIndex]);
+    }
+
+    void VulkanRenderer::DestroyBlases()
+    {
+        for (MeshBlas &blas : mBlases)
+            DestroyBLAS(blas);
+        mBlases.clear();
+    }
+
+    bool VulkanRenderer::BuildBLAS(const vk::GpuMesh &mesh, uint32_t vertexCount, VkCommandBuffer cmd, MeshBlas &outBlas,
         VkBuffer &outScratchBuffer, VmaAllocation &outScratchAllocation)
     {
         const VkDeviceAddress vertexAddress = GetBufferAddress(mDevice->Handle(), mesh.mVertexBuffer);
@@ -670,7 +683,7 @@ namespace mir
             .geometry{ .triangles = triangles },
             .flags = VK_GEOMETRY_OPAQUE_BIT_KHR };
 
-        const uint32_t primitiveCount = indexCount / 3;
+        const uint32_t primitiveCount = mesh.mIndexCount / 3;
 
         VkAccelerationStructureBuildGeometryInfoKHR buildInfo{
             .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
@@ -684,7 +697,7 @@ namespace mir
 
         if (!CreateAccelerationStructureObject(sizes.accelerationStructureSize,
             VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
-            mesh.mBlasBuffer, mesh.mBlasAllocation, mesh.mBlas))
+            outBlas.mBuffer, outBlas.mAllocation, outBlas.mBlas))
         {
             MIR_LOG_CRITICAL("BuildBLAS: acceleration structure creation failed");
             return false;
@@ -695,11 +708,11 @@ namespace mir
             0, outScratchBuffer, outScratchAllocation, nullptr))
         {
             MIR_LOG_CRITICAL("BuildBLAS: scratch buffer allocation failed");
-            DestroyBLAS(mesh);
+            DestroyBLAS(outBlas);
             return false;
         }
 
-        buildInfo.dstAccelerationStructure = mesh.mBlas;
+        buildInfo.dstAccelerationStructure = outBlas.mBlas;
         buildInfo.scratchData.deviceAddress = GetBufferAddress(mDevice->Handle(), outScratchBuffer);
 
         const VkAccelerationStructureBuildRangeInfoKHR range{ .primitiveCount = primitiveCount };
@@ -721,8 +734,8 @@ namespace mir
 
         const VkAccelerationStructureDeviceAddressInfoKHR addressInfo{
             .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
-            .accelerationStructure = mesh.mBlas };
-        mesh.mBlasAddress = vkGetAccelerationStructureDeviceAddressKHR(mDevice->Handle(), &addressInfo);
+            .accelerationStructure = outBlas.mBlas };
+        outBlas.mAddress = vkGetAccelerationStructureDeviceAddressKHR(mDevice->Handle(), &addressInfo);
 
         return true;
     }

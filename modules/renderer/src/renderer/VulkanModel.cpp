@@ -14,6 +14,7 @@
 #include <vector>
 #include <renderer/VulkanRenderer.h>
 #include "vulkan/FrameSync.h"
+#include "vulkan/MaterialStore.h"
 #include "vulkan/VulkanDevice.h"
 #include "vulkan/VulkanUtil.h"
 #include <vk_mem_alloc.h>
@@ -58,7 +59,7 @@ namespace mir
             }
         return true;
     }
-    bool VulkanRenderer::BindModelDescriptors(VkCommandBuffer cmd, const GpuMaterial &material, const DrawItem &item)
+    bool VulkanRenderer::BindModelDescriptors(VkCommandBuffer cmd, const vk::GpuMaterial &material, const DrawItem &item)
     {
         std::vector<glm::vec4> data(item.deformation.begin(), item.deformation.end());
         if (data.size() < 3)
@@ -98,7 +99,7 @@ namespace mir
         write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         write.pBufferInfo = &bufferInfo;
         vkUpdateDescriptorSets(mDevice->Handle(), 1, &write, 0, nullptr);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 2, 1, &set, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mMaterialStore->PipelineLayout(), 2, 1, &set, 0, nullptr);
         return true;
     }
     void VulkanRenderer::ResetModelFrame(uint32_t frame)

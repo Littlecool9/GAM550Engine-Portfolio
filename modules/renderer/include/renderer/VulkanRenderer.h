@@ -32,7 +32,6 @@
 #include <memory>
 #include <optional>
 #include <span>
-#include <unordered_map>
 #include <vector>
 
 VK_DEFINE_HANDLE(VmaAllocator)
@@ -46,6 +45,10 @@ namespace mir::vk
     class VulkanSwapchain;
     class FrameSync;
     struct FrameContext;
+    class ResourceStore;
+    class MaterialStore;
+    struct GpuMesh;
+    struct GpuMaterial;
 }
 
 namespace mir
@@ -226,36 +229,24 @@ namespace mir
         void Shutdown();
 
     private:
-        struct GpuMesh;
-        struct GpuMaterial;
-        struct GpuTexture;
+        struct MeshBlas;
 
         bool RecreateSwapchain();
         // Shared prelude of DrawFrame and TraceFrame; nullopt skips the frame.
         std::optional<vk::FrameContext> BeginFrame();
-        bool CreatePipelineLayout();
-        // One VkSampler per distinct SamplerDesc, shared by every material that
-        // asks for it; VK_NULL_HANDLE on failure.
-        VkSampler AcquireSampler(const SamplerDesc &desc);
-        void DestroySamplers();
-        bool CreateDefaultTextures();
         bool CreateCameraResources();
         void DestroyCameraResources();
         bool CreateShadowResources();
         void DestroyShadowResources();
         void RecordShadowPasses(VkCommandBuffer cmd);
         bool CreateModelDescriptors();
-        bool BindModelDescriptors(VkCommandBuffer cmd, const GpuMaterial &material, const DrawItem &item);
+        bool BindModelDescriptors(VkCommandBuffer cmd, const vk::GpuMaterial &material, const DrawItem &item);
         void ResetModelFrame(uint32_t frame);
         void DestroyModelResources(bool shutdown);
         bool RecordCapture(VkCommandBuffer cmd, uint32_t imageIndex);
         // Writes the PNG only for a submitted frame; frees the capture buffer either way.
         void FinishCapture(bool submitted);
-        VkPipeline BuildPipeline(const MaterialDesc &desc);
         bool CreateSkyPipeline();
-        void DestroyMeshes();
-        void DestroyMaterials();
-        void DestroyTextures();
 
         bool CreateAccelerationStructureObject(VkDeviceSize size, VkAccelerationStructureTypeKHR type,
             VkBuffer &outBuffer, VmaAllocation &outAllocation, VkAccelerationStructureKHR &outAS);
@@ -265,15 +256,15 @@ namespace mir
         void DestroyRtScene();
         bool CreateRtPipeline();
         void WriteRtDescriptorSets();
-        bool BuildBLAS(GpuMesh &mesh, uint32_t vertexCount, uint32_t indexCount, VkCommandBuffer cmd,
+        bool BuildBLAS(const vk::GpuMesh &mesh, uint32_t vertexCount, VkCommandBuffer cmd, MeshBlas &outBlas,
             VkBuffer &outScratchBuffer, VmaAllocation &outScratchAllocation);
-        void DestroyBLAS(GpuMesh &mesh);
+        void DestroyBLAS(MeshBlas &blas);
+        // No-op for a slot that never had a BLAS.
+        void DestroyMeshBlas(uint32_t meshIndex);
+        void DestroyBlases();
         void RecordTlasBuild(VkCommandBuffer cmd, uint32_t frameIndex, std::span<const DrawItem> items);
         void RecordRtFrame(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
 
-        const GpuMesh *FindMesh(MeshHandle handle) const;
-        const GpuMaterial *FindMaterial(MaterialHandle handle) const;
-        const GpuTexture *FindTexture(TextureHandle handle) const;
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
         void RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex);
         void WriteCameraData(const RenderView &view, uint32_t viewIndex);
@@ -300,16 +291,8 @@ namespace mir
         std::unique_ptr<vk::VulkanDevice> mDevice;
         std::unique_ptr<vk::VulkanSwapchain> mSwapchain;
         std::unique_ptr<vk::FrameSync> mFrameSync;
-
-        VkPipelineLayout mPipelineLayout = VK_NULL_HANDLE;
-
-        // set 0: binding 0 = base color, binding 1 = normal map.
-        VkDescriptorSetLayout mMaterialSetLayout = VK_NULL_HANDLE;
-        VkDescriptorPool mMaterialDescriptorPool = VK_NULL_HANDLE;
-
-        // Samplers, keyed by a packed SamplerDesc. The renderer owns them all;
-        // a GpuMaterial only borrows one.
-        std::unordered_map<uint64_t, VkSampler> mSamplers;
+        std::unique_ptr<vk::ResourceStore> mResources;
+        std::unique_ptr<vk::MaterialStore> mMaterialStore;
 
         // set 1: binding 0 = per-view viewProj, as a dynamic uniform buffer.
         constexpr static uint32_t kMaxViewsPerFrame = 16;
@@ -440,57 +423,16 @@ namespace mir
         VmaAllocation mRtInstanceInfoAllocations[kFramesInFlight]{};
         std::byte *mRtInstanceInfoMapped[kFramesInFlight]{};
 
-        // One buffer pair per mesh
-        struct GpuMesh
+        struct MeshBlas
         {
-            VkBuffer mVertexBuffer = VK_NULL_HANDLE;
-            VmaAllocation mVertexAllocation = VK_NULL_HANDLE;
-            VkBuffer mIndexBuffer = VK_NULL_HANDLE;
-            VmaAllocation mIndexAllocation = VK_NULL_HANDLE;
-            uint32_t mIndexCount = 0;
-            uint32_t mGeneration = 0; //< 0 = slot never filled
-
             VkAccelerationStructureKHR mBlas = VK_NULL_HANDLE;
-            VkBuffer mBlasBuffer = VK_NULL_HANDLE;
-            VmaAllocation mBlasAllocation = VK_NULL_HANDLE;
-            VkDeviceAddress mBlasAddress = 0;
-        };
-
-        std::vector<GpuMesh> mMeshes;
-
-        std::vector<uint32_t> mFreeMeshIndices;
-
-        struct GpuMaterial
-        {
-            VkPipeline mPipeline = VK_NULL_HANDLE;
-            VkDescriptorSet mDescriptorSet = VK_NULL_HANDLE;
-            // alphaMode, alphaCutoff, doubleSided, unused. Handed to the model
-            // shader through set 2, since the push constant range is full.
-            glm::vec4 mParameters{};
-            bool mModelShader = false;
-            uint32_t mGeneration = 0;
-            bool mUnlit = false;
-        };
-
-        std::vector<GpuMaterial> mMaterials;
-        std::vector<uint32_t> mFreeMaterialIndices;
-
-        MaterialHandle mDefaultMaterial;
-
-        // One image per texture.
-        struct GpuTexture
-        {
-            VkImage mImage = VK_NULL_HANDLE;
+            VkBuffer mBuffer = VK_NULL_HANDLE;
             VmaAllocation mAllocation = VK_NULL_HANDLE;
-            VkImageView mView = VK_NULL_HANDLE;
-            uint32_t mLevels = 1;
-            uint32_t mGeneration = 0; //< 0 = slot never filled
+            VkDeviceAddress mAddress = 0;
         };
 
-        std::vector<GpuTexture> mTextures;
-
-        TextureHandle mDefaultWhiteTexture;
-        TextureHandle mDefaultNormalTexture;
+        // Indexed by mesh slot, so the resource store never sees ray tracing.
+        std::vector<MeshBlas> mBlases;
 
         bool mImGuiBackendInitialized = false;
         ImDrawData *mImguiDrawData = nullptr;

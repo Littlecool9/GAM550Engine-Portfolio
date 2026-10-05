@@ -8,6 +8,7 @@
  */
 #include <renderer/VulkanRenderer.h>
 #include "FrameSync.h"
+#include "ResourceStore.h"
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
 #include "VulkanPushConstants.h"
@@ -686,7 +687,7 @@ namespace mir
             {
                 for (const DrawItem &item : items)
                 {
-                    const GpuMesh *const mesh = FindMesh(item.mesh);
+                    const vk::GpuMesh *const mesh = mResources->FindMesh(item.mesh);
                     if (mesh == nullptr)
                         continue;
 
