@@ -90,7 +90,7 @@ namespace mir::vk
         VkStridedDeviceAddressRegionKHR mSbtHitRegion{};
         VkStridedDeviceAddressRegionKHR mSbtCallableRegion{};
 
-        constexpr static uint32_t kMaxInstances = 256;
+        constexpr static uint32_t kMaxInstances = 16384;
         bool mWarnedInstanceCap = false;
 
         VkImage mOutputImages[kFramesInFlight]{};

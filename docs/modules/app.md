@@ -5,7 +5,7 @@ other module exists. It contains no gameplay and no subsystem of its own, and it
 is not a framework — there is no registry, no service locator, and no virtual
 `Game` to subclass.
 
-`mir::app` · depends `mir::core`, `assets`, `window`, `renderer`, `editor`, `imguiruntime`, `scene`, `script`, all public; `input`, `audio`, `physics`, `serial` private · API `modules/app/include/app/` · maintainer Sumin Park · reviewed 2026-09-18
+`mir::app` · depends `mir::core`, `assets`, `window`, `renderer`, `editor`, `imguiruntime`, `scene`, `script`, all public; `input`, `audio`, `physics`, `serial`, `terrain` private · API `modules/app/include/app/` · maintainer Sumin Park · reviewed 2026-09-18
 
 ## Model
 
@@ -194,6 +194,20 @@ from a `LoadedScene` file: `LoadScene()` and `StopScene()` (via `PlaySnapshot::
 RestoreWorld`). Neither call site can skip them independently — both live
 inside the same two methods.
 
+### Terrain draws (private glue, no caller yet)
+
+`src/app/TerrainRender.{h,cpp}` is the only place terrain meets the renderer,
+since neither module may link the other. `TerrainRenderTiles::Add` takes a
+`TerrainTileMesh` (see [terrain.md](terrain.md)), converts it with
+`MakeTerrainVertices`, uploads it (with a BLAS on an RT device) and records a
+`WorldDrawItem` at placement plus tile origin, added in double, with the
+diagnostic tint on the default material and a `translationGrid` of 1/4096 m.
+All tiles in one `TerrainRenderTiles` must come from one release; a mesh from
+another is refused. `PublishTerrainDraws` copies the draws into the
+`TerrainDrawItems` resource (see [renderer.md](renderer.md)); the project's
+ray tracing setting decides how they are drawn. The `TerrainInstance` work
+(#118) will call it from scene load.
+
 ## Rules
 
 **Register systems before `Run`.** `Run` calls `SystemScheduler::Start`, and a
@@ -278,6 +292,12 @@ the other value would disagree with `App.cpp` about the class.
 
 **`NewScene`/`SaveScene`/`LoadScene` refuse while Play is running.** These can corrupt the current scene. Both `Editor` and app will opt out.
 
+**Terrain meshes do not survive `ReleaseSceneResources`.** It frees every mesh
+without bumping generations, so a kept handle would name the next scene's
+mesh. Whoever owns a `TerrainRenderTiles` publishes empty terrain draws and
+calls `Forget` around every release, then rebuilds from the same release;
+`Destroy` is for dropping terrain while the scene stays.
+
 ## State
 
 *As of 2026-09-14.* The loop runs, the scheduler ticks, scripts drive entities,
@@ -322,6 +342,11 @@ Was: `App::Initialize` reset the window and returned when
 before the failure was never freed. Now: it calls `mRenderer.Shutdown()` first,
 then resets the window, which the renderer's surface needs until its own
 shutdown.
+
+*2026-10-02* — **Terrain draw glue (#14).** Was: app did not link `terrain`.
+Now: it links it privately for `src/app/TerrainRender.{h,cpp}`, which uploads
+terrain tile meshes and publishes their draws. Nothing calls it
+until scenes can hold terrain (#118); `App` itself is unchanged.
 
 *2026-10-02* — **A build without the editor.** Was: `app` linked `mir::editor`
 PUBLIC unconditionally, so every binary carried the editor. Now: the

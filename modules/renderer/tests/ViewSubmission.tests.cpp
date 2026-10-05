@@ -187,3 +187,82 @@ TEST_CASE("Submission carries the linear part and draw data through", "[renderer
     CHECK(view[0].deformation.data() == deformation);
     CHECK(view[0].deformation.size() == 2);
 }
+
+TEST_CASE("Neighbouring tile draws meet on their shared edge after narrowing", "[renderer][lwc]")
+{
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
+    // Identity linear part, 256 m apart at the map edge.
+    constexpr float kTile = 256.0f;
+    constexpr float kGrid = 1.0f / 4096.0f;
+    for (const float grid : {0.0f, kGrid})
+    {
+        INFO("translation grid " << grid);
+        std::vector<WorldDrawItem> world{ItemAt(kEdgeA), ItemAt(kEdgeA + glm::dvec3(kTile, 0.0, 0.0)),
+                                         ItemAt(kEdgeA + glm::dvec3(0.0, 0.0, kTile))};
+        for (WorldDrawItem &item : world)
+            item.translationGrid = grid;
+
+        int crossEdgeMismatches = 0;
+        int alongEdgeMismatches = 0;
+        double worstTranslation = 0.0;
+        for (int step = 0; step < 200; ++step)
+        {
+            // None on float's 1/64 m grid out there.
+            const glm::dvec3 offset{-600.0 + 6.37 * step, 1.7 + 0.91 * step, 590.0 - 5.83 * step};
+            std::vector<DrawItem> view;
+            REQUIRE(mir::BuildViewDrawItems(world, At(kEdgeA + offset), glm::mat4(1.0f), view) == 0);
+            REQUIRE(view.size() == 3);
+            worstTranslation = std::max(worstTranslation, MaxError(Translation(view[0]), -offset));
+
+            const double ulp = std::ldexp(1.0, std::ilogb(glm::length(offset) + 2.0 * kTile) - 23);
+            for (int s = 0; s <= 64; ++s)
+            {
+                const float along = 4.0f * float(s);
+                const float height = 180.0f + 0.37f * float(s);
+                // The x edge of draw 0 is draw 1's x = 0, and its z edge is draw 2's z = 0.
+                const glm::vec4 a = view[0].model * glm::vec4(kTile, height, along, 1.0f);
+                const glm::vec4 b = view[1].model * glm::vec4(0.0f, height, along, 1.0f);
+                const glm::vec4 c = view[0].model * glm::vec4(along, height, kTile, 1.0f);
+                const glm::vec4 d = view[2].model * glm::vec4(along, height, 0.0f, 1.0f);
+                crossEdgeMismatches += (a.y != b.y || a.z != b.z || c.x != d.x || c.y != d.y) ? 1 : 0;
+                alongEdgeMismatches += (a.x != b.x ? 1 : 0) + (c.z != d.z ? 1 : 0);
+                CHECK(std::abs(double(a.x) - b.x) <= ulp);
+                CHECK(std::abs(double(c.z) - d.z) <= ulp);
+            }
+        }
+        CHECK(crossEdgeMismatches == 0);
+        if (grid > 0.0f)
+        {
+            CHECK(alongEdgeMismatches == 0);
+            CHECK(worstTranslation <= kGrid / 2.0);
+        }
+        else
+        {
+            // Each translation rounds in its own binade, so plain draws disagree.
+            CHECK(alongEdgeMismatches > 0);
+            CHECK(worstTranslation <= 1e-4);
+        }
+    }
+}
+
+TEST_CASE("A translation grid only applies within float's exact range", "[renderer][lwc]")
+{
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
+    constexpr float kGrid = 1.0f / 4096.0f;
+    // 2^23 steps of 1/4096 m is 2048 m.
+    std::vector<WorldDrawItem> world{ItemAt(kEdgeA + glm::dvec3(2047.3, 0.0, 0.0)),
+                                     ItemAt(kEdgeA + glm::dvec3(5000.3, 0.0, 0.0))};
+    for (WorldDrawItem &item : world)
+        item.translationGrid = kGrid;
+
+    std::vector<DrawItem> view;
+    REQUIRE(mir::BuildViewDrawItems(world, At(kEdgeA), glm::mat4(1.0f), view) == 0);
+    REQUIRE(view.size() == 2);
+    const float inside = view[0].model[3].x;
+    CHECK(inside == float(std::round(2047.3 / kGrid) * kGrid));
+    CHECK(view[1].model[3].x == float(5000.3));
+}

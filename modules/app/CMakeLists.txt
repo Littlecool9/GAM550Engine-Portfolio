@@ -15,12 +15,14 @@ target_link_libraries(engine_app
             mir::audio
             mir::physics
             mir::serial
+            mir::terrain
 )
 
 target_sources(engine_app PRIVATE
     src/app/App.cpp
     src/app/GameProject.cpp
     src/app/SceneResolve.cpp
+    src/app/TerrainRender.cpp
 )
 
 # PUBLIC: App.h holds the editor's members only with it, so everything that

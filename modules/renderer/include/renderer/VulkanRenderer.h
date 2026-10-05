@@ -83,6 +83,9 @@ namespace mir
 
         // Drawn after the opaque items, back to front. BuildViewDrawItems sorts.
         bool transparent = false;
+
+        // Power-of-two meters the camera-relative translation snaps to; 0 = none.
+        float translationGrid = 0.0f;
     };
 
     // One draw call's worth of data for one viewport. Temporary: it lives only
@@ -109,6 +112,9 @@ namespace mir
     // Draw items produced outside the MeshRenderer query (by ModelSystem),
     // picked up by RenderSystem as a World resource.
     struct ModelDrawItems { std::vector<WorldDrawItem> items; };
+
+    // Terrain tile draws. Unlike ModelDrawItems they persist until their producer clears them.
+    struct TerrainDrawItems { std::vector<WorldDrawItem> items; };
 
     // A Point/Spot/Area light in world space; the renderer narrows it against
     // each view's camera, as it does draw items.

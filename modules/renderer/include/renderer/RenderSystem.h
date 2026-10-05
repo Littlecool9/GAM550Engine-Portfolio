@@ -210,6 +210,8 @@ namespace mir
             // asset, with their morph/skin data attached).
             if (const ModelDrawItems *models = context.world.TryResource<ModelDrawItems>())
                 mDrawItems.insert(mDrawItems.end(), models->items.begin(), models->items.end());
+            if (const TerrainDrawItems *terrain = context.world.TryResource<TerrainDrawItems>())
+                mDrawItems.insert(mDrawItems.end(), terrain->items.begin(), terrain->items.end());
 
             const bool haveDirectionalLight = haveSunLight || haveSky;
             mSunShadowItems.clear();

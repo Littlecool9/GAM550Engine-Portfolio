@@ -4,12 +4,13 @@ Terrain data that does not depend on a GPU or a physics engine: tile addresses,
 the shared sample grid, finite map bounds, placement in the Scene world, the
 identities of a terrain's source, baked format and release, the versioned files
 a baked release is stored in, with a reader that fetches one tile by byte
-range, the canonical surface over a release's final samples, and a resident
-height query over one release. It does not bake, publish, stream, mesh or
-collide terrain yet; those are later P1 issues and P3. Generating heights is
-offline work: the `terrain_bake` library in `tools/TerrainTool/` reads a source
-recipe and produces source heights on this module's grid; the engine never
-links it.
+range, the canonical surface over a release's final samples, a resident height
+query over one release, and a tile's fixed-LOD triangle mesh built from those
+samples on the CPU (plain data; `app` uploads it). It does not bake, publish,
+stream or collide terrain yet; those are later P1 issues and P3. Generating
+heights is offline work: the `terrain_bake` library in `tools/TerrainTool/`
+reads a source recipe and produces source heights on this module's grid; the
+engine never links it.
 
 `mir::terrain` · depends `mir::assets`, `mir::core` (public) · API `modules/terrain/include/terrain/` · maintainer Jackey Cen · reviewed 2026-10-02
 
@@ -107,6 +108,26 @@ over the same tiles. A P1 release is exactly one layer. Per-tile source
 precision (P2) is a finer layer that bakes only some tiles, and coarser levels
 (P3) are extra layers, so a coarse tile can answer while the fine one loads.
 
+### Tile meshes
+
+The first renderer draws terrain as ordinary triangle meshes built from a
+release's final samples (C13). `BuildTerrainTileMesh` makes one tile's fixed-LOD
+mesh: a vertex on every sample, two triangles per cell straight from
+`TriangulateCell`, heights copied unchanged. Vertices are relative to the
+tile's first sample, so they stay within one tile of zero in float, and the
+mesh keeps that origin as a double `TerrainLocalPosition`. It also records the
+`TerrainReleaseInfo` and `kTerrainSurfaceVersion` it came from.
+
+```cpp
+const TerrainMeshResult built = BuildTerrainTileMesh(release.Layout(), release.Info(), tile, lookup);
+if (built.IsOk())
+    Upload(*built.mesh, *TerrainTileMeshWorldOrigin(*built.mesh, placement));
+```
+
+The mesh has no renderer types. `app` converts it to renderer vertices,
+uploads it (traced like any mesh when ray tracing is on) and places the draw at placement plus
+origin in double (see [renderer.md](renderer.md) and [app.md](app.md)).
+
 ## API
 
 | Type | Header | Role |
@@ -129,6 +150,9 @@ precision (P2) is a finer layer that bakes only some tiles, and coarser levels
 | `TerrainHeightRequest`, `TerrainHeightResult`, `TerrainHeightStatus`, `TerrainHeightFailure` | `terrain/TerrainHeightQuery.h` | bound release and required spacing in; status, local height, `worldPoint`, spacing, source spacing, known or unknown `maxError`, release, tile and layer out |
 | `TerrainHeightLayer`, `TerrainPayloadRequest`, `TerrainTileResidency` | `terrain/TerrainHeightQuery.h` | one spacing of the release (baked tiles, measured deviation); a missing payload for a loader; a tile's slot state |
 | `PreloadTerrainTiles`, `PreloadAllTerrainTiles` | `terrain/TerrainHeightQuery.h` | P1's synchronous fill of a query from its own release handle, recording per-tile failures |
+| `TerrainTileMesh`, `TerrainMeshVertex` | `terrain/TerrainTileMesh.h` | one tile's raster mesh: release, surface version, tile, double origin, sample range, float vertices (position, normal), `TriangulateCell` indices, bounds |
+| `BuildTerrainTileMesh`, `TerrainMeshResult`, `TerrainMeshStatus` | `terrain/TerrainTileMesh.h` | builds it from a `TileSampleLookup`; `MissingTile`, `MissingNeighbour`, `InvalidSamples`, `InvalidInput` instead of a mesh |
+| `TerrainTileMeshWorldOrigin` | `terrain/TerrainTileMesh.h` | placement plus mesh origin in double; nullopt for another asset or an overflow |
 
 ## Rules
 
@@ -294,15 +318,37 @@ and tile range; each spacing is an integer multiple `k` of the previous one,
 point has the same owning tile in every layer. Every map tile must be baked by
 some layer; the finest one that bakes it is the tile's source precision.
 
+**A tile mesh is the surface, not a copy of it.** Its triangles are
+`TriangulateCell`'s, its heights the stored floats and its x/z
+`SamplePosition(i) - SamplePosition(i0)`, so a point on any triangle evaluates
+to the same height as `EvaluateSurface` (measured 7e-11 m at 150 km). Nothing
+is re-derived or re-generated, and the mesh records the release it came from;
+it is rebuilt, never edited.
+
+**Neighbouring meshes agree on their shared edges.** Edge vertices come from
+global indices, so both tiles produce the same terrain-local position. Vertex
+normals are central differences over the samples, and at a tile edge the
+builder reads the neighbouring tile through the lookup, so both sides compute
+the same bits. Only the four edge neighbours are read, never a diagonal one. A
+neighbour inside the layout whose samples are missing is `MissingNeighbour`,
+never a one-sided guess that would leave a lighting seam; one-sided
+differences are used only past the layout, where no tile shares the edge.
+
+**Only cells that touch the map are meshed.** A tile clipped by the map bounds
+keeps its origin and vertex frame but meshes just the cells whose rectangle
+reaches the valid extent, so padding samples appear only under those edge
+cells.
+
 ## State
 
 *As of 2026-10-02.* Layout, addressing, placement, identities, the canonical
-surface, the release format, its in-memory encoder, the synchronous range
-reader and the resident height query with a synchronous preload work; nothing
-takes the query's payload requests yet (P3). Nothing in the engine loads
-terrain; the module is linked into `MjolnirEngine` but has no runtime caller
-yet. Its first non-test caller is the offline `terrain_bake` library (#113:
-recipe, fingerprint, "mir.relief" generator), tested by `terrain_tool_tests`.
+surface, the tile mesh builder, the release format, its in-memory encoder, the
+synchronous range reader and the resident height query with a synchronous
+preload work; nothing takes the query's payload requests yet (P3). No scene
+loads terrain yet: app's private `TerrainRender` uploads tile meshes but has no
+caller until the `TerrainInstance` work (#118). The first non-test caller is
+the offline `terrain_bake` library (#113: recipe, fingerprint, "mir.relief"
+generator), tested by `terrain_tool_tests`.
 
 Tests in `modules/terrain/tests/`: `TerrainLayout` (validation, clipped edge
 tiles, shared edge samples, padding), `TileAddressing` (floor on both sides of
@@ -325,7 +371,12 @@ shared-edge, four-corner, negative and partial-boundary probes against
 during queries; a 4 m layer with its 8 m decimation; a per-tile source limit;
 payload requests; corrupt and missing packs; a query pinned across a pointer
 switch; world queries near the origin and about ±150 km out; refused layers and
-tiles).
+tiles), `TerrainTileMesh` (a vertex on every sample,
+`TriangulateCell` order and winding, 20000 random points per block against
+`EvaluateSurface`, shared edges and normals at 4 m near and far and at 0.1 m,
+central-difference normals and missing neighbours, bounds, a clipped boundary
+layout, the identity of a release read in memory, far placements after
+camera-relative narrowing, sizes for 65 and 257 samples a side).
 
 ## Backlog
 
@@ -342,6 +393,13 @@ tiles).
 4. Measure the index at full map scale. Format 1 keeps 88 bytes per tile in one
    index, about 30 MB for 586 x 586 tiles of a 150 km map; if opening it is too
    slow, a later major can move tile tables into the packs.
+6. Streaming meshes (P3): an edge tile needs its neighbour's samples for its
+   edge normals, so residency must load one ring further, or rebuild an edge
+   when the neighbour arrives. Runtime building versus prebaked mesh caches is
+   still open (C13), as is a compact terrain vertex: the shared renderer
+   `Vertex` costs 64 bytes where position and normal need 24.
+7. Render LOD and Region meshes (P2/P3) build on the same builder: a coarser
+   step over the same samples, never finer than the tile's spacing.
 
 ## Changed
 
@@ -351,6 +409,13 @@ source (#110) stood in for real data. Now: `TerrainHeightQuery` holds one
 release's tiles and answers with status, spacing, source spacing, release
 identity and a known or unknown error, records missing payloads for a loader,
 and never reads files. The mock source and its tests are deleted.
+
+*2026-10-02* — **Tile raster meshes (#14).** Was: nothing turned samples into
+geometry. Now: `BuildTerrainTileMesh` makes a tile's fixed-LOD mesh from one
+release's samples with `TriangulateCell` indices, tile-relative float vertices,
+central-difference normals that read the edge neighbours, bounds, and the
+release and surface version it came from. The module still has no renderer
+types; `app` uploads the mesh.
 
 *2026-10-01* — **Canonical surface (#114).** `TerrainSurface`: fixed-diagonal
 triangles over final samples, shared by query, mesh and collision, with

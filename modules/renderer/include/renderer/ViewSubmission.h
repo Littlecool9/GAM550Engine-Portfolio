@@ -26,7 +26,7 @@ namespace mir
     // the origin, so only its rotation (and any scale) reaches the view.
     glm::mat4 MakeCameraRelativeViewProjection(const WorldPose &camera, const Camera &lens, float aspectRatio);
 
-    // The place a draw's world position converts from world precision to float.
+    // Narrows world positions to float; returns how many draws did not fit.
     size_t BuildViewDrawItems(std::span<const WorldDrawItem> items, WorldPosition viewportCamera,
                               const glm::mat4 &viewProj, std::vector<DrawItem> &out);
 }

@@ -114,6 +114,7 @@ void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera
 | Type | Header | Role |
 |---|---|---|
 | `Vertex`, `MeshHandle` | `renderer/Mesh.h` | `{pos, color, normal}`; a `{index, generation}` handle |
+| `TerrainDrawItems` | `renderer/VulkanRenderer.h` | World resource of entity-free terrain `WorldDrawItem`s, merged after `ModelDrawItems`; filled and emptied by app's terrain glue, not per frame |
 | `TextureDesc`, `TextureHandle` | `renderer/Texture.h` | `{width, height, pixels, srgb}`, tightly-packed RGBA8; `kNullTexture` falls back to a default in `CreateMaterial` |
 | `MaterialDesc`, `MaterialHandle` | `renderer/Material.h` | `{shaderName, cullMode, polygonMode, baseColorTexture, normalTexture}`; `kNullMaterial` means the default |
 | `DrawItem` | `renderer/Renderer.h` | `{mesh, model, normalMatrix, tint, material}` — `model` is the world transform, not premultiplied by any camera |
@@ -176,6 +177,32 @@ creation; `RecordTlasBuild` simply skips any `DrawItem` whose mesh has no
 BLAS. The scratch buffer outlives `BuildBLAS` because the command buffer has
 not been submitted when `BuildBLAS` returns, so `BuildMeshBlas` frees it after
 the submit and wait.
+
+**Terrain tiles are traced like any other mesh.** Each tile gets its own BLAS
+and one TLAS instance per frame, so the project's `rayTracing` setting alone
+(with device support and a single view) picks the path, terrain or not.
+`RayTracer::kMaxInstances` is 16384 because one 4096 m chunk is already 256 tiles. Two
+limits stay open: a tile edge is shared by two instances, and ray/instance
+intersection is not watertight across them, so a seam may leak a rare pixel
+that raster's `translationGrid` closes; and BLAS memory (not yet measured)
+counts against the terrain residency budget.
+
+**`TerrainDrawItems` persists; `ModelDrawItems` does not.** Both are World
+resources of entity-free `WorldDrawItem`s that `RenderSystem` appends after the
+`MeshRenderer` query. `ModelSystem` rebuilds the model list every frame; the
+terrain list is filled once by app's terrain glue and emptied by it before the
+meshes are freed, since terrain does not move.
+
+**A `translationGrid` makes separate draws meet bit for bit.** Plain
+narrowing rounds each draw's camera-relative translation to float on its own,
+and two translations of different magnitude round on different steps. Two
+terrain tiles that share an edge vertex then compute it one float step apart,
+which drops single pixels along the seam. With a nonzero grid (a power of two
+in meters), `BuildViewDrawItems` rounds the double offset to that grid instead;
+every grid draw then shares one step, and grid-aligned vertices add to it
+exactly while the translation is within 2^23 steps (past that it falls back to
+plain float rounding). The terrain glue uses 1/4096 m: tiles stay watertight
+within 2048 m of the camera, at the price of up to 0.12 mm of shift.
 
 **The shader binding table's buffer is allocated with
 `vmaCreateBufferWithAlignment`, not the shared `CreateBuffer` helper** -
@@ -551,6 +578,14 @@ submitted writes no PNG. `ReleaseModelResources` frees each released mesh's
 BLAS, which it used to leak. Each BLAS is built in its own submit after its
 mesh's upload. Because: with one class owning everything, a change to one
 concern touched unrelated state, and the frame loop had to be fixed twice.
+
+*2026-10-02* — **Terrain draws (#14).** Was: `RenderSystem` drew
+`MeshRenderer` entities and `ModelDrawItems` only, and the TLAS held at most
+256 instances. Now: a persistent `TerrainDrawItems` resource is merged with the
+other draws and traced like them; `kMaxInstances` is 16384; and
+`WorldDrawItem::translationGrid` lets `BuildViewDrawItems` round a draw's
+translation to a fixed grid so neighbouring terrain tiles leave no pixel
+cracks. Other draws narrow as before.
 
 *2026-10-01* — **Sun/Point/Spot cast real shadows, in both pipelines.** Was:
 falloff/cone attenuation but no occlusion test - a light shone straight
