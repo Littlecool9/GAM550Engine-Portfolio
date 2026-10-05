@@ -80,6 +80,6 @@ namespace mir
     SurfaceSample EvaluateSurfaceInCell(const TerrainLayout &layout, const TileSamplesView &view,
                                         GlobalSampleIndex cell, TerrainLocalPosition local);
 
-    // Half a float32 ulp of the largest |height|, at least 2^-24 m.
+    // Half a float32 ulp of the largest |height|, in [2^-24, 2^103] m; inf and NaN give the maximum.
     double SurfaceTolerance(double maxAbsHeight);
 }

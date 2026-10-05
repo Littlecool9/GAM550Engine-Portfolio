@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 
 namespace mir
 {
@@ -166,7 +167,10 @@ namespace mir
     double SurfaceTolerance(double maxAbsHeight)
     {
         // Half a float ulp at magnitude m in [2^e, 2^(e+1)) is 2^(e - 24).
-        const double magnitude = std::max(std::abs(maxAbsHeight), 1.0);
+        // Samples are finite float32, so inf and NaN clamp to the largest float.
+        constexpr double kMaxMagnitude = std::numeric_limits<float>::max();
+        const double magnitude =
+            std::isnan(maxAbsHeight) ? kMaxMagnitude : std::clamp(std::abs(maxAbsHeight), 1.0, kMaxMagnitude);
         return std::ldexp(1.0, std::ilogb(magnitude) - 24);
     }
 }

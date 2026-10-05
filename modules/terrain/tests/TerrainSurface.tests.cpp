@@ -534,6 +534,13 @@ TEST_CASE("SurfaceTolerance is half a float ulp of the heights involved", "[terr
     CHECK(SurfaceTolerance(-300.0) == 0x1.0p-16);
     CHECK(SurfaceTolerance(8848.0) == 0x1.0p-11);
 
+    // Clamped to the largest float's half ulp, never infinite.
+    CHECK(SurfaceTolerance(std::numeric_limits<float>::max()) == 0x1.0p103);
+    CHECK(SurfaceTolerance(1e300) == 0x1.0p103);
+    CHECK(SurfaceTolerance(kInf) == 0x1.0p103);
+    CHECK(SurfaceTolerance(-kInf) == 0x1.0p103);
+    CHECK(SurfaceTolerance(std::numeric_limits<double>::quiet_NaN()) == 0x1.0p103);
+
     for (const float h : {1.0f, 229.5f, 300.0f, 8848.0f})
     {
         const float next = std::nextafter(h, std::numeric_limits<float>::infinity());

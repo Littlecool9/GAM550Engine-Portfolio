@@ -217,7 +217,8 @@ NaN. Padding samples take part in the cells along the map edge, but a point
 past the bounds is `OutsideMap` even if its cell has samples.
 
 **The tolerance is the storage quantum.** `SurfaceTolerance` is half a float32
-ulp of the largest height involved (at least 2^-24 m); double evaluation stays
+ulp of the largest height involved (2^-24 m to 2^103 m; inf and NaN give the
+maximum, so it is always finite); double evaluation stays
 around 1e-13 m below that. It holds while the spacing is at least 2^25 ulps of
 the coordinates (about 1 mm at 150 km).
 
