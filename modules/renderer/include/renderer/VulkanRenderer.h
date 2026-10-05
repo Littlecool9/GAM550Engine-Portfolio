@@ -24,9 +24,11 @@
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -35,6 +37,11 @@ VK_DEFINE_HANDLE(VmaAllocator)
 VK_DEFINE_HANDLE(VmaAllocation)
 
 struct ImDrawData;
+
+namespace mir::vk
+{
+    class VulkanDevice;
+}
 
 namespace mir
 {
@@ -111,6 +118,13 @@ namespace mir
         glm::vec3 direction{ 0.0f, -1.0f, 0.0f };
         float spotCos = -1.0f; // cos(half-angle); -1 = no cone (Point/Area)
         glm::vec3 color{ 0.0f }; // color * intensity
+        int32_t shadowSlot = -1;
+    };
+
+    struct PointShadowFace
+    {
+        glm::mat4 viewProj{ 1.0f };
+        std::span<const DrawItem> items;
     };
 
     // One camera's worth of draw items, clipped to a screen-space rect.
@@ -132,7 +146,9 @@ namespace mir
     class VulkanRenderer
     {
     public:
-        VulkanRenderer() = default;
+        VulkanRenderer();
+        ~VulkanRenderer();
+
         bool Initialize(const RendererDesc &desc);
 
         bool InitImGuiVulkanBackend();
@@ -166,7 +182,16 @@ namespace mir
 
         void TraceFrame(std::span<const RenderView> views);
 
-        bool RayTracingSupported() const { return mRayTracingSupported; }
+        bool RayTracingSupported() const;
+
+        constexpr static uint32_t kMaxSpotShadows = 4;
+        constexpr static uint32_t kMaxPointShadows = 2;
+
+        constexpr static float kSunShadowHalfExtent = 25.0f;
+        constexpr static float kSunShadowNearZ = 0.5f;
+
+        constexpr static float kSpotShadowNearZ = 0.05f;
+        constexpr static float kPointShadowNearZ = 0.05f;
 
         void SetClearColor(const glm::vec4 &color) { mClearColor = color; }
 
@@ -190,6 +215,15 @@ namespace mir
 
         void SetLights(std::span<const LightItem> lights);
 
+        void SetSunShadowCaster(bool active, const glm::mat4 &viewProj, WorldPosition anchor,
+            std::span<const DrawItem> items);
+
+        void SetSpotShadowCaster(uint32_t slot, bool active, const glm::mat4 &viewProj, WorldPosition anchor,
+            std::span<const DrawItem> items);
+
+        void SetPointShadowCaster(uint32_t slot, bool active, WorldPosition position, float range,
+            const std::array<PointShadowFace, 6> &faces);
+
         void Shutdown();
 
     private:
@@ -197,12 +231,6 @@ namespace mir
         struct GpuMaterial;
         struct GpuTexture;
 
-        bool CreateVulkanInstance(const RendererDesc &desc);
-        bool CreateDebugMessenger();
-        bool CreateSurface();
-        bool FindPhysicalDevice();
-        bool CreateLogicalDevice();
-        bool CreateAllocator();
         bool CreateSwapchain();
         bool CreateImageViews();
         bool CreateDepthResources();
@@ -220,6 +248,9 @@ namespace mir
         bool CreateDefaultTextures();
         bool CreateCameraResources();
         void DestroyCameraResources();
+        bool CreateShadowResources();
+        void DestroyShadowResources();
+        void RecordShadowPasses(VkCommandBuffer cmd);
         bool CreateModelDescriptors();
         bool BindModelDescriptors(VkCommandBuffer cmd, const GpuMaterial &material, const DrawItem &item);
         void ResetModelFrame(uint32_t frame);
@@ -249,14 +280,12 @@ namespace mir
         const GpuMesh *FindMesh(MeshHandle handle) const;
         const GpuMaterial *FindMaterial(MaterialHandle handle) const;
         const GpuTexture *FindTexture(TextureHandle handle) const;
-        void NameObject(VkObjectType type, uint64_t handle, const char *name);
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
         void RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex);
         void WriteCameraData(const RenderView &view, uint32_t viewIndex);
         uint32_t WriteViewLights(const RenderView &view, uint32_t viewIndex);
 
     private:
-        constexpr static uint32_t VulkanVersion{ VK_API_VERSION_1_4 };
         constexpr static uint32_t kFramesInFlight = 2;
 
         constexpr static VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
@@ -274,14 +303,9 @@ namespace mir
         bool mSkyVisible = false;
 
         const ISurfaceProvider *mWindow;
-        VkInstance mVulkanInstance = VK_NULL_HANDLE;
-        VkDebugUtilsMessengerEXT mDebugMessenger = VK_NULL_HANDLE;
-        VkSurfaceKHR mSurface = VK_NULL_HANDLE;
 
-        VkPhysicalDevice mPhysicalDevice = VK_NULL_HANDLE;
-        VkDevice mDevice = VK_NULL_HANDLE;
-        VkQueue mGfxQueue = VK_NULL_HANDLE;
-        VmaAllocator mAllocator = VK_NULL_HANDLE;
+        // Created in the constructor, Initialize/Shutdown bound its Vulkan objects.
+        std::unique_ptr<vk::VulkanDevice> mDevice;
 
         VkSwapchainKHR mSwapchain = VK_NULL_HANDLE;
         VkFormat mSwapchainFormat = VK_FORMAT_UNDEFINED;
@@ -293,9 +317,6 @@ namespace mir
         VkImage mDepthImages[kFramesInFlight]{};
         VmaAllocation mDepthAllocations[kFramesInFlight]{};
         VkImageView mDepthViews[kFramesInFlight]{};
-
-        // queue for render + present
-        uint32_t mGfxQueueFamIdx = UINT32_MAX;
 
         VkCommandPool mCmdPools[kFramesInFlight]{};
         VkCommandBuffer mCmdBuffers[kFramesInFlight]{};
@@ -337,6 +358,67 @@ namespace mir
         std::byte *mLightMapped[kFramesInFlight]{};
         std::vector<LightItem> mLights;
 
+        constexpr static uint32_t kSunShadowResolution = 2048;
+
+        VkImage mSunShadowImages[kFramesInFlight]{};
+        VmaAllocation mSunShadowAllocations[kFramesInFlight]{};
+        VkImageView mSunShadowViews[kFramesInFlight]{};
+        VkSampler mShadowSampler = VK_NULL_HANDLE;
+
+        VkDescriptorSetLayout mShadowSetLayout = VK_NULL_HANDLE;
+        VkDescriptorPool mShadowDescriptorPool = VK_NULL_HANDLE;
+        VkDescriptorSet mShadowDescriptorSets[kFramesInFlight]{};
+
+        VkPipelineLayout mShadowDepthPipelineLayout = VK_NULL_HANDLE;
+        VkPipeline mShadowDepthPipeline = VK_NULL_HANDLE;
+
+        bool mHasSunShadow = false;
+        glm::mat4 mSunShadowViewProj{ 1.0f };
+        WorldPosition mSunShadowAnchor;
+        std::span<const DrawItem> mSunShadowItems;
+
+        constexpr static uint32_t kSpotShadowResolution = 1024;
+
+        VkImage mSpotShadowImages[kFramesInFlight]{};
+        VmaAllocation mSpotShadowAllocations[kFramesInFlight]{};
+        VkImageView mSpotShadowArrayViews[kFramesInFlight]{}; // sampling: 2D_ARRAY over all slots
+        VkImageView mSpotShadowLayerViews[kFramesInFlight][kMaxSpotShadows]{}; // rendering: one slot each
+
+        VkBuffer mSpotShadowMatrixBuffers[kFramesInFlight]{};
+        VmaAllocation mSpotShadowMatrixAllocations[kFramesInFlight]{};
+        std::byte *mSpotShadowMatrixMapped[kFramesInFlight]{};
+
+        struct SpotShadowCaster
+        {
+            bool active = false;
+            glm::mat4 viewProj{ 1.0f }; // relative to `anchor`, not any view's camera
+            WorldPosition anchor;       // the light's own position
+            std::span<const DrawItem> items;
+        };
+        std::array<SpotShadowCaster, kMaxSpotShadows> mSpotShadowCasters{};
+
+        constexpr static uint32_t kPointShadowResolution = 512;
+
+        VkImage mPointShadowDepthImages[kFramesInFlight]{};
+        VmaAllocation mPointShadowDepthAllocations[kFramesInFlight]{};
+        VkImageView mPointShadowDepthLayerViews[kFramesInFlight][kMaxPointShadows * 6]{};
+
+        VkImage mPointShadowColorImages[kFramesInFlight]{};
+        VmaAllocation mPointShadowColorAllocations[kFramesInFlight]{};
+        VkImageView mPointShadowColorLayerViews[kFramesInFlight][kMaxPointShadows * 6]{};
+        VkImageView mPointShadowCubeArrayViews[kFramesInFlight]{}; // sampling: CUBE_ARRAY
+
+        VkPipeline mPointShadowPipeline = VK_NULL_HANDLE; // shadowDistance.slang
+
+        struct PointShadowCaster
+        {
+            bool active = false;
+            WorldPosition position; // the light itself: every face's "camera" sits here
+            float range = 0.0f;     // for the shading pass to normalize sampled distance by
+            std::array<PointShadowFace, 6> faces{};
+        };
+        std::array<PointShadowCaster, kMaxPointShadows> mPointShadowCasters{};
+
         VkDescriptorSetLayout mModelSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool mModelPools[kFramesInFlight]{};
 
@@ -350,9 +432,6 @@ namespace mir
 
         VkPipelineLayout mSkyPipelineLayout = VK_NULL_HANDLE;
         VkPipeline mSkyPipeline = VK_NULL_HANDLE;
-
-        bool mRayTracingSupported = false;
-        VkPhysicalDeviceRayTracingPipelinePropertiesKHR mRtProperties{};
 
         VkDescriptorSetLayout mRtSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool mRtDescriptorPool = VK_NULL_HANDLE;
@@ -444,7 +523,6 @@ namespace mir
 
         uint32_t mFrameIndex = 0;
         bool mNeedRecreate = false;
-        bool mValidationEnabled = false;
 
         bool mImGuiBackendInitialized = false;
         ImDrawData *mImguiDrawData = nullptr;

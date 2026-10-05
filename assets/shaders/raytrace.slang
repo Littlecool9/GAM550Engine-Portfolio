@@ -35,24 +35,29 @@ cbuffer CameraData
     float4 cameraPos; // the origin: the TLAS is built relative to this view's camera
     float4 fogColor;
     float4 cameraWorldPos; // absolute camera position, for the atmosphere only
-    float4 clipPlanes; // x = near, y = far, or 0 for no far plane
+    float4 clipPlanes;     // x = near, y = far, or 0 for no far plane
     float4 atmosphereScattering;
     float4 atmosphereRadii;
     float4 atmosphereMisc;
     float4 lightingMeta; // x = this view's count in gLights, y = its first index
 };
 
-struct RtPushData
+struct RtPushConstants
 {
     uint2 outputOffset;
 };
 
 [[vk::push_constant]]
-RtPushData pushData;
+RtPushConstants pushData;
 
 struct RayPayload
 {
     float3 color;
+};
+
+struct ShadowPayload
+{
+    float visibility;
 };
 
 static const float3 kAlbedo = float3(0.5, 0.5, 0.5);
@@ -60,6 +65,28 @@ static const float kSpecularStrength = 0.04;
 static const float kShininess = 32.0;
 // pos(3) + color(3) + normal(3) + uv(2) + alpha(1) + tangent(4); keep in sync with mir::Vertex.
 static const uint kVertexStrideFloats = 16;
+
+// Self-shadowing bias: the origin is nudged along the surface normal before tracing.
+static const float kShadowNormalBias = 0.01;
+static const float kSunShadowDistance = 10000.0;
+
+float TraceShadowRay(float3 origin, float3 direction, float tMax)
+{
+    ShadowPayload shadowPayload;
+    shadowPayload.visibility = 0.0;
+
+    RayDesc shadowRay;
+    shadowRay.Origin = origin;
+    shadowRay.Direction = direction;
+    shadowRay.TMin = 0.001;
+    shadowRay.TMax = max(tMax, shadowRay.TMin);
+
+    TraceRay(gTlas,
+             RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
+             0xFF, 0, 0, 1, shadowRay, shadowPayload);
+
+    return shadowPayload.visibility;
+}
 
 [shader("raygeneration")]
 void rayGenMain()
@@ -69,14 +96,10 @@ void rayGenMain()
 
     const float2 ndc = (float2(pixel) + 0.5) / float2(dims) * 2.0 - 1.0;
 
-    // Depth 1 is the near plane, a finite point even with no far plane.
     const float4 onNearPlane = mul(invViewProj, float4(ndc, 1.0, 1.0));
     const float3 toNearPlane = onNearPlane.xyz / onNearPlane.w - cameraPos.xyz;
     const float3 rayDir = normalize(toNearPlane);
 
-    // Stop where the raster path's far plane would clip. The plane is a view
-    // depth, so an off-axis ray travels farther to reach it, by the same
-    // factor it travels to reach the near plane.
     const float toFarPlane = clipPlanes.y * length(toNearPlane) / clipPlanes.x;
 
     RayDesc ray;
@@ -109,6 +132,12 @@ void missMain(inout RayPayload payload)
     const float3 rayOrigin = float3(cameraWorldPos.x, params.planetRadius + cameraWorldPos.y, cameraWorldPos.z);
     float3 color = Atmosphere(WorldRayDirection(), rayOrigin, normalize(lightDirWS.xyz), params);
     payload.color = TonemapReinhard(color);
+}
+
+[shader("miss")]
+void shadowMissMain(inout ShadowPayload payload)
+{
+    payload.visibility = 1.0;
 }
 
 [shader("closesthit")]
@@ -155,6 +184,7 @@ void closestHitMain(inout RayPayload payload, in BuiltInTriangleIntersectionAttr
             info.normalCol2.xyz * objNormal.z);
 
         const float3 hitWorldPos = WorldRayOrigin() + RayTCurrent() * WorldRayDirection();
+        const float3 shadowOrigin = hitWorldPos + N * kShadowNormalBias;
         const float3 L = normalize(lightDirWS.xyz);
         const float3 V = normalize(cameraPos.xyz - hitWorldPos);
         const float3 H = normalize(L + V);
@@ -162,11 +192,32 @@ void closestHitMain(inout RayPayload payload, in BuiltInTriangleIntersectionAttr
         const float diffuse = max(dot(N, L), 0.0);
         const float specular = (diffuse > 0.0) ? pow(max(dot(N, H), 0.0), kShininess) : 0.0;
 
-        const float3 albedo = kAlbedo * info.tint.rgb;
-        color = albedo * (ambientColor.rgb + lightColor.rgb * diffuse) +
-                lightColor.rgb * kSpecularStrength * specular;
+        const float sunVisibility = TraceShadowRay(shadowOrigin, L, kSunShadowDistance);
 
-        color += AccumulatePunctualLights(hitWorldPos, N, albedo, int(lightingMeta.y), int(lightingMeta.x));
+        const float3 albedo = kAlbedo * info.tint.rgb;
+        color = albedo * ambientColor.rgb +
+                (albedo * lightColor.rgb * diffuse + lightColor.rgb * kSpecularStrength * specular) * sunVisibility;
+
+        const int firstLight = int(lightingMeta.y);
+        const int lightCount = int(lightingMeta.x);
+        for (int i = 0; i < lightCount; i++)
+        {
+            GpuLight light = gLights[firstLight + i];
+            const float3 toLight = light.positionAndRange.xyz - hitWorldPos;
+            const float dist = length(toLight);
+            const float range = light.positionAndRange.w;
+            const float3 Lp = toLight / max(dist, 1e-5);
+
+            float atten = clamp(1.0 - dist / max(range, 1e-5), 0.0, 1.0);
+            const float cosAngle = dot(-Lp, light.directionAndSpotCos.xyz);
+            atten *= (cosAngle >= light.directionAndSpotCos.w) ? 1.0 : 0.0;
+
+            const float diffuseP = max(dot(N, Lp), 0.0);
+
+            const float visibility = light.color.w >= 0.0 ? TraceShadowRay(shadowOrigin, Lp, dist) : 1.0;
+
+            color += albedo * light.color.rgb * atten * diffuseP * visibility;
+        }
     }
 
     const float fogFactor = clamp(1.0 - exp(-fogColor.a * RayTCurrent()), 0.0, 1.0);

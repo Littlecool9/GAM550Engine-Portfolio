@@ -15,7 +15,7 @@ struct VSOutput
     float3 normal : NORMAL;
     float pointSize : PSIZE;
 };
-struct PushData
+struct RasterPushConstants
 {
     float4x4 model;
     float4 normalCol0;
@@ -23,7 +23,7 @@ struct PushData
     float4 normalCol2;
     float4 tint;
 };
-[[vk::push_constant]] PushData pushData;
+[[vk::push_constant]] RasterPushConstants pushData;
 
 // set 0, binding 0: base color, combined with this material's sampler.
 [[vk::binding(0, 0)]] Sampler2D<float4> baseColor;
