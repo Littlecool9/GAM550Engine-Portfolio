@@ -25,6 +25,8 @@ namespace mir
 
     inline constexpr std::string_view kUIPauseAction = "UIPause";
 
+    inline constexpr std::string_view kToggleFullscreenAction = "ToggleFullscreen";
+
     InputMap DefaultInputMap();
 
 

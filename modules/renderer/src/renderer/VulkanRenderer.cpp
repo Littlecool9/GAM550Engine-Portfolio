@@ -42,6 +42,8 @@ namespace mir
 
     VkExtent2D VulkanRenderer::SwapchainExtent() const { return mSwapchain->Extent(); }
 
+    void VulkanRenderer::RequestSwapchainRecreate() { mSwapchain->MarkOutOfDate(); }
+
     bool VulkanRenderer::Initialize(const RendererDesc &desc)
     {
         if (desc.window == nullptr)

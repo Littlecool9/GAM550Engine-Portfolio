@@ -28,4 +28,5 @@ namespace mir
     }
     void GLFWWindow::InstallCustomTitleBar() {}
     void GLFWWindow::UninstallCustomTitleBar() {}
+    void GLFWWindow::PlaceCustomTitleBarWindow(int, int, int, int) {}
 }

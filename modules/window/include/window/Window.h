@@ -63,6 +63,9 @@ namespace mir
         virtual bool IsMaximized() const { return false; }
         virtual void RequestClose() {}
 
+        virtual void ToggleFullscreen() {}
+        virtual bool IsFullscreen() const { return false; }
+
         virtual void Show() {}
 
         virtual const RawInputSnapshot &RawInput() const

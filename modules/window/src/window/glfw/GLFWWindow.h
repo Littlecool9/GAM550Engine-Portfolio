@@ -34,7 +34,8 @@ namespace mir
         void *NativeHandleForImGui() const override { return mHandle; }
         float ContentScale() const override;
 
-        bool HasCustomTitleBar() const override { return mHasCustomTitleBar; }
+
+        bool HasCustomTitleBar() const override { return mHasCustomTitleBar && !IsFullscreen(); }
         const char *Title() const override { return mTitle.c_str(); }
         void SetTitleBarInteractiveRects(std::span<const PixelRect> rects) override
         {
@@ -46,6 +47,9 @@ namespace mir
         bool IsMaximized() const override;
         void RequestClose() override;
         void Show() override;
+
+        void ToggleFullscreen() override;
+        bool IsFullscreen() const override;
 
         const RawInputSnapshot &RawInput() const override { return mRawInput; }
 
@@ -69,6 +73,15 @@ namespace mir
         void InstallCustomTitleBar();
         void UninstallCustomTitleBar();
 
+        // Win32 only: puts the window back on an exact outer rect after
+        // fullscreen. GLFW grows a windowed rect by a native frame, which the
+        // custom title bar's hook has made client area, so each round trip
+        // would otherwise grow the window by that frame. No-op elsewhere.
+        void PlaceCustomTitleBarWindow(int x, int y, int width, int height);
+
+        //GLFW only reports a size through the callback, which may come later.
+        void RefreshFramebufferSize();
+
         GLFWwindow *mHandle = nullptr;
         uint32_t mWidth = 0;
         uint32_t mHeight = 0;
@@ -77,5 +90,12 @@ namespace mir
         std::vector<PixelRect> mTitleBarInteractiveRects;
         std::vector<std::string> mDroppedFiles;
         RawInputSnapshot mRawInput;
+
+        //where ToggleFullscreen returns the window to, in screen coordinates
+        int mWindowedX = 0;
+        int mWindowedY = 0;
+        int mWindowedWidth = 0;
+        int mWindowedHeight = 0;
+        bool mWindowedMaximized = false;
     };
 }

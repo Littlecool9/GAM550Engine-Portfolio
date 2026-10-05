@@ -152,6 +152,10 @@ namespace mir
         //carries out what the player asked of the game in the pause menu
         void ApplyShellAction(GameShellAction action);
 
+        //windowed to fullscreen without a restart. called by f11.
+        //swapchain is recreated next frame.
+        void ToggleFullscreen();
+
     private:
         // context is rebuilt per tick
         SystemContext MakeContext(float dt);
