@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -78,7 +79,11 @@ namespace mir
     void LogPanel::Draw()
     {
         if (ImGui::Button("Clear"))
+        {
             LogHistory::Clear();
+            mSelectionAnchor = -1;
+            mSelectionEnd = -1;
+        }
 
         ImGui::SameLine();
         ImGui::Checkbox("Auto-scroll", &mAutoScroll);
@@ -99,8 +104,6 @@ namespace mir
         ImGui::SetNextItemWidth(200.0f);
         ImGui::InputTextWithHint("##Search", "Search...", mSearchBuf, sizeof(mSearchBuf));
 
-        ImGui::Separator();
-
         const std::vector<LogEntry> entries = LogHistory::Snapshot();
 
         std::vector<std::size_t> visible;
@@ -114,6 +117,21 @@ namespace mir
             visible.push_back(i);
         }
 
+        ImGui::SameLine();
+        if (ImGui::Button("Copy All"))
+        {
+            std::string clip;
+            for (std::size_t index : visible)
+            {
+                clip += entries[index].message;
+                clip += '\n';
+            }
+            ImGui::SetClipboardText(clip.c_str());
+        }
+        ImGui::SetItemTooltip("Copy every line currently shown below");
+
+        ImGui::Separator();
+
         ImGui::BeginChild("##LogScroll", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_HorizontalScrollbar);
 
         ImGuiListClipper clipper;
@@ -124,13 +142,31 @@ namespace mir
             {
                 const LogEntry &entry = entries[visible[static_cast<std::size_t>(row)]];
 
+                const bool rowSelected = mSelectionAnchor >= 0 &&
+                                          row >= std::min(mSelectionAnchor, mSelectionEnd) &&
+                                          row <= std::max(mSelectionAnchor, mSelectionEnd);
+
+                ImGui::PushID(row);
+                const ImVec2 rowPos = ImGui::GetCursorScreenPos();
+                if (ImGui::Selectable("##row", rowSelected, ImGuiSelectableFlags_None,
+                                       ImVec2(ImGui::GetContentRegionAvail().x, ImGui::GetTextLineHeightWithSpacing())))
+                {
+                    if (ImGui::GetIO().KeyShift && mSelectionAnchor >= 0)
+                        mSelectionEnd = row;
+                    else
+                    {
+                        mSelectionAnchor = row;
+                        mSelectionEnd = row;
+                    }
+                }
+                ImGui::SetCursorScreenPos(rowPos);
+
                 if (entry.level == LogLevel::Critical)
                 {
-                    const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-                    const ImVec2 rowMax(rowMin.x + ImGui::GetContentRegionAvail().x,
-                                         rowMin.y + ImGui::GetTextLineHeightWithSpacing());
+                    const ImVec2 rowMax(rowPos.x + ImGui::GetContentRegionAvail().x,
+                                         rowPos.y + ImGui::GetTextLineHeightWithSpacing());
                     ImGui::GetWindowDrawList()->AddRectFilled(
-                        rowMin, rowMax,
+                        rowPos, rowMax,
                         ImGui::ColorConvertFloat4ToU32(EditorTheme::Color(StatusColor::Danger, 0.15f)));
                 }
 
@@ -144,9 +180,25 @@ namespace mir
                     ImGui::TextUnformatted(entry.message.c_str());
                     ImGui::PopStyleColor();
                 }
+                ImGui::PopID();
             }
         }
         clipper.End();
+
+        if (mSelectionAnchor >= 0 && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) &&
+            ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C))
+        {
+            const int first = std::min(mSelectionAnchor, mSelectionEnd);
+            const int last = std::max(mSelectionAnchor, mSelectionEnd);
+
+            std::string clip;
+            for (int row = first; row <= last && row < static_cast<int>(visible.size()); ++row)
+            {
+                clip += entries[visible[static_cast<std::size_t>(row)]].message;
+                clip += '\n';
+            }
+            ImGui::SetClipboardText(clip.c_str());
+        }
 
         if (mAutoScroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
