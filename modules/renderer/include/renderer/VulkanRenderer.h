@@ -47,6 +47,10 @@ namespace mir::vk
     struct FrameContext;
     class ResourceStore;
     class MaterialStore;
+    class CameraBuffer;
+    class ShadowMaps;
+    class ModelDescriptors;
+    struct SceneLighting;
     struct GpuMesh;
     struct GpuMaterial;
 }
@@ -79,7 +83,7 @@ namespace mir
 
         // Morph/skin data for a model draw, read through set 2; empty for
         // everything else. Slot 2 is reserved for the material parameters the
-        // renderer writes in - see BindModelDescriptors.
+        // renderer writes in - see vk::ModelDescriptors::Bind.
         std::span<const glm::vec4> deformation;
 
         // Drawn after the opaque items, back to front. BuildViewDrawItems sorts.
@@ -186,8 +190,8 @@ namespace mir
 
         bool RayTracingSupported() const;
 
-        constexpr static uint32_t kMaxSpotShadows = 4;
-        constexpr static uint32_t kMaxPointShadows = 2;
+        constexpr static uint32_t kMaxSpotShadows = vk::kMaxSpotShadows;
+        constexpr static uint32_t kMaxPointShadows = vk::kMaxPointShadows;
 
         constexpr static float kSunShadowHalfExtent = 25.0f;
         constexpr static float kSunShadowNearZ = 0.5f;
@@ -234,18 +238,10 @@ namespace mir
         bool RecreateSwapchain();
         // Shared prelude of DrawFrame and TraceFrame; nullopt skips the frame.
         std::optional<vk::FrameContext> BeginFrame();
-        bool CreateCameraResources();
-        void DestroyCameraResources();
-        bool CreateShadowResources();
-        void DestroyShadowResources();
-        void RecordShadowPasses(VkCommandBuffer cmd);
-        bool CreateModelDescriptors();
-        bool BindModelDescriptors(VkCommandBuffer cmd, const vk::GpuMaterial &material, const DrawItem &item);
-        void ResetModelFrame(uint32_t frame);
-        void DestroyModelResources(bool shutdown);
         bool RecordCapture(VkCommandBuffer cmd, uint32_t imageIndex);
         // Writes the PNG only for a submitted frame; frees the capture buffer either way.
         void FinishCapture(bool submitted);
+        void DestroyCaptureBuffer();
         bool CreateSkyPipeline();
 
         bool CreateAccelerationStructureObject(VkDeviceSize size, VkAccelerationStructureTypeKHR type,
@@ -267,8 +263,9 @@ namespace mir
 
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
         void RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex);
-        void WriteCameraData(const RenderView &view, uint32_t viewIndex);
-        uint32_t WriteViewLights(const RenderView &view, uint32_t viewIndex);
+        // Writes set 1 and set 3's per-view data; returns the camera's dynamic offset.
+        uint32_t WriteCameraData(const RenderView &view, uint32_t viewIndex);
+        vk::SceneLighting Lighting() const;
 
     private:
         constexpr static auto kFramesInFlight = vk::kFramesInFlight;
@@ -294,91 +291,9 @@ namespace mir
         std::unique_ptr<vk::ResourceStore> mResources;
         std::unique_ptr<vk::MaterialStore> mMaterialStore;
 
-        // set 1: binding 0 = per-view viewProj, as a dynamic uniform buffer.
-        constexpr static uint32_t kMaxViewsPerFrame = 16;
-
-        VkDescriptorSetLayout mCameraSetLayout = VK_NULL_HANDLE;
-        VkDescriptorPool mCameraDescriptorPool = VK_NULL_HANDLE;
-        VkDescriptorSet mCameraDescriptorSets[kFramesInFlight]{};
-
-        VkBuffer mCameraBuffers[kFramesInFlight]{};
-        VmaAllocation mCameraAllocations[kFramesInFlight]{};
-        std::byte *mCameraMapped[kFramesInFlight]{};
-        VkDeviceSize mCameraAlignedSize = 0;
-
-        // Per view; each view writes its own kMaxLights slice, narrowed against its camera.
-        constexpr static uint32_t kMaxLights = 64;
-        VkBuffer mLightBuffers[kFramesInFlight]{};
-        VmaAllocation mLightAllocations[kFramesInFlight]{};
-        std::byte *mLightMapped[kFramesInFlight]{};
-        std::vector<LightItem> mLights;
-
-        constexpr static uint32_t kSunShadowResolution = 2048;
-
-        VkImage mSunShadowImages[kFramesInFlight]{};
-        VmaAllocation mSunShadowAllocations[kFramesInFlight]{};
-        VkImageView mSunShadowViews[kFramesInFlight]{};
-        VkSampler mShadowSampler = VK_NULL_HANDLE;
-
-        VkDescriptorSetLayout mShadowSetLayout = VK_NULL_HANDLE;
-        VkDescriptorPool mShadowDescriptorPool = VK_NULL_HANDLE;
-        VkDescriptorSet mShadowDescriptorSets[kFramesInFlight]{};
-
-        VkPipelineLayout mShadowDepthPipelineLayout = VK_NULL_HANDLE;
-        VkPipeline mShadowDepthPipeline = VK_NULL_HANDLE;
-
-        bool mHasSunShadow = false;
-        glm::mat4 mSunShadowViewProj{ 1.0f };
-        WorldPosition mSunShadowAnchor;
-        std::span<const DrawItem> mSunShadowItems;
-
-        constexpr static uint32_t kSpotShadowResolution = 1024;
-
-        VkImage mSpotShadowImages[kFramesInFlight]{};
-        VmaAllocation mSpotShadowAllocations[kFramesInFlight]{};
-        VkImageView mSpotShadowArrayViews[kFramesInFlight]{}; // sampling: 2D_ARRAY over all slots
-        VkImageView mSpotShadowLayerViews[kFramesInFlight][kMaxSpotShadows]{}; // rendering: one slot each
-
-        VkBuffer mSpotShadowMatrixBuffers[kFramesInFlight]{};
-        VmaAllocation mSpotShadowMatrixAllocations[kFramesInFlight]{};
-        std::byte *mSpotShadowMatrixMapped[kFramesInFlight]{};
-
-        struct SpotShadowCaster
-        {
-            bool active = false;
-            glm::mat4 viewProj{ 1.0f }; // relative to `anchor`, not any view's camera
-            WorldPosition anchor;       // the light's own position
-            std::span<const DrawItem> items;
-        };
-        std::array<SpotShadowCaster, kMaxSpotShadows> mSpotShadowCasters{};
-
-        constexpr static uint32_t kPointShadowResolution = 512;
-
-        VkImage mPointShadowDepthImages[kFramesInFlight]{};
-        VmaAllocation mPointShadowDepthAllocations[kFramesInFlight]{};
-        VkImageView mPointShadowDepthLayerViews[kFramesInFlight][kMaxPointShadows * 6]{};
-
-        VkImage mPointShadowColorImages[kFramesInFlight]{};
-        VmaAllocation mPointShadowColorAllocations[kFramesInFlight]{};
-        VkImageView mPointShadowColorLayerViews[kFramesInFlight][kMaxPointShadows * 6]{};
-        VkImageView mPointShadowCubeArrayViews[kFramesInFlight]{}; // sampling: CUBE_ARRAY
-
-        VkPipeline mPointShadowPipeline = VK_NULL_HANDLE; // shadowDistance.slang
-
-        struct PointShadowCaster
-        {
-            bool active = false;
-            WorldPosition position; // the light itself: every face's "camera" sits here
-            float range = 0.0f;     // for the shading pass to normalize sampled distance by
-            std::array<PointShadowFace, 6> faces{};
-        };
-        std::array<PointShadowCaster, kMaxPointShadows> mPointShadowCasters{};
-
-        VkDescriptorSetLayout mModelSetLayout = VK_NULL_HANDLE;
-        VkDescriptorPool mModelPools[kFramesInFlight]{};
-
-        struct ModelFrameBuffer { VkBuffer buffer; VmaAllocation allocation; };
-        std::vector<ModelFrameBuffer> mModelBuffers[kFramesInFlight];
+        std::unique_ptr<vk::CameraBuffer> mCameraBuffer;
+        std::unique_ptr<vk::ShadowMaps> mShadowMaps;
+        std::unique_ptr<vk::ModelDescriptors> mModelDescriptors;
 
         std::filesystem::path mCapturePath;
         VkBuffer mCaptureBuffer = VK_NULL_HANDLE;

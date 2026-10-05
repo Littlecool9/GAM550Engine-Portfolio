@@ -7,9 +7,12 @@
  *
  */
 #include "renderer/VulkanRenderer.h"
+#include "vulkan/CameraBuffer.h"
 #include "vulkan/FrameSync.h"
 #include "vulkan/MaterialStore.h"
+#include "vulkan/ModelDescriptors.h"
 #include "vulkan/ResourceStore.h"
+#include "vulkan/ShadowMaps.h"
 #include "vulkan/VulkanDevice.h"
 #include "vulkan/VulkanSwapchain.h"
 #include "vulkan/VulkanUtil.h"
@@ -27,7 +30,10 @@ namespace mir
         mSwapchain(std::make_unique<vk::VulkanSwapchain>()),
         mFrameSync(std::make_unique<vk::FrameSync>()),
         mResources(std::make_unique<vk::ResourceStore>()),
-        mMaterialStore(std::make_unique<vk::MaterialStore>())
+        mMaterialStore(std::make_unique<vk::MaterialStore>()),
+        mCameraBuffer(std::make_unique<vk::CameraBuffer>()),
+        mShadowMaps(std::make_unique<vk::ShadowMaps>()),
+        mModelDescriptors(std::make_unique<vk::ModelDescriptors>())
     {}
     VulkanRenderer::~VulkanRenderer() = default;
 
@@ -60,17 +66,17 @@ namespace mir
         if (!mResources->Initialize(*mDevice))
             return false;
 
-        if (!CreateCameraResources())
+        if (!mCameraBuffer->Initialize(*mDevice))
             return false;
 
-        if (!CreateShadowResources())
+        if (!mShadowMaps->Initialize(*mDevice))
             return false;
 
-        if (!CreateModelDescriptors())
+        if (!mModelDescriptors->Initialize(*mDevice))
             return false;
 
         if (!mMaterialStore->Initialize(*mDevice, *mResources, mSwapchain->Format(),
-            { mCameraSetLayout, mModelSetLayout, mShadowSetLayout }))
+            { mCameraBuffer->SetLayout(), mModelDescriptors->SetLayout(), mShadowMaps->SetLayout() }))
             return false;
 
         if (!CreateSkyPipeline())
@@ -120,10 +126,10 @@ namespace mir
             mMaterialStore->Shutdown();
             DestroyBlases();
             mResources->Shutdown();
-            DestroyModelResources(true);
-            // before the device allocator: frees the camera UBO buffers
-            DestroyCameraResources();
-            DestroyShadowResources();
+            DestroyCaptureBuffer();
+            mModelDescriptors->Shutdown();
+            mCameraBuffer->Shutdown();
+            mShadowMaps->Shutdown();
 
             if (mSkyPipeline != VK_NULL_HANDLE)
             {
@@ -265,7 +271,7 @@ namespace mir
 
         DestroyBlases();
         const std::size_t meshCount = mResources->ReleaseMeshes();
-        DestroyModelResources(false);
+        mModelDescriptors->ResetFrames();
         // The default textures and material stay: CreateMaterial and draws fall back to them.
         const std::size_t textureCount = mResources->ReleaseTextures();
         const std::size_t materialCount = mMaterialStore->ReleaseMaterials();
@@ -294,5 +300,28 @@ namespace mir
 
         for (const TextureHandle handle : textures)
             mResources->DestroyTexture(handle);
+    }
+
+    void VulkanRenderer::SetLights(std::span<const LightItem> lights)
+    {
+        mCameraBuffer->SetLights(lights);
+    }
+
+    void VulkanRenderer::SetSunShadowCaster(bool active, const glm::mat4 &viewProj, WorldPosition anchor,
+        std::span<const DrawItem> items)
+    {
+        mShadowMaps->SetSunCaster(active, viewProj, anchor, items);
+    }
+
+    void VulkanRenderer::SetSpotShadowCaster(uint32_t slot, bool active, const glm::mat4 &viewProj,
+        WorldPosition anchor, std::span<const DrawItem> items)
+    {
+        mShadowMaps->SetSpotCaster(slot, active, viewProj, anchor, items);
+    }
+
+    void VulkanRenderer::SetPointShadowCaster(uint32_t slot, bool active, WorldPosition position, float range,
+        const std::array<PointShadowFace, 6> &faces)
+    {
+        mShadowMaps->SetPointCaster(slot, active, position, range, faces);
     }
 }

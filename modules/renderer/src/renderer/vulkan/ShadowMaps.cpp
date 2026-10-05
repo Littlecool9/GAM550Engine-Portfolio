@@ -1,13 +1,12 @@
 /**
- * @file VulkanShadow.cpp
+ * @file ShadowMaps.cpp
  * @author Sumin Park
  * @brief Sun, spot and point shadow maps: resources, casters and depth passes.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
-#include <renderer/VulkanRenderer.h>
-#include "FrameSync.h"
+#include "ShadowMaps.h"
 #include "ResourceStore.h"
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
@@ -18,6 +17,7 @@
 
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <array>
@@ -25,11 +25,12 @@
 #include <format>
 #include <span>
 
-namespace mir
+namespace mir::vk
 {
-
-    bool VulkanRenderer::CreateShadowResources()
+    bool ShadowMaps::Initialize(VulkanDevice &device)
     {
+        mDevice = &device;
+
         const VkSamplerCreateInfo samplerInfo{
             .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
             .magFilter = VK_FILTER_LINEAR,
@@ -40,9 +41,9 @@ namespace mir
             .compareEnable = VK_FALSE,
             .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE };
 
-        if (vkCreateSampler(mDevice->Handle(), &samplerInfo, nullptr, &mShadowSampler) != VK_SUCCESS)
+        if (vkCreateSampler(mDevice->Handle(), &samplerInfo, nullptr, &mSampler) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateShadowResources: vkCreateSampler failed");
+            MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateSampler failed");
             return false;
         }
 
@@ -51,7 +52,7 @@ namespace mir
             const VkImageCreateInfo imageInfo{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                 .imageType = VK_IMAGE_TYPE_2D,
-                .format = vk::kDepthFormat,
+                .format = kDepthFormat,
                 .extent{ kSunShadowResolution, kSunShadowResolution, 1 },
                 .mipLevels = 1,
                 .arrayLayers = 1,
@@ -64,17 +65,17 @@ namespace mir
             const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
 
             if (vmaCreateImage(mDevice->Allocator(), &imageInfo, &allocInfo,
-                &mSunShadowImages[i], &mSunShadowAllocations[i], nullptr) != VK_SUCCESS)
+                &mSunImages[i], &mSunAllocations[i], nullptr) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("CreateShadowResources: vmaCreateImage failed for Sun shadow map {}", i);
+                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vmaCreateImage failed for Sun shadow map {}", i);
                 return false;
             }
 
             const VkImageViewCreateInfo viewInfo{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                .image = mSunShadowImages[i],
+                .image = mSunImages[i],
                 .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                .format = vk::kDepthFormat,
+                .format = kDepthFormat,
                 .subresourceRange{
                     .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
                     .baseMipLevel = 0,
@@ -82,13 +83,13 @@ namespace mir
                     .baseArrayLayer = 0,
                     .layerCount = 1 } };
 
-            if (vkCreateImageView(mDevice->Handle(), &viewInfo, nullptr, &mSunShadowViews[i]) != VK_SUCCESS)
+            if (vkCreateImageView(mDevice->Handle(), &viewInfo, nullptr, &mSunViews[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Sun shadow map {}", i);
+                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateImageView failed for Sun shadow map {}", i);
                 return false;
             }
 
-            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mSunShadowImages[i]),
+            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mSunImages[i]),
                 std::format("Sun shadow map {}", i).c_str());
         }
 
@@ -97,7 +98,7 @@ namespace mir
             const VkImageCreateInfo imageInfo{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                 .imageType = VK_IMAGE_TYPE_2D,
-                .format = vk::kDepthFormat,
+                .format = kDepthFormat,
                 .extent{ kSpotShadowResolution, kSpotShadowResolution, 1 },
                 .mipLevels = 1,
                 .arrayLayers = kMaxSpotShadows,
@@ -110,25 +111,25 @@ namespace mir
             const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
 
             if (vmaCreateImage(mDevice->Allocator(), &imageInfo, &allocInfo,
-                &mSpotShadowImages[i], &mSpotShadowAllocations[i], nullptr) != VK_SUCCESS)
+                &mSpotImages[i], &mSpotAllocations[i], nullptr) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("CreateShadowResources: vmaCreateImage failed for Spot shadow array {}", i);
+                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vmaCreateImage failed for Spot shadow array {}", i);
                 return false;
             }
 
             const VkImageViewCreateInfo arrayViewInfo{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                .image = mSpotShadowImages[i],
+                .image = mSpotImages[i],
                 .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
-                .format = vk::kDepthFormat,
+                .format = kDepthFormat,
                 .subresourceRange{
                     .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
                     .levelCount = 1,
                     .layerCount = kMaxSpotShadows } };
 
-            if (vkCreateImageView(mDevice->Handle(), &arrayViewInfo, nullptr, &mSpotShadowArrayViews[i]) != VK_SUCCESS)
+            if (vkCreateImageView(mDevice->Handle(), &arrayViewInfo, nullptr, &mSpotArrayViews[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Spot shadow array {}", i);
+                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateImageView failed for Spot shadow array {}", i);
                 return false;
             }
 
@@ -136,37 +137,37 @@ namespace mir
             {
                 const VkImageViewCreateInfo layerViewInfo{
                     .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                    .image = mSpotShadowImages[i],
+                    .image = mSpotImages[i],
                     .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                    .format = vk::kDepthFormat,
+                    .format = kDepthFormat,
                     .subresourceRange{
                         .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
                         .levelCount = 1,
                         .baseArrayLayer = slot,
                         .layerCount = 1 } };
 
-                if (vkCreateImageView(mDevice->Handle(), &layerViewInfo, nullptr, &mSpotShadowLayerViews[i][slot]) != VK_SUCCESS)
+                if (vkCreateImageView(mDevice->Handle(), &layerViewInfo, nullptr, &mSpotLayerViews[i][slot]) != VK_SUCCESS)
                 {
-                    MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Spot shadow slot {}/{}",
+                    MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateImageView failed for Spot shadow slot {}/{}",
                         i, slot);
                     return false;
                 }
             }
 
-            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mSpotShadowImages[i]),
+            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mSpotImages[i]),
                 std::format("Spot shadow array {}", i).c_str());
 
             const VkDeviceSize spotMatrixBufferSize = sizeof(glm::mat4) * kMaxSpotShadows * kMaxViewsPerFrame;
             VmaAllocationInfo spotMatrixAllocInfo{};
-            if (!vk::CreateBuffer(mDevice->Allocator(), spotMatrixBufferSize,
+            if (!CreateBuffer(mDevice->Allocator(), spotMatrixBufferSize,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
-                mSpotShadowMatrixBuffers[i], mSpotShadowMatrixAllocations[i], &spotMatrixAllocInfo))
+                mSpotMatrixBuffers[i], mSpotMatrixAllocations[i], &spotMatrixAllocInfo))
             {
-                MIR_LOG_CRITICAL("CreateShadowResources: Spot shadow matrix buffer allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("ShadowMaps::Initialize: Spot shadow matrix buffer allocation failed for frame {}", i);
                 return false;
             }
-            mSpotShadowMatrixMapped[i] = static_cast<std::byte *>(spotMatrixAllocInfo.pMappedData);
+            mSpotMatrixMapped[i] = static_cast<std::byte *>(spotMatrixAllocInfo.pMappedData);
         }
 
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
@@ -176,7 +177,7 @@ namespace mir
             const VkImageCreateInfo depthImageInfo{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                 .imageType = VK_IMAGE_TYPE_2D,
-                .format = vk::kDepthFormat,
+                .format = kDepthFormat,
                 .extent{ kPointShadowResolution, kPointShadowResolution, 1 },
                 .mipLevels = 1,
                 .arrayLayers = kPointLayers,
@@ -189,9 +190,9 @@ namespace mir
             const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
 
             if (vmaCreateImage(mDevice->Allocator(), &depthImageInfo, &allocInfo,
-                &mPointShadowDepthImages[i], &mPointShadowDepthAllocations[i], nullptr) != VK_SUCCESS)
+                &mPointDepthImages[i], &mPointDepthAllocations[i], nullptr) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("CreateShadowResources: vmaCreateImage failed for Point shadow depth {}", i);
+                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vmaCreateImage failed for Point shadow depth {}", i);
                 return false;
             }
 
@@ -210,9 +211,9 @@ namespace mir
                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
 
             if (vmaCreateImage(mDevice->Allocator(), &colorImageInfo, &allocInfo,
-                &mPointShadowColorImages[i], &mPointShadowColorAllocations[i], nullptr) != VK_SUCCESS)
+                &mPointColorImages[i], &mPointColorAllocations[i], nullptr) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("CreateShadowResources: vmaCreateImage failed for Point shadow distance {}", i);
+                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vmaCreateImage failed for Point shadow distance {}", i);
                 return false;
             }
 
@@ -220,9 +221,9 @@ namespace mir
             {
                 const VkImageViewCreateInfo depthLayerViewInfo{
                     .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                    .image = mPointShadowDepthImages[i],
+                    .image = mPointDepthImages[i],
                     .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                    .format = vk::kDepthFormat,
+                    .format = kDepthFormat,
                     .subresourceRange{
                         .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
                         .levelCount = 1,
@@ -230,16 +231,16 @@ namespace mir
                         .layerCount = 1 } };
 
                 if (vkCreateImageView(mDevice->Handle(), &depthLayerViewInfo, nullptr,
-                    &mPointShadowDepthLayerViews[i][layer]) != VK_SUCCESS)
+                    &mPointDepthLayerViews[i][layer]) != VK_SUCCESS)
                 {
-                    MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Point depth {}/{}",
+                    MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateImageView failed for Point depth {}/{}",
                         i, layer);
                     return false;
                 }
 
                 const VkImageViewCreateInfo colorLayerViewInfo{
                     .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                    .image = mPointShadowColorImages[i],
+                    .image = mPointColorImages[i],
                     .viewType = VK_IMAGE_VIEW_TYPE_2D,
                     .format = VK_FORMAT_R32_SFLOAT,
                     .subresourceRange{
@@ -249,9 +250,9 @@ namespace mir
                         .layerCount = 1 } };
 
                 if (vkCreateImageView(mDevice->Handle(), &colorLayerViewInfo, nullptr,
-                    &mPointShadowColorLayerViews[i][layer]) != VK_SUCCESS)
+                    &mPointColorLayerViews[i][layer]) != VK_SUCCESS)
                 {
-                    MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Point color {}/{}",
+                    MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateImageView failed for Point color {}/{}",
                         i, layer);
                     return false;
                 }
@@ -259,7 +260,7 @@ namespace mir
 
             const VkImageViewCreateInfo cubeArrayViewInfo{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                .image = mPointShadowColorImages[i],
+                .image = mPointColorImages[i],
                 .viewType = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY,
                 .format = VK_FORMAT_R32_SFLOAT,
                 .subresourceRange{
@@ -267,13 +268,13 @@ namespace mir
                     .levelCount = 1,
                     .layerCount = kPointLayers } };
 
-            if (vkCreateImageView(mDevice->Handle(), &cubeArrayViewInfo, nullptr, &mPointShadowCubeArrayViews[i]) != VK_SUCCESS)
+            if (vkCreateImageView(mDevice->Handle(), &cubeArrayViewInfo, nullptr, &mPointCubeArrayViews[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Point cube array {}", i);
+                MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateImageView failed for Point cube array {}", i);
                 return false;
             }
 
-            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mPointShadowColorImages[i]),
+            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mPointColorImages[i]),
                 std::format("Point shadow distance cube array {}", i).c_str());
         }
 
@@ -292,9 +293,9 @@ namespace mir
             .bindingCount = static_cast<uint32_t>(bindings.size()),
             .pBindings = bindings.data() };
 
-        if (vkCreateDescriptorSetLayout(mDevice->Handle(), &setLayoutInfo, nullptr, &mShadowSetLayout) != VK_SUCCESS)
+        if (vkCreateDescriptorSetLayout(mDevice->Handle(), &setLayoutInfo, nullptr, &mSetLayout) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateShadowResources: vkCreateDescriptorSetLayout failed");
+            MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateDescriptorSetLayout failed");
             return false;
         }
 
@@ -308,9 +309,9 @@ namespace mir
             .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
             .pPoolSizes = poolSizes.data() };
 
-        if (vkCreateDescriptorPool(mDevice->Handle(), &poolInfo, nullptr, &mShadowDescriptorPool) != VK_SUCCESS)
+        if (vkCreateDescriptorPool(mDevice->Handle(), &poolInfo, nullptr, &mPool) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateShadowResources: vkCreateDescriptorPool failed");
+            MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateDescriptorPool failed");
             return false;
         }
 
@@ -318,70 +319,70 @@ namespace mir
         {
             const VkDescriptorSetAllocateInfo setAllocInfo{
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                .descriptorPool = mShadowDescriptorPool,
+                .descriptorPool = mPool,
                 .descriptorSetCount = 1,
-                .pSetLayouts = &mShadowSetLayout };
+                .pSetLayouts = &mSetLayout };
 
-            if (vkAllocateDescriptorSets(mDevice->Handle(), &setAllocInfo, &mShadowDescriptorSets[i]) != VK_SUCCESS)
+            if (vkAllocateDescriptorSets(mDevice->Handle(), &setAllocInfo, &mSets[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("CreateShadowResources: descriptor set allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("ShadowMaps::Initialize: descriptor set allocation failed for frame {}", i);
                 return false;
             }
 
             const VkDescriptorImageInfo sunImageInfo{
-                .sampler = mShadowSampler,
-                .imageView = mSunShadowViews[i],
+                .sampler = mSampler,
+                .imageView = mSunViews[i],
                 .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
 
             const VkDescriptorImageInfo spotImageInfo{
-                .sampler = mShadowSampler,
-                .imageView = mSpotShadowArrayViews[i],
+                .sampler = mSampler,
+                .imageView = mSpotArrayViews[i],
                 .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL };
 
             const VkDescriptorBufferInfo spotMatrixBufferInfo{
-                .buffer = mSpotShadowMatrixBuffers[i],
+                .buffer = mSpotMatrixBuffers[i],
                 .offset = 0,
                 .range = sizeof(glm::mat4) * kMaxSpotShadows * kMaxViewsPerFrame };
 
             const VkDescriptorImageInfo pointImageInfo{
-                .sampler = mShadowSampler,
-                .imageView = mPointShadowCubeArrayViews[i],
+                .sampler = mSampler,
+                .imageView = mPointCubeArrayViews[i],
                 .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 
             const std::array<VkWriteDescriptorSet, 4> writes{ {
-                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = mShadowDescriptorSets[i],
+                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = mSets[i],
                  .dstBinding = 0, .descriptorCount = 1,
                  .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &sunImageInfo },
-                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = mShadowDescriptorSets[i],
+                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = mSets[i],
                  .dstBinding = 1, .descriptorCount = 1,
                  .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &spotImageInfo },
-                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = mShadowDescriptorSets[i],
+                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = mSets[i],
                  .dstBinding = 2, .descriptorCount = 1,
                  .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &spotMatrixBufferInfo },
-                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = mShadowDescriptorSets[i],
+                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = mSets[i],
                  .dstBinding = 3, .descriptorCount = 1,
                  .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &pointImageInfo } } };
 
             vkUpdateDescriptorSets(mDevice->Handle(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         }
 
-        VkShaderModule vertModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("shadowDepth.vertexMain.spv"));
+        VkShaderModule vertModule = CreateShaderModule(mDevice->Handle(), ShaderPath("shadowDepth.vertexMain.spv"));
         if (vertModule == VK_NULL_HANDLE)
             return false;
 
         const VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .offset = 0,
-            .size = sizeof(vk::ShadowPushConstants) };
+            .size = sizeof(ShadowPushConstants) };
 
         const VkPipelineLayoutCreateInfo layoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &pushConstantRange };
 
-        if (vkCreatePipelineLayout(mDevice->Handle(), &layoutInfo, nullptr, &mShadowDepthPipelineLayout) != VK_SUCCESS)
+        if (vkCreatePipelineLayout(mDevice->Handle(), &layoutInfo, nullptr, &mDepthPipelineLayout) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateShadowResources: vkCreatePipelineLayout failed");
+            MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreatePipelineLayout failed");
             vkDestroyShaderModule(mDevice->Handle(), vertModule, nullptr);
             return false;
         }
@@ -453,7 +454,7 @@ namespace mir
         const VkPipelineRenderingCreateInfo renderingInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
             .colorAttachmentCount = 0,
-            .depthAttachmentFormat = vk::kDepthFormat };
+            .depthAttachmentFormat = kDepthFormat };
 
         const VkGraphicsPipelineCreateInfo pipelineInfo{
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -467,24 +468,24 @@ namespace mir
             .pMultisampleState = &multisample,
             .pDepthStencilState = &depthStencil,
             .pDynamicState = &dynamicState,
-            .layout = mShadowDepthPipelineLayout,
+            .layout = mDepthPipelineLayout,
             .renderPass = VK_NULL_HANDLE,
             .subpass = 0 };
 
         const VkResult pipelineResult = vkCreateGraphicsPipelines(
-            mDevice->Handle(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &mShadowDepthPipeline);
+            mDevice->Handle(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &mDepthPipeline);
 
         vkDestroyShaderModule(mDevice->Handle(), vertModule, nullptr);
 
         if (pipelineResult != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateShadowResources: vkCreateGraphicsPipelines failed: {}",
+            MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateGraphicsPipelines failed: {}",
                 static_cast<int>(pipelineResult));
             return false;
         }
 
-        VkShaderModule distanceVertModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("shadowDistance.vertexMain.spv"));
-        VkShaderModule distanceFragModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("shadowDistance.fragmentMain.spv"));
+        VkShaderModule distanceVertModule = CreateShaderModule(mDevice->Handle(), ShaderPath("shadowDistance.vertexMain.spv"));
+        VkShaderModule distanceFragModule = CreateShaderModule(mDevice->Handle(), ShaderPath("shadowDistance.fragmentMain.spv"));
         if (distanceVertModule == VK_NULL_HANDLE || distanceFragModule == VK_NULL_HANDLE)
         {
             if (distanceVertModule != VK_NULL_HANDLE)
@@ -514,7 +515,7 @@ namespace mir
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
             .colorAttachmentCount = 1,
             .pColorAttachmentFormats = &kPointShadowColorFormat,
-            .depthAttachmentFormat = vk::kDepthFormat };
+            .depthAttachmentFormat = kDepthFormat };
 
         const VkGraphicsPipelineCreateInfo distancePipelineInfo{
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -529,19 +530,19 @@ namespace mir
             .pDepthStencilState = &depthStencil,
             .pColorBlendState = &distanceColorBlend,
             .pDynamicState = &dynamicState,
-            .layout = mShadowDepthPipelineLayout,
+            .layout = mDepthPipelineLayout,
             .renderPass = VK_NULL_HANDLE,
             .subpass = 0 };
 
         const VkResult distancePipelineResult = vkCreateGraphicsPipelines(
-            mDevice->Handle(), VK_NULL_HANDLE, 1, &distancePipelineInfo, nullptr, &mPointShadowPipeline);
+            mDevice->Handle(), VK_NULL_HANDLE, 1, &distancePipelineInfo, nullptr, &mPointPipeline);
 
         vkDestroyShaderModule(mDevice->Handle(), distanceVertModule, nullptr);
         vkDestroyShaderModule(mDevice->Handle(), distanceFragModule, nullptr);
 
         if (distancePipelineResult != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateShadowResources: vkCreateGraphicsPipelines (Point) failed: {}",
+            MIR_LOG_CRITICAL("ShadowMaps::Initialize: vkCreateGraphicsPipelines (Point) failed: {}",
                 static_cast<int>(distancePipelineResult));
             return false;
         }
@@ -549,145 +550,148 @@ namespace mir
         return true;
     }
 
-    void VulkanRenderer::DestroyShadowResources()
+    void ShadowMaps::Shutdown()
     {
-        if (mShadowDepthPipeline != VK_NULL_HANDLE)
+        if (mDevice == nullptr)
+            return;
+
+        if (mDepthPipeline != VK_NULL_HANDLE)
         {
-            vkDestroyPipeline(mDevice->Handle(), mShadowDepthPipeline, nullptr);
-            mShadowDepthPipeline = VK_NULL_HANDLE;
+            vkDestroyPipeline(mDevice->Handle(), mDepthPipeline, nullptr);
+            mDepthPipeline = VK_NULL_HANDLE;
         }
-        if (mPointShadowPipeline != VK_NULL_HANDLE)
+        if (mPointPipeline != VK_NULL_HANDLE)
         {
-            vkDestroyPipeline(mDevice->Handle(), mPointShadowPipeline, nullptr);
-            mPointShadowPipeline = VK_NULL_HANDLE;
+            vkDestroyPipeline(mDevice->Handle(), mPointPipeline, nullptr);
+            mPointPipeline = VK_NULL_HANDLE;
         }
-        if (mShadowDepthPipelineLayout != VK_NULL_HANDLE)
+        if (mDepthPipelineLayout != VK_NULL_HANDLE)
         {
-            vkDestroyPipelineLayout(mDevice->Handle(), mShadowDepthPipelineLayout, nullptr);
-            mShadowDepthPipelineLayout = VK_NULL_HANDLE;
+            vkDestroyPipelineLayout(mDevice->Handle(), mDepthPipelineLayout, nullptr);
+            mDepthPipelineLayout = VK_NULL_HANDLE;
         }
-        if (mShadowDescriptorPool != VK_NULL_HANDLE)
+        if (mPool != VK_NULL_HANDLE)
         {
-            vkDestroyDescriptorPool(mDevice->Handle(), mShadowDescriptorPool, nullptr);
-            mShadowDescriptorPool = VK_NULL_HANDLE;
+            vkDestroyDescriptorPool(mDevice->Handle(), mPool, nullptr);
+            mPool = VK_NULL_HANDLE;
         }
-        if (mShadowSetLayout != VK_NULL_HANDLE)
+        if (mSetLayout != VK_NULL_HANDLE)
         {
-            vkDestroyDescriptorSetLayout(mDevice->Handle(), mShadowSetLayout, nullptr);
-            mShadowSetLayout = VK_NULL_HANDLE;
+            vkDestroyDescriptorSetLayout(mDevice->Handle(), mSetLayout, nullptr);
+            mSetLayout = VK_NULL_HANDLE;
         }
-        if (mShadowSampler != VK_NULL_HANDLE)
+        if (mSampler != VK_NULL_HANDLE)
         {
-            vkDestroySampler(mDevice->Handle(), mShadowSampler, nullptr);
-            mShadowSampler = VK_NULL_HANDLE;
+            vkDestroySampler(mDevice->Handle(), mSampler, nullptr);
+            mSampler = VK_NULL_HANDLE;
         }
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
-            if (mSunShadowViews[i] != VK_NULL_HANDLE)
+            if (mSunViews[i] != VK_NULL_HANDLE)
             {
-                vkDestroyImageView(mDevice->Handle(), mSunShadowViews[i], nullptr);
-                mSunShadowViews[i] = VK_NULL_HANDLE;
+                vkDestroyImageView(mDevice->Handle(), mSunViews[i], nullptr);
+                mSunViews[i] = VK_NULL_HANDLE;
             }
-            if (mSunShadowImages[i] != VK_NULL_HANDLE)
+            if (mSunImages[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyImage(mDevice->Allocator(), mSunShadowImages[i], mSunShadowAllocations[i]);
-                mSunShadowImages[i] = VK_NULL_HANDLE;
-                mSunShadowAllocations[i] = VK_NULL_HANDLE;
-            }
-
-            if (mSpotShadowMatrixBuffers[i] != VK_NULL_HANDLE)
-            {
-                vmaDestroyBuffer(mDevice->Allocator(), mSpotShadowMatrixBuffers[i], mSpotShadowMatrixAllocations[i]);
-                mSpotShadowMatrixBuffers[i] = VK_NULL_HANDLE;
-                mSpotShadowMatrixAllocations[i] = VK_NULL_HANDLE;
-                mSpotShadowMatrixMapped[i] = nullptr;
+                vmaDestroyImage(mDevice->Allocator(), mSunImages[i], mSunAllocations[i]);
+                mSunImages[i] = VK_NULL_HANDLE;
+                mSunAllocations[i] = VK_NULL_HANDLE;
             }
 
-            if (mSpotShadowArrayViews[i] != VK_NULL_HANDLE)
+            if (mSpotMatrixBuffers[i] != VK_NULL_HANDLE)
             {
-                vkDestroyImageView(mDevice->Handle(), mSpotShadowArrayViews[i], nullptr);
-                mSpotShadowArrayViews[i] = VK_NULL_HANDLE;
+                vmaDestroyBuffer(mDevice->Allocator(), mSpotMatrixBuffers[i], mSpotMatrixAllocations[i]);
+                mSpotMatrixBuffers[i] = VK_NULL_HANDLE;
+                mSpotMatrixAllocations[i] = VK_NULL_HANDLE;
+                mSpotMatrixMapped[i] = nullptr;
+            }
+
+            if (mSpotArrayViews[i] != VK_NULL_HANDLE)
+            {
+                vkDestroyImageView(mDevice->Handle(), mSpotArrayViews[i], nullptr);
+                mSpotArrayViews[i] = VK_NULL_HANDLE;
             }
             for (uint32_t slot = 0; slot < kMaxSpotShadows; ++slot)
             {
-                if (mSpotShadowLayerViews[i][slot] != VK_NULL_HANDLE)
+                if (mSpotLayerViews[i][slot] != VK_NULL_HANDLE)
                 {
-                    vkDestroyImageView(mDevice->Handle(), mSpotShadowLayerViews[i][slot], nullptr);
-                    mSpotShadowLayerViews[i][slot] = VK_NULL_HANDLE;
+                    vkDestroyImageView(mDevice->Handle(), mSpotLayerViews[i][slot], nullptr);
+                    mSpotLayerViews[i][slot] = VK_NULL_HANDLE;
                 }
             }
-            if (mSpotShadowImages[i] != VK_NULL_HANDLE)
+            if (mSpotImages[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyImage(mDevice->Allocator(), mSpotShadowImages[i], mSpotShadowAllocations[i]);
-                mSpotShadowImages[i] = VK_NULL_HANDLE;
-                mSpotShadowAllocations[i] = VK_NULL_HANDLE;
+                vmaDestroyImage(mDevice->Allocator(), mSpotImages[i], mSpotAllocations[i]);
+                mSpotImages[i] = VK_NULL_HANDLE;
+                mSpotAllocations[i] = VK_NULL_HANDLE;
             }
 
-            if (mPointShadowCubeArrayViews[i] != VK_NULL_HANDLE)
+            if (mPointCubeArrayViews[i] != VK_NULL_HANDLE)
             {
-                vkDestroyImageView(mDevice->Handle(), mPointShadowCubeArrayViews[i], nullptr);
-                mPointShadowCubeArrayViews[i] = VK_NULL_HANDLE;
+                vkDestroyImageView(mDevice->Handle(), mPointCubeArrayViews[i], nullptr);
+                mPointCubeArrayViews[i] = VK_NULL_HANDLE;
             }
             for (uint32_t layer = 0; layer < kMaxPointShadows * 6; ++layer)
             {
-                if (mPointShadowDepthLayerViews[i][layer] != VK_NULL_HANDLE)
+                if (mPointDepthLayerViews[i][layer] != VK_NULL_HANDLE)
                 {
-                    vkDestroyImageView(mDevice->Handle(), mPointShadowDepthLayerViews[i][layer], nullptr);
-                    mPointShadowDepthLayerViews[i][layer] = VK_NULL_HANDLE;
+                    vkDestroyImageView(mDevice->Handle(), mPointDepthLayerViews[i][layer], nullptr);
+                    mPointDepthLayerViews[i][layer] = VK_NULL_HANDLE;
                 }
-                if (mPointShadowColorLayerViews[i][layer] != VK_NULL_HANDLE)
+                if (mPointColorLayerViews[i][layer] != VK_NULL_HANDLE)
                 {
-                    vkDestroyImageView(mDevice->Handle(), mPointShadowColorLayerViews[i][layer], nullptr);
-                    mPointShadowColorLayerViews[i][layer] = VK_NULL_HANDLE;
+                    vkDestroyImageView(mDevice->Handle(), mPointColorLayerViews[i][layer], nullptr);
+                    mPointColorLayerViews[i][layer] = VK_NULL_HANDLE;
                 }
             }
-            if (mPointShadowDepthImages[i] != VK_NULL_HANDLE)
+            if (mPointDepthImages[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyImage(mDevice->Allocator(), mPointShadowDepthImages[i], mPointShadowDepthAllocations[i]);
-                mPointShadowDepthImages[i] = VK_NULL_HANDLE;
-                mPointShadowDepthAllocations[i] = VK_NULL_HANDLE;
+                vmaDestroyImage(mDevice->Allocator(), mPointDepthImages[i], mPointDepthAllocations[i]);
+                mPointDepthImages[i] = VK_NULL_HANDLE;
+                mPointDepthAllocations[i] = VK_NULL_HANDLE;
             }
-            if (mPointShadowColorImages[i] != VK_NULL_HANDLE)
+            if (mPointColorImages[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyImage(mDevice->Allocator(), mPointShadowColorImages[i], mPointShadowColorAllocations[i]);
-                mPointShadowColorImages[i] = VK_NULL_HANDLE;
-                mPointShadowColorAllocations[i] = VK_NULL_HANDLE;
+                vmaDestroyImage(mDevice->Allocator(), mPointColorImages[i], mPointColorAllocations[i]);
+                mPointColorImages[i] = VK_NULL_HANDLE;
+                mPointColorAllocations[i] = VK_NULL_HANDLE;
             }
         }
     }
 
-    void VulkanRenderer::SetSunShadowCaster(bool active, const glm::mat4 &viewProj, WorldPosition anchor,
+    void ShadowMaps::SetSunCaster(bool active, const glm::mat4 &viewProj, WorldPosition anchor,
         std::span<const DrawItem> items)
     {
-        mHasSunShadow = active;
-        mSunShadowViewProj = viewProj;
-        mSunShadowAnchor = anchor;
-        mSunShadowItems = items;
+        mHasSun = active;
+        mSunViewProj = viewProj;
+        mSunAnchor = anchor;
+        mSunItems = items;
     }
 
-    void VulkanRenderer::SetSpotShadowCaster(uint32_t slot, bool active, const glm::mat4 &viewProj,
+    void ShadowMaps::SetSpotCaster(uint32_t slot, bool active, const glm::mat4 &viewProj,
         WorldPosition anchor, std::span<const DrawItem> items)
     {
         if (slot >= kMaxSpotShadows)
             return;
-        mSpotShadowCasters[slot] = SpotShadowCaster{ active, viewProj, anchor, items };
+        mSpotCasters[slot] = SpotCaster{ active, viewProj, anchor, items };
     }
 
-    void VulkanRenderer::SetPointShadowCaster(uint32_t slot, bool active, WorldPosition position, float range,
+    void ShadowMaps::SetPointCaster(uint32_t slot, bool active, WorldPosition position, float range,
         const std::array<PointShadowFace, 6> &faces)
     {
         if (slot >= kMaxPointShadows)
             return;
-        mPointShadowCasters[slot] = PointShadowCaster{ active, position, range, faces };
+        mPointCasters[slot] = PointCaster{ active, position, range, faces };
     }
 
-    void VulkanRenderer::RecordShadowPasses(VkCommandBuffer cmd)
+    void ShadowMaps::RecordPasses(VkCommandBuffer cmd, uint32_t frame, const ResourceStore &resources)
     {
         const auto drawItems = [&](const glm::mat4 &viewProj, std::span<const DrawItem> items)
             {
                 for (const DrawItem &item : items)
                 {
-                    const vk::GpuMesh *const mesh = mResources->FindMesh(item.mesh);
+                    const GpuMesh *const mesh = resources.FindMesh(item.mesh);
                     if (mesh == nullptr)
                         continue;
 
@@ -695,17 +699,17 @@ namespace mir
                     vkCmdBindVertexBuffers(cmd, 0, 1, &mesh->mVertexBuffer, &vertexOffset);
                     vkCmdBindIndexBuffer(cmd, mesh->mIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-                    const vk::ShadowPushConstants pushData{ .viewProj = viewProj, .model = item.model };
-                    vkCmdPushConstants(cmd, mShadowDepthPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
-                        0, sizeof(vk::ShadowPushConstants), &pushData);
+                    const ShadowPushConstants pushData{ .viewProj = viewProj, .model = item.model };
+                    vkCmdPushConstants(cmd, mDepthPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+                        0, sizeof(ShadowPushConstants), &pushData);
 
                     vkCmdDrawIndexed(cmd, mesh->mIndexCount, 1, 0, 0, 0);
                 }
             };
 
-        if (mHasSunShadow)
+        if (mHasSun)
         {
-            vk::ImageBarrier(cmd, mSunShadowImages[mFrameSync->Index()], VK_IMAGE_ASPECT_DEPTH_BIT,
+            ImageBarrier(cmd, mSunImages[frame], VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
@@ -713,7 +717,7 @@ namespace mir
 
             const VkRenderingAttachmentInfo depthAttachment{
                 .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = mSunShadowViews[mFrameSync->Index()],
+                .imageView = mSunViews[frame],
                 .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                 .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                 .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -734,29 +738,29 @@ namespace mir
             vkCmdSetViewport(cmd, 0, 1, &viewport);
             vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mShadowDepthPipeline);
-            drawItems(mSunShadowViewProj, mSunShadowItems);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mDepthPipeline);
+            drawItems(mSunViewProj, mSunItems);
 
             vkCmdEndRendering(cmd);
 
-            vk::ImageBarrier(cmd, mSunShadowImages[mFrameSync->Index()], VK_IMAGE_ASPECT_DEPTH_BIT,
+            ImageBarrier(cmd, mSunImages[frame], VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
         }
 
-        const bool anySpotActive = std::any_of(mSpotShadowCasters.begin(), mSpotShadowCasters.end(),
-            [](const SpotShadowCaster &c) { return c.active; });
+        const bool anySpotActive = std::any_of(mSpotCasters.begin(), mSpotCasters.end(),
+            [](const SpotCaster &c) { return c.active; });
         if (anySpotActive)
         {
-            vk::ImageBarrier(cmd, mSpotShadowImages[mFrameSync->Index()], VK_IMAGE_ASPECT_DEPTH_BIT,
+            ImageBarrier(cmd, mSpotImages[frame], VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                 1, kMaxSpotShadows);
 
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mShadowDepthPipeline);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mDepthPipeline);
 
             const VkViewport viewport{ .x = 0.0f, .y = 0.0f,
                 .width = static_cast<float>(kSpotShadowResolution), .height = static_cast<float>(kSpotShadowResolution),
@@ -765,12 +769,12 @@ namespace mir
 
             for (uint32_t slot = 0; slot < kMaxSpotShadows; ++slot)
             {
-                if (!mSpotShadowCasters[slot].active)
+                if (!mSpotCasters[slot].active)
                     continue;
 
                 const VkRenderingAttachmentInfo depthAttachment{
                     .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                    .imageView = mSpotShadowLayerViews[mFrameSync->Index()][slot],
+                    .imageView = mSpotLayerViews[frame][slot],
                     .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                     .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                     .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -785,37 +789,37 @@ namespace mir
                 vkCmdBeginRendering(cmd, &renderingInfo);
                 vkCmdSetViewport(cmd, 0, 1, &viewport);
                 vkCmdSetScissor(cmd, 0, 1, &scissor);
-                drawItems(mSpotShadowCasters[slot].viewProj, mSpotShadowCasters[slot].items);
+                drawItems(mSpotCasters[slot].viewProj, mSpotCasters[slot].items);
                 vkCmdEndRendering(cmd);
             }
 
-            vk::ImageBarrier(cmd, mSpotShadowImages[mFrameSync->Index()], VK_IMAGE_ASPECT_DEPTH_BIT,
+            ImageBarrier(cmd, mSpotImages[frame], VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
                 1, kMaxSpotShadows);
         }
 
-        const bool anyPointActive = std::any_of(mPointShadowCasters.begin(), mPointShadowCasters.end(),
-            [](const PointShadowCaster &c) { return c.active; });
+        const bool anyPointActive = std::any_of(mPointCasters.begin(), mPointCasters.end(),
+            [](const PointCaster &c) { return c.active; });
         if (anyPointActive)
         {
             constexpr uint32_t kPointLayers = kMaxPointShadows * 6;
 
-            vk::ImageBarrier(cmd, mPointShadowDepthImages[mFrameSync->Index()], VK_IMAGE_ASPECT_DEPTH_BIT,
+            ImageBarrier(cmd, mPointDepthImages[frame], VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                 1, kPointLayers);
 
-            vk::ImageBarrier(cmd, mPointShadowColorImages[mFrameSync->Index()], VK_IMAGE_ASPECT_COLOR_BIT,
+            ImageBarrier(cmd, mPointColorImages[frame], VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                 1, kPointLayers);
 
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPointShadowPipeline);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPointPipeline);
 
             const VkViewport viewport{ .x = 0.0f, .y = 0.0f,
                 .width = static_cast<float>(kPointShadowResolution), .height = static_cast<float>(kPointShadowResolution),
@@ -824,7 +828,7 @@ namespace mir
 
             for (uint32_t slot = 0; slot < kMaxPointShadows; ++slot)
             {
-                if (!mPointShadowCasters[slot].active)
+                if (!mPointCasters[slot].active)
                     continue;
 
                 for (uint32_t face = 0; face < 6; ++face)
@@ -833,7 +837,7 @@ namespace mir
 
                     const VkRenderingAttachmentInfo colorAttachment{
                         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                        .imageView = mPointShadowColorLayerViews[mFrameSync->Index()][layer],
+                        .imageView = mPointColorLayerViews[frame][layer],
                         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -841,7 +845,7 @@ namespace mir
 
                     const VkRenderingAttachmentInfo depthAttachment{
                         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                        .imageView = mPointShadowDepthLayerViews[mFrameSync->Index()][layer],
+                        .imageView = mPointDepthLayerViews[frame][layer],
                         .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                         .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE, // never sampled afterward
@@ -858,16 +862,43 @@ namespace mir
                     vkCmdBeginRendering(cmd, &renderingInfo);
                     vkCmdSetViewport(cmd, 0, 1, &viewport);
                     vkCmdSetScissor(cmd, 0, 1, &scissor);
-                    drawItems(mPointShadowCasters[slot].faces[face].viewProj, mPointShadowCasters[slot].faces[face].items);
+                    drawItems(mPointCasters[slot].faces[face].viewProj, mPointCasters[slot].faces[face].items);
                     vkCmdEndRendering(cmd);
                 }
             }
 
-            vk::ImageBarrier(cmd, mPointShadowColorImages[mFrameSync->Index()], VK_IMAGE_ASPECT_COLOR_BIT,
+            ImageBarrier(cmd, mPointColorImages[frame], VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
                 1, kPointLayers);
         }
+    }
+
+    ViewShadowInfo ShadowMaps::WriteView(uint32_t frame, const RenderView &view, uint32_t viewIndex)
+    {
+        ViewShadowInfo info{ .hasSunShadow = mHasSun, .spotShadowBase = viewIndex * kMaxSpotShadows };
+
+        if (mHasSun)
+        {
+            const glm::vec3 anchorFromView =
+                TryCameraRelativeFloat(mSunAnchor, view.cameraPosition).value_or(glm::vec3(0.0f));
+            info.sunShadowViewProj = mSunViewProj * glm::translate(glm::mat4(1.0f), -anchorFromView);
+        }
+
+        glm::mat4 *const spotMatrixDst = reinterpret_cast<glm::mat4 *>(mSpotMatrixMapped[frame]) + info.spotShadowBase;
+        for (uint32_t slot = 0; slot < kMaxSpotShadows; ++slot)
+        {
+            const SpotCaster &caster = mSpotCasters[slot];
+            if (!caster.active)
+                continue;
+            const glm::vec3 anchorFromView =
+                TryCameraRelativeFloat(caster.anchor, view.cameraPosition).value_or(glm::vec3(0.0f));
+            spotMatrixDst[slot] = caster.viewProj * glm::translate(glm::mat4(1.0f), -anchorFromView);
+        }
+        vmaFlushAllocation(mDevice->Allocator(), mSpotMatrixAllocations[frame],
+            sizeof(glm::mat4) * info.spotShadowBase, sizeof(glm::mat4) * kMaxSpotShadows);
+
+        return info;
     }
 }

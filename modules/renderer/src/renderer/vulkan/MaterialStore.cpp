@@ -362,7 +362,7 @@ namespace mir::vk
         vkUpdateDescriptorSets(mDevice->Handle(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
         const bool unlit = desc.shaderName == "unlit";
-        // The model shader reads these out of set 2; see BindModelDescriptors.
+        // The model shader reads these out of set 2; see ModelDescriptors::Bind.
         const glm::vec4 parameters{ static_cast<float>(desc.alphaMode), desc.alphaCutoff,
             desc.cullMode == VK_CULL_MODE_NONE ? 1.0f : 0.0f, 0.0f };
         const bool modelShader = desc.shaderName == kModelShaderName;

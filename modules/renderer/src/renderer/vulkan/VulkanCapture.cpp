@@ -106,9 +106,16 @@ namespace mir
             else
                 MIR_LOG_INFO("Captured frame: {}", mCapturePath.string());
         }
+        DestroyCaptureBuffer();
+        mCapturePath.clear();
+    }
+
+    void VulkanRenderer::DestroyCaptureBuffer()
+    {
+        if (mCaptureBuffer == VK_NULL_HANDLE)
+            return;
         vmaDestroyBuffer(mDevice->Allocator(), mCaptureBuffer, mCaptureAllocation);
         mCaptureBuffer = VK_NULL_HANDLE;
         mCaptureAllocation = VK_NULL_HANDLE;
-        mCapturePath.clear();
     }
 }

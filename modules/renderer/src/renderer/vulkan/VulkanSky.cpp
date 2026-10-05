@@ -7,6 +7,7 @@
  *
  */
 #include <renderer/VulkanRenderer.h>
+#include "CameraBuffer.h"
 #include "VulkanDevice.h"
 #include "VulkanSwapchain.h"
 #include "VulkanUtil.h"
@@ -30,10 +31,11 @@ namespace mir
             return false;
         }
 
+        const VkDescriptorSetLayout cameraSetLayout = mCameraBuffer->SetLayout();
         const VkPipelineLayoutCreateInfo layoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .setLayoutCount = 1,
-            .pSetLayouts = &mCameraSetLayout };
+            .pSetLayouts = &cameraSetLayout };
 
         if (vkCreatePipelineLayout(mDevice->Handle(), &layoutInfo, nullptr, &mSkyPipelineLayout) != VK_SUCCESS)
         {

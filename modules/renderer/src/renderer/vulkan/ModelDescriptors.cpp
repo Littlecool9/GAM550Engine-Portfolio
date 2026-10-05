@@ -1,5 +1,5 @@
 /**
- * @file VulkanModel.cpp
+ * @file ModelDescriptors.cpp
  * @author Jackey Cen
  * @brief Per-draw model data (descriptor set 2): deformation buffers and their pools.
  *
@@ -12,14 +12,12 @@
 #include <core/log/Log.h>
 #include <utility>
 #include <vector>
-#include <renderer/VulkanRenderer.h>
-#include "vulkan/FrameSync.h"
-#include "vulkan/MaterialStore.h"
-#include "vulkan/VulkanDevice.h"
-#include "vulkan/VulkanUtil.h"
+#include "ModelDescriptors.h"
+#include "VulkanDevice.h"
+#include "VulkanUtil.h"
 #include <vk_mem_alloc.h>
 
-namespace mir
+namespace mir::vk
 {
     namespace
     {
@@ -27,8 +25,10 @@ namespace mir
         // this is a ceiling on model draws in one frame, not a total.
         constexpr uint32_t kMaxModelDrawsPerFrame = 4096;
     } // namespace
-    bool VulkanRenderer::CreateModelDescriptors()
+    bool ModelDescriptors::Initialize(VulkanDevice &device)
     {
+        mDevice = &device;
+
         // set 2, binding 0: one model draw's deformation data, with the
         // material parameters in slot 2. The textures live in set 0 with every
         // other material's, so this set holds nothing but the buffer.
@@ -40,7 +40,7 @@ namespace mir
         VkDescriptorSetLayoutCreateInfo info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
         info.bindingCount = 1;
         info.pBindings = &binding;
-        if (vkCreateDescriptorSetLayout(mDevice->Handle(), &info, nullptr, &mModelSetLayout) != VK_SUCCESS)
+        if (vkCreateDescriptorSetLayout(mDevice->Handle(), &info, nullptr, &mSetLayout) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("vkCreateDescriptorSetLayout failed for the model set");
             return false;
@@ -51,7 +51,7 @@ namespace mir
         pool.maxSets = kMaxModelDrawsPerFrame;
         pool.poolSizeCount = 1;
         pool.pPoolSizes = &size;
-        for (auto &p : mModelPools)
+        for (auto &p : mPools)
             if (vkCreateDescriptorPool(mDevice->Handle(), &pool, nullptr, &p) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("vkCreateDescriptorPool failed for the model set");
@@ -59,13 +59,14 @@ namespace mir
             }
         return true;
     }
-    bool VulkanRenderer::BindModelDescriptors(VkCommandBuffer cmd, const vk::GpuMaterial &material, const DrawItem &item)
+    bool ModelDescriptors::Bind(VkCommandBuffer cmd, VkPipelineLayout layout, uint32_t frame,
+        std::span<const glm::vec4> deformation, const glm::vec4 &materialParameters)
     {
-        std::vector<glm::vec4> data(item.deformation.begin(), item.deformation.end());
+        std::vector<glm::vec4> data(deformation.begin(), deformation.end());
         if (data.size() < 3)
             data.resize(3, glm::vec4(0));
         // Slot 2 is the material channel; BuildDeformationData leaves it free.
-        data[2] = material.mParameters;
+        data[2] = materialParameters;
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(mDevice->Physical(), &props);
         if (data.size() * sizeof(glm::vec4) > props.limits.maxStorageBufferRange)
@@ -73,18 +74,18 @@ namespace mir
             MIR_LOG_ERROR("model exceeds maxStorageBufferRange");
             return false;
         }
-        ModelFrameBuffer buffer{};
-        if (!vk::CreateUploadBuffer(mDevice->Allocator(), std::as_bytes(std::span(data)),
+        FrameBuffer buffer{};
+        if (!CreateUploadBuffer(mDevice->Allocator(), std::as_bytes(std::span(data)),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.buffer, buffer.allocation))
         {
             MIR_LOG_ERROR("model frame buffer allocation failed");
             return false;
         }
-        mModelBuffers[mFrameSync->Index()].push_back(buffer);
+        mBuffers[frame].push_back(buffer);
         VkDescriptorSetAllocateInfo alloc{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
-        alloc.descriptorPool = mModelPools[mFrameSync->Index()];
+        alloc.descriptorPool = mPools[frame];
         alloc.descriptorSetCount = 1;
-        alloc.pSetLayouts = &mModelSetLayout;
+        alloc.pSetLayouts = &mSetLayout;
         VkDescriptorSet set;
         if (vkAllocateDescriptorSets(mDevice->Handle(), &alloc, &set) != VK_SUCCESS)
         {
@@ -99,38 +100,41 @@ namespace mir
         write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         write.pBufferInfo = &bufferInfo;
         vkUpdateDescriptorSets(mDevice->Handle(), 1, &write, 0, nullptr);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mMaterialStore->PipelineLayout(), 2, 1, &set, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 2, 1, &set, 0, nullptr);
         return true;
     }
-    void VulkanRenderer::ResetModelFrame(uint32_t frame)
+    void ModelDescriptors::ResetFrame(uint32_t frame)
     {
-        for (auto b : mModelBuffers[frame])
+        for (auto b : mBuffers[frame])
             vmaDestroyBuffer(mDevice->Allocator(), b.buffer, b.allocation);
-        mModelBuffers[frame].clear();
-        if (mModelPools[frame])
-            vkResetDescriptorPool(mDevice->Handle(), mModelPools[frame], 0);
+        mBuffers[frame].clear();
+        if (mPools[frame])
+            vkResetDescriptorPool(mDevice->Handle(), mPools[frame], 0);
     }
-    void VulkanRenderer::DestroyModelResources(bool shutdown)
+
+    void ModelDescriptors::ResetFrames()
     {
-        if (mCaptureBuffer)
-        {
-            vmaDestroyBuffer(mDevice->Allocator(), mCaptureBuffer, mCaptureAllocation);
-            mCaptureBuffer = VK_NULL_HANDLE;
-            mCaptureAllocation = VK_NULL_HANDLE;
-        }
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
+            ResetFrame(i);
+    }
+    void ModelDescriptors::Shutdown()
+    {
+        if (mDevice == nullptr)
+            return;
+
+        ResetFrames();
+        for (VkDescriptorPool &pool : mPools)
         {
-            ResetModelFrame(i);
-            if (shutdown && mModelPools[i])
+            if (pool)
             {
-                vkDestroyDescriptorPool(mDevice->Handle(), mModelPools[i], nullptr);
-                mModelPools[i] = VK_NULL_HANDLE;
+                vkDestroyDescriptorPool(mDevice->Handle(), pool, nullptr);
+                pool = VK_NULL_HANDLE;
             }
         }
-        if (shutdown && mModelSetLayout)
+        if (mSetLayout)
         {
-            vkDestroyDescriptorSetLayout(mDevice->Handle(), mModelSetLayout, nullptr);
-            mModelSetLayout = VK_NULL_HANDLE;
+            vkDestroyDescriptorSetLayout(mDevice->Handle(), mSetLayout, nullptr);
+            mSetLayout = VK_NULL_HANDLE;
         }
     }
-} // namespace mir
+} // namespace mir::vk

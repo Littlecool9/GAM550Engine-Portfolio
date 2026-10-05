@@ -7,6 +7,7 @@
  *
  */
 #include <renderer/VulkanRenderer.h>
+#include "CameraBuffer.h"
 #include "FrameSync.h"
 #include "MaterialStore.h"
 #include "ResourceStore.h"
@@ -241,7 +242,7 @@ namespace mir
             }
         }
 
-        const std::array<VkDescriptorSetLayout, 2> setLayouts{ mRtSetLayout, mCameraSetLayout };
+        const std::array<VkDescriptorSetLayout, 2> setLayouts{ mRtSetLayout, mCameraBuffer->SetLayout() };
 
         const VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR,
@@ -746,8 +747,7 @@ namespace mir
 
         const VkRect2D rect = vk::ResolveViewRect(view.rect, mSwapchain->Extent());
 
-        WriteCameraData(view, 0);
-        const uint32_t cameraOffset = 0;
+        const uint32_t cameraOffset = WriteCameraData(view, 0);
 
         if (mDevice->ValidationEnabled())
         {
@@ -781,7 +781,7 @@ namespace mir
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, mRtPipeline);
 
-            const std::array<VkDescriptorSet, 2> sets{ mRtDescriptorSets[mFrameSync->Index()], mCameraDescriptorSets[mFrameSync->Index()] };
+            const std::array<VkDescriptorSet, 2> sets{ mRtDescriptorSets[mFrameSync->Index()], mCameraBuffer->Set(mFrameSync->Index()) };
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, mRtPipelineLayout,
                 0, static_cast<uint32_t>(sets.size()), sets.data(), 1, &cameraOffset);
 

@@ -10,9 +10,12 @@
 #define NOMINMAX
 #endif
 #include <renderer/VulkanRenderer.h>
+#include "CameraBuffer.h"
 #include "FrameSync.h"
 #include "MaterialStore.h"
+#include "ModelDescriptors.h"
 #include "ResourceStore.h"
+#include "ShadowMaps.h"
 #include "VulkanDevice.h"
 #include "VulkanSwapchain.h"
 #include "VulkanUtil.h"
@@ -42,12 +45,13 @@ namespace mir
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &rect);
 
-        WriteCameraData(view, viewIndex);
-        const uint32_t cameraOffset = static_cast<uint32_t>(viewIndex * mCameraAlignedSize);
+        const uint32_t cameraOffset = WriteCameraData(view, viewIndex);
+        const VkDescriptorSet cameraSet = mCameraBuffer->Set(mFrameSync->Index());
+        const VkDescriptorSet shadowSet = mShadowMaps->Set(mFrameSync->Index());
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mMaterialStore->PipelineLayout(),
-            1, 1, &mCameraDescriptorSets[mFrameSync->Index()], 1, &cameraOffset);
+            1, 1, &cameraSet, 1, &cameraOffset);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mMaterialStore->PipelineLayout(),
-            3, 1, &mShadowDescriptorSets[mFrameSync->Index()], 0, nullptr);
+            3, 1, &shadowSet, 0, nullptr);
 
         VkPipeline boundPipeline = VK_NULL_HANDLE;
         VkDescriptorSet boundDescriptorSet = VK_NULL_HANDLE;
@@ -63,7 +67,9 @@ namespace mir
             if (material == nullptr)
                 continue;
 
-            if (material->mModelShader && !BindModelDescriptors(cmd, *material, item))
+            if (material->mModelShader &&
+                !mModelDescriptors->Bind(cmd, mMaterialStore->PipelineLayout(), mFrameSync->Index(),
+                    item.deformation, material->mParameters))
                 continue;
 
             if (material->mPipeline != boundPipeline)
@@ -105,7 +111,7 @@ namespace mir
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipelineLayout,
-                0, 1, &mCameraDescriptorSets[mFrameSync->Index()], 1, &cameraOffset);
+                0, 1, &cameraSet, 1, &cameraOffset);
             vkCmdDraw(cmd, 3, 1, 0, 0);
         }
     }
@@ -163,13 +169,13 @@ namespace mir
             vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
         }
 
-        if (views.size() > kMaxViewsPerFrame)
+        if (views.size() > vk::kMaxViewsPerFrame)
         {
             MIR_LOG_ERROR("RecordCommands: {} views this frame, only the first {} (kMaxViewsPerFrame) are drawn",
-                views.size(), kMaxViewsPerFrame);
+                views.size(), vk::kMaxViewsPerFrame);
         }
 
-        const size_t viewCount = std::min<size_t>(views.size(), kMaxViewsPerFrame);
+        const size_t viewCount = std::min<size_t>(views.size(), vk::kMaxViewsPerFrame);
         for (size_t i = 0; i < viewCount; ++i)
             RecordView(cmd, views[i], static_cast<uint32_t>(i));
 
@@ -203,7 +209,7 @@ namespace mir
         const std::optional<vk::FrameContext> frame = mFrameSync->Begin(*mSwapchain);
         // After Begin's wait: this slot's last frame is done with its set 2 buffers.
         if (frame)
-            ResetModelFrame(mFrameSync->Index());
+            mModelDescriptors->ResetFrame(mFrameSync->Index());
         return frame;
     }
 
@@ -213,11 +219,29 @@ namespace mir
         if (!frame)
             return;
 
-        RecordShadowPasses(frame->cmd);
+        mShadowMaps->RecordPasses(frame->cmd, mFrameSync->Index(), *mResources);
         RecordCommands(frame->cmd, frame->imageIndex, views);
         const bool submitted = mFrameSync->End(*mSwapchain, *frame);
 
         if (mCaptureBuffer != VK_NULL_HANDLE)
             FinishCapture(submitted);
+    }
+
+    uint32_t VulkanRenderer::WriteCameraData(const RenderView &view, uint32_t viewIndex)
+    {
+        const uint32_t frame = mFrameSync->Index();
+        const vk::ViewShadowInfo shadow = mShadowMaps->WriteView(frame, view, viewIndex);
+        return mCameraBuffer->WriteView(frame, view, viewIndex, Lighting(), shadow);
+    }
+
+    vk::SceneLighting VulkanRenderer::Lighting() const
+    {
+        return vk::SceneLighting{
+            .lightDirection = mLightDirection,
+            .lightColor = mLightColor,
+            .ambientColor = mAmbientColor,
+            .fogColor = mFogColor,
+            .fogDensity = mFogDensity,
+            .atmosphere = mAtmosphere };
     }
 }
