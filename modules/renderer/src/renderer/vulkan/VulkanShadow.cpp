@@ -25,7 +25,7 @@
 
 namespace mir
 {
- 
+
     bool VulkanRenderer::CreateShadowResources()
     {
         const VkSamplerCreateInfo samplerInfo{
@@ -273,6 +273,64 @@ namespace mir
 
             mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mPointShadowColorImages[i]),
                 std::format("Point shadow distance cube array {}", i).c_str());
+        }
+
+        {
+            VkCommandPool initPool = VK_NULL_HANDLE;
+            const VkCommandPoolCreateInfo initPoolInfo{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+                .queueFamilyIndex = mDevice->QueueFamily() };
+
+            if (vkCreateCommandPool(mDevice->Handle(), &initPoolInfo, nullptr, &initPool) != VK_SUCCESS)
+            {
+                MIR_LOG_CRITICAL("CreateShadowResources: init command pool creation failed");
+                return false;
+            }
+
+            VkCommandBuffer initCmd = VK_NULL_HANDLE;
+            const VkCommandBufferAllocateInfo initCmdAllocInfo{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+                .commandPool = initPool,
+                .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+                .commandBufferCount = 1 };
+            vkAllocateCommandBuffers(mDevice->Handle(), &initCmdAllocInfo, &initCmd);
+
+            const VkCommandBufferBeginInfo initBeginInfo{
+                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
+            vkBeginCommandBuffer(initCmd, &initBeginInfo);
+
+            for (uint32_t i = 0; i < kFramesInFlight; ++i)
+            {
+                vk::ImageBarrier(initCmd, mSunShadowImages[i], VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+
+                vk::ImageBarrier(initCmd, mSpotShadowImages[i], VK_IMAGE_ASPECT_DEPTH_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                    1, kMaxSpotShadows);
+
+                vk::ImageBarrier(initCmd, mPointShadowColorImages[i], VK_IMAGE_ASPECT_COLOR_BIT,
+                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                    VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                    VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                    1, kMaxPointShadows * 6);
+            }
+
+            vkEndCommandBuffer(initCmd);
+
+            const VkSubmitInfo initSubmitInfo{
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .commandBufferCount = 1,
+                .pCommandBuffers = &initCmd };
+
+            vkQueueSubmit(mDevice->Queue(), 1, &initSubmitInfo, VK_NULL_HANDLE);
+            vkQueueWaitIdle(mDevice->Queue());
+
+            vkDestroyCommandPool(mDevice->Handle(), initPool, nullptr);
         }
 
         const std::array<VkDescriptorSetLayoutBinding, 4> bindings{ {
