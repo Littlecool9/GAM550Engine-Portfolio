@@ -156,7 +156,7 @@ namespace mir
             const TerrainReleaseInfo &info = instance.release->Info();
             const TileRange tiles = instance.release->Layout().Tiles();
             const glm::dvec3 at(instance.placement.translation.Meters());
-            MIR_LOG_INFO("Terrain '{}' (asset {:016x}): release {:016x}, {}x{} tiles as {} raster meshes and one "
+            MIR_LOG_INFO("Terrain '{}' (asset {:016x}): release {:016x}, {}x{} tiles as {} meshes and one "
                          "height field, placed at ({}, {}, {})",
                          instance.recipePath, info.asset.value, info.release.value, tiles.max.x - tiles.min.x + 1,
                          tiles.max.z - tiles.min.z + 1, mResources[i].tiles.DrawItems().size(), at.x, at.y, at.z);

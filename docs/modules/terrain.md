@@ -619,7 +619,7 @@ surface, the tile mesh builder, the collider block, the release format, its
 in-memory encoder, the synchronous range reader and the resident height query
 with a synchronous preload work; nothing takes the query's payload requests yet
 (P3). Scenes load terrain (#118): app's private `TerrainRuntime` resolves every
-`TerrainInstance` into the `TerrainWorld` resource and builds raster meshes and
+`TerrainInstance` into the `TerrainWorld` resource and builds tile meshes and
 one height field per instance from the pinned release, and
 `games/TerrainCheck/` (a 2x2 relief at (150000.5, -20, -75000.25), ray tracing
 requested) runs as `smoke.TerrainCheck`. Offline callers: the `terrain_bake`

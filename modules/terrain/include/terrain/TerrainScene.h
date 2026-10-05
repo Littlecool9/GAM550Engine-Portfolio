@@ -69,7 +69,7 @@ namespace mir
         std::vector<TerrainInstanceSpec> instances;
         std::vector<TerrainIssue> issues;
 
-        // Loadable or not: any terrain forces raster.
+        // Loadable or not.
         bool HasTerrain() const { return !instances.empty() || !issues.empty(); }
         bool operator==(const TerrainSceneSpec &) const = default;
     };
