@@ -8,6 +8,7 @@
  */
 #include <renderer/VulkanRenderer.h>
 #include "VulkanDevice.h"
+#include "VulkanSwapchain.h"
 
 #include <core/log/Log.h>
 
@@ -27,11 +28,12 @@ namespace mir
 
     bool VulkanRenderer::InitImGuiVulkanBackend()
     {
+        const VkFormat colorFormat = mSwapchain->Format();
         VkPipelineRenderingCreateInfo renderingInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
             .colorAttachmentCount = 1,
-            .pColorAttachmentFormats = &mSwapchainFormat,
-            .depthAttachmentFormat = kDepthFormat };
+            .pColorAttachmentFormats = &colorFormat,
+            .depthAttachmentFormat = vk::kDepthFormat };
 
         ImGui_ImplVulkan_InitInfo initInfo{};
         initInfo.ApiVersion = vk::VulkanDevice::kApiVersion;
@@ -41,8 +43,8 @@ namespace mir
         initInfo.QueueFamily = mDevice->QueueFamily();
         initInfo.Queue = mDevice->Queue();
         initInfo.DescriptorPoolSize = 64;
-        initInfo.MinImageCount = static_cast<uint32_t>(mSwapchainImages.size());
-        initInfo.ImageCount = static_cast<uint32_t>(mSwapchainImages.size());
+        initInfo.MinImageCount = static_cast<uint32_t>(mSwapchain->ImageCount());
+        initInfo.ImageCount = static_cast<uint32_t>(mSwapchain->ImageCount());
         initInfo.UseDynamicRendering = true;
         initInfo.PipelineInfoMain.PipelineRenderingCreateInfo = renderingInfo;
         initInfo.CheckVkResultFn = &CheckImGuiVulkanResult;

@@ -7,22 +7,28 @@
  *
  */
 #include "renderer/VulkanRenderer.h"
+#include "vulkan/FrameSync.h"
 #include "vulkan/VulkanDevice.h"
+#include "vulkan/VulkanSwapchain.h"
 
 #include <core/log/Log.h>
 
 #include <vk_mem_alloc.h>
 
 #include <algorithm>
-#include <format>
 
 namespace mir
 {
-    // Out of line: unique_ptr<VulkanDevice> needs the complete type to build and destroy.
-    VulkanRenderer::VulkanRenderer() : mDevice(std::make_unique<vk::VulkanDevice>()) {}
+    VulkanRenderer::VulkanRenderer()
+        : mDevice(std::make_unique<vk::VulkanDevice>()),
+        mSwapchain(std::make_unique<vk::VulkanSwapchain>()),
+        mFrameSync(std::make_unique<vk::FrameSync>())
+    {}
     VulkanRenderer::~VulkanRenderer() = default;
 
     bool VulkanRenderer::RayTracingSupported() const { return mDevice->RayTracingSupported(); }
+
+    VkExtent2D VulkanRenderer::SwapchainExtent() const { return mSwapchain->Extent(); }
 
     bool VulkanRenderer::Initialize(const RendererDesc &desc)
     {
@@ -37,10 +43,13 @@ namespace mir
         if (!mDevice->Initialize(desc))
             return false;
 
-        if (!CreateSwapchain())
+        if (!mSwapchain->Initialize(*mDevice, *mWindow))
             return false;
 
-        if (!CreateFrameResources())
+        if (!CreateRtOutputImages())
+            return false;
+
+        if (!mFrameSync->Initialize(*mDevice))
             return false;
 
         if (!CreateDefaultTextures())
@@ -71,15 +80,25 @@ namespace mir
         if (mDefaultMaterial.IsNull())
             return false;
 
-        mDevice->NameObject(VK_OBJECT_TYPE_SWAPCHAIN_KHR, reinterpret_cast<uint64_t>(mSwapchain), "Swapchain");
         mDevice->NameObject(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(mMaterials[mDefaultMaterial.mIndex].mPipeline), "Default material pipeline");
         mDevice->NameObject(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(mSkyPipeline), "Sky pipeline");
 
-        for (size_t i = 0; i < mSwapchainImages.size(); ++i)
-        {
-            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mSwapchainImages[i]),
-                std::format("Swapchain image {}", i).c_str());
-        }
+        return true;
+    }
+
+    bool VulkanRenderer::RecreateSwapchain()
+    {
+        vkDeviceWaitIdle(mDevice->Handle());
+
+        // The swapchain cannot reach ray tracing, so the facade resizes its output images.
+        DestroyRtOutputImages();
+        if (!mSwapchain->Recreate(*mWindow))
+            return false;
+        if (!CreateRtOutputImages())
+            return false;
+
+        if (mDevice->RayTracingSupported())
+            WriteRtDescriptorSets();
 
         return true;
     }
@@ -90,20 +109,7 @@ namespace mir
         {
             vkDeviceWaitIdle(mDevice->Handle());
 
-            if (mTimeline != VK_NULL_HANDLE)
-            {
-                vkDestroySemaphore(mDevice->Handle(), mTimeline, nullptr);
-                mTimeline = VK_NULL_HANDLE;
-            }
-
-            for (uint32_t i = 0; i < kFramesInFlight; ++i)
-            {
-                if (mImageAcquired[i] != VK_NULL_HANDLE)
-                    vkDestroySemaphore(mDevice->Handle(), mImageAcquired[i], nullptr);
-                // Destroying the pool frees its command buffers too.
-                if (mCmdPools[i] != VK_NULL_HANDLE)
-                    vkDestroyCommandPool(mDevice->Handle(), mCmdPools[i], nullptr);
-            }
+            mFrameSync->Shutdown();
 
             // before the device allocator
             DestroyMeshes();
@@ -180,8 +186,8 @@ namespace mir
                 mRtSetLayout = VK_NULL_HANDLE;
             }
 
-            DestroyRenderCompleteSemaphores();
-            DestroySwapchain();
+            DestroyRtOutputImages();
+            mSwapchain->Shutdown();
         }
 
         // Last: everything above was created from the device.

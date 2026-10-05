@@ -7,7 +7,9 @@
  *
  */
 #include <renderer/VulkanRenderer.h>
+#include "FrameSync.h"
 #include "VulkanDevice.h"
+#include "VulkanSwapchain.h"
 #include "VulkanUtil.h"
 #include "VulkanPushConstants.h"
 
@@ -86,7 +88,7 @@ namespace mir
                 .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                 .imageType = VK_IMAGE_TYPE_2D,
                 .format = VK_FORMAT_R8G8B8A8_UNORM,
-                .extent{ mSwapchainExtent.width, mSwapchainExtent.height, 1 },
+                .extent{ mSwapchain->Extent().width, mSwapchain->Extent().height, 1 },
                 .mipLevels = 1,
                 .arrayLayers = 1,
                 .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -729,7 +731,7 @@ namespace mir
     {
         const RenderView &view = views[0];
 
-        const VkRect2D rect = vk::ResolveViewRect(view.rect, mSwapchainExtent);
+        const VkRect2D rect = vk::ResolveViewRect(view.rect, mSwapchain->Extent());
 
         WriteCameraData(view, 0);
         const uint32_t cameraOffset = 0;
@@ -743,12 +745,12 @@ namespace mir
             vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
         }
 
-        vk::ImageBarrier(cmd, mRtOutputImages[mFrameIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(cmd, mRtOutputImages[mFrameSync->Index()], VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
-        RecordTlasBuild(cmd, mFrameIndex, view.items);
+        RecordTlasBuild(cmd, mFrameSync->Index(), view.items);
 
         const VkMemoryBarrier2 tlasBarrier{
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
@@ -766,7 +768,7 @@ namespace mir
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, mRtPipeline);
 
-            const std::array<VkDescriptorSet, 2> sets{ mRtDescriptorSets[mFrameIndex], mCameraDescriptorSets[mFrameIndex] };
+            const std::array<VkDescriptorSet, 2> sets{ mRtDescriptorSets[mFrameSync->Index()], mCameraDescriptorSets[mFrameSync->Index()] };
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, mRtPipelineLayout,
                 0, static_cast<uint32_t>(sets.size()), sets.data(), 1, &cameraOffset);
 
@@ -779,12 +781,12 @@ namespace mir
                 rect.extent.width, rect.extent.height, 1);
         }
 
-        vk::ImageBarrier(cmd, mRtOutputImages[mFrameIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(cmd, mRtOutputImages[mFrameSync->Index()], VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
 
-        vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
@@ -792,10 +794,10 @@ namespace mir
         const VkClearColorValue clearColor{ .float32{ mClearColor.r, mClearColor.g, mClearColor.b, mClearColor.a } };
         const VkImageSubresourceRange wholeImage{
             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 1 };
-        vkCmdClearColorImage(cmd, mSwapchainImages[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        vkCmdClearColorImage(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             &clearColor, 1, &wholeImage);
 
-        vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
@@ -813,14 +815,14 @@ namespace mir
                 .dstOffsets{ { left, top, 0 },{ right, bottom, 1 } } };
 
             vkCmdBlitImage(cmd,
-                mRtOutputImages[mFrameIndex], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                mSwapchainImages[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                mRtOutputImages[mFrameSync->Index()], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                mSwapchain->Image(imageIndex), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 1, &blitRegion, VK_FILTER_NEAREST);
         }
 
         if (mImguiDrawData != nullptr)
         {
-            vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+            vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -828,14 +830,14 @@ namespace mir
 
             const VkRenderingAttachmentInfo colorAttachment{
                 .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = mSwapchainViews[imageIndex],
+                .imageView = mSwapchain->View(imageIndex),
                 .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
                 .storeOp = VK_ATTACHMENT_STORE_OP_STORE };
 
             const VkRenderingInfo renderingInfo{
                 .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                .renderArea{ .offset{ 0, 0 }, .extent = mSwapchainExtent },
+                .renderArea{ .offset{ 0, 0 }, .extent = mSwapchain->Extent() },
                 .layerCount = 1,
                 .colorAttachmentCount = 1,
                 .pColorAttachments = &colorAttachment };
@@ -844,14 +846,14 @@ namespace mir
             ImGui_ImplVulkan_RenderDrawData(mImguiDrawData, cmd);
             vkCmdEndRendering(cmd);
 
-            vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+            vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_NONE, 0);
         }
         else
         {
-            vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+            vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
                 VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_NONE, 0);
@@ -872,107 +874,11 @@ namespace mir
         if (views.empty())
             return;
 
-        if (mWindow->Width() == 0 || mWindow->Height() == 0)
+        const std::optional<vk::FrameContext> frame = BeginFrame();
+        if (!frame)
             return;
 
-        if (mNeedRecreate || mWindow->Height() != mSwapchainExtent.height || mWindow->Width() != mSwapchainExtent.width)
-        {
-            if (!RecreateSwapchain())
-                return;
-        }
-
-        const uint64_t signalValue = mNextSignalValue++;
-        const uint64_t waitValue = signalValue - kFramesInFlight;
-
-        const VkSemaphoreWaitInfo waitInfo{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-            .semaphoreCount = 1,
-            .pSemaphores = &mTimeline,
-            .pValues = &waitValue };
-
-        vkWaitSemaphores(mDevice->Handle(), &waitInfo, UINT64_MAX);
-
-        vkResetCommandPool(mDevice->Handle(), mCmdPools[mFrameIndex], 0);
-
-        uint32_t imageIndex = 0;
-        const VkResult acquireResult = vkAcquireNextImageKHR(
-            mDevice->Handle(), mSwapchain, UINT64_MAX,
-            mImageAcquired[mFrameIndex], VK_NULL_HANDLE, &imageIndex);
-
-        if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR)
-        {
-            mNeedRecreate = true;
-            --mNextSignalValue;
-            return;
-        }
-
-        if (acquireResult == VK_SUBOPTIMAL_KHR)
-        {
-            mNeedRecreate = true;
-        }
-        else if (acquireResult != VK_SUCCESS)
-        {
-            MIR_LOG_ERROR("vkAcquireNextImageKHR failed: {}", static_cast<int>(acquireResult));
-            --mNextSignalValue;
-            return;
-        }
-
-        VkCommandBuffer cmd = mCmdBuffers[mFrameIndex];
-
-        const VkCommandBufferBeginInfo beginInfo{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
-
-        vkBeginCommandBuffer(cmd, &beginInfo);
-        RecordRtFrame(cmd, imageIndex, views);
-        vkEndCommandBuffer(cmd);
-
-        const VkSemaphoreSubmitInfo waitSem{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-            .semaphore = mImageAcquired[mFrameIndex],
-            .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT };
-
-        const VkSemaphoreSubmitInfo signalSems[]{
-            { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-             .semaphore = mRenderComplete[imageIndex],
-             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT },
-            { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-             .semaphore = mTimeline,
-             .value = signalValue,
-             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT } };
-
-        const VkCommandBufferSubmitInfo cmdInfo{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-            .commandBuffer = cmd };
-
-        const VkSubmitInfo2 submit{
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-            .waitSemaphoreInfoCount = 1,
-            .pWaitSemaphoreInfos = &waitSem,
-            .commandBufferInfoCount = 1,
-            .pCommandBufferInfos = &cmdInfo,
-            .signalSemaphoreInfoCount = 2,
-            .pSignalSemaphoreInfos = signalSems };
-
-        if (vkQueueSubmit2(mDevice->Queue(), 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS)
-        {
-            MIR_LOG_ERROR("vkQueueSubmit2 failed");
-            return;
-        }
-        const VkPresentInfoKHR presentInfo{
-            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &mRenderComplete[imageIndex],
-            .swapchainCount = 1,
-            .pSwapchains = &mSwapchain,
-            .pImageIndices = &imageIndex };
-
-        const VkResult presentResult = vkQueuePresentKHR(mDevice->Queue(), &presentInfo);
-        if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR)
-            mNeedRecreate = true;
-        else if (presentResult != VK_SUCCESS)
-            MIR_LOG_ERROR("vkQueuePresentKHR failed: {}", static_cast<int>(presentResult));
-
-        mFrameIndex = (mFrameIndex + 1) % kFramesInFlight;
+        RecordRtFrame(frame->cmd, frame->imageIndex, views);
+        mFrameSync->End(*mSwapchain, *frame);
     }
 }

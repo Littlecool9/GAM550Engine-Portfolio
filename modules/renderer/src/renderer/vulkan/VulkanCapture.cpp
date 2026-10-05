@@ -11,6 +11,7 @@
 #endif
 #include <renderer/VulkanRenderer.h>
 #include "VulkanDevice.h"
+#include "VulkanSwapchain.h"
 
 #include <core/log/Log.h>
 
@@ -27,15 +28,15 @@ namespace mir
     {
         if (mCapturePath.empty())
             return false;
-        if (!mCanCapture ||
-            (mSwapchainFormat != VK_FORMAT_B8G8R8A8_SRGB && mSwapchainFormat != VK_FORMAT_R8G8B8A8_SRGB))
+        if (!mSwapchain->SupportsCapture() ||
+            (mSwapchain->Format() != VK_FORMAT_B8G8R8A8_SRGB && mSwapchain->Format() != VK_FORMAT_R8G8B8A8_SRGB))
         {
             MIR_LOG_ERROR("frame capture unavailable for this surface format");
             mCapturePath.clear();
             return false;
         }
         VkBufferCreateInfo info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-        info.size = uint64_t(mSwapchainExtent.width) * mSwapchainExtent.height * 4;
+        info.size = uint64_t(mSwapchain->Extent().width) * mSwapchain->Extent().height * 4;
         info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         VmaAllocationCreateInfo allocation{};
         allocation.usage = VMA_MEMORY_USAGE_AUTO;
@@ -55,7 +56,7 @@ namespace mir
         barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = mSwapchainImages[imageIndex];
+        barrier.image = mSwapchain->Image(imageIndex);
         barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
         VkDependencyInfo dep{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
         dep.imageMemoryBarrierCount = 1;
@@ -63,8 +64,8 @@ namespace mir
         vkCmdPipelineBarrier2(cmd, &dep);
         VkBufferImageCopy copy{};
         copy.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-        copy.imageExtent = { mSwapchainExtent.width, mSwapchainExtent.height, 1 };
-        vkCmdCopyImageToBuffer(cmd, mSwapchainImages[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, mCaptureBuffer,
+        copy.imageExtent = { mSwapchain->Extent().width, mSwapchain->Extent().height, 1 };
+        vkCmdCopyImageToBuffer(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, mCaptureBuffer,
             1, &copy);
         VkBufferMemoryBarrier2 host{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2 };
         host.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
@@ -86,14 +87,14 @@ namespace mir
         vmaInvalidateAllocation(mDevice->Allocator(), mCaptureAllocation, 0, VK_WHOLE_SIZE);
         VmaAllocationInfo info{};
         vmaGetAllocationInfo(mDevice->Allocator(), mCaptureAllocation, &info);
-        const auto size = size_t(mSwapchainExtent.width) * mSwapchainExtent.height * 4;
+        const auto size = size_t(mSwapchain->Extent().width) * mSwapchain->Extent().height * 4;
         const auto *begin = static_cast<const uint8_t *>(info.pMappedData);
         std::vector<uint8_t> pixels(begin, begin + size);
-        if (mSwapchainFormat == VK_FORMAT_B8G8R8A8_SRGB)
+        if (mSwapchain->Format() == VK_FORMAT_B8G8R8A8_SRGB)
             for (size_t i = 0; i < size; i += 4)
                 std::swap(pixels[i], pixels[i + 2]);
-        if (!stbi_write_png(mCapturePath.string().c_str(), int(mSwapchainExtent.width), int(mSwapchainExtent.height), 4,
-            pixels.data(), int(mSwapchainExtent.width * 4)))
+        if (!stbi_write_png(mCapturePath.string().c_str(), int(mSwapchain->Extent().width), int(mSwapchain->Extent().height), 4,
+            pixels.data(), int(mSwapchain->Extent().width * 4)))
             MIR_LOG_ERROR("cannot write frame capture: {}", mCapturePath.string());
         else
             MIR_LOG_INFO("Captured frame: {}", mCapturePath.string());

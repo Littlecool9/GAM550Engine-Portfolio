@@ -10,6 +10,7 @@
 #define NOMINMAX
 #endif
 #include <renderer/VulkanRenderer.h>
+#include "FrameSync.h"
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
 
@@ -242,7 +243,7 @@ namespace mir
 
         const uint32_t spotShadowBase = viewIndex * kMaxSpotShadows;
         glm::mat4 *const spotMatrixDst =
-            reinterpret_cast<glm::mat4 *>(mSpotShadowMatrixMapped[mFrameIndex]) + spotShadowBase;
+            reinterpret_cast<glm::mat4 *>(mSpotShadowMatrixMapped[mFrameSync->Index()]) + spotShadowBase;
         for (uint32_t slot = 0; slot < kMaxSpotShadows; ++slot)
         {
             const SpotShadowCaster &caster = mSpotShadowCasters[slot];
@@ -252,7 +253,7 @@ namespace mir
                 TryCameraRelativeFloat(caster.anchor, view.cameraPosition).value_or(glm::vec3(0.0f));
             spotMatrixDst[slot] = caster.viewProj * glm::translate(glm::mat4(1.0f), -anchorFromView);
         }
-        vmaFlushAllocation(mDevice->Allocator(), mSpotShadowMatrixAllocations[mFrameIndex],
+        vmaFlushAllocation(mDevice->Allocator(), mSpotShadowMatrixAllocations[mFrameSync->Index()],
             sizeof(glm::mat4) * spotShadowBase, sizeof(glm::mat4) * kMaxSpotShadows);
 
         const CameraData data{
@@ -274,13 +275,13 @@ namespace mir
             .sunShadowViewProj = sunShadowViewProjForView };
         const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
 
-        std::byte *const dst = mCameraMapped[mFrameIndex] + offset;
+        std::byte *const dst = mCameraMapped[mFrameSync->Index()] + offset;
         std::memcpy(dst, &data, sizeof(CameraData));
 
         // No-op if the memory type is already host-coherent; required
         // otherwise, since nothing else guarantees this write is flushed
         // before the render commands using it are submitted.
-        vmaFlushAllocation(mDevice->Allocator(), mCameraAllocations[mFrameIndex], offset, sizeof(CameraData));
+        vmaFlushAllocation(mDevice->Allocator(), mCameraAllocations[mFrameSync->Index()], offset, sizeof(CameraData));
     }
 
     void VulkanRenderer::SetLights(std::span<const LightItem> lights)
@@ -296,7 +297,7 @@ namespace mir
 
     uint32_t VulkanRenderer::WriteViewLights(const RenderView &view, uint32_t viewIndex)
     {
-        GpuLight *const dst = reinterpret_cast<GpuLight *>(mLightMapped[mFrameIndex]) + viewIndex * kMaxLights;
+        GpuLight *const dst = reinterpret_cast<GpuLight *>(mLightMapped[mFrameSync->Index()]) + viewIndex * kMaxLights;
 
         // A light too far from this camera for float is skipped, like a draw item.
         uint32_t count = 0;
@@ -314,7 +315,7 @@ namespace mir
         if (count > 0)
         {
             const VkDeviceSize offset = sizeof(GpuLight) * viewIndex * kMaxLights;
-            vmaFlushAllocation(mDevice->Allocator(), mLightAllocations[mFrameIndex], offset, sizeof(GpuLight) * count);
+            vmaFlushAllocation(mDevice->Allocator(), mLightAllocations[mFrameSync->Index()], offset, sizeof(GpuLight) * count);
         }
         return count;
     }

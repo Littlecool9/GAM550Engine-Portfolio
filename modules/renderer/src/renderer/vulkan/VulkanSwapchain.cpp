@@ -6,8 +6,10 @@
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
-#include <renderer/VulkanRenderer.h>
+#include "VulkanSwapchain.h"
 #include "VulkanDevice.h"
+
+#include <core/platform/Surface.h>
 
 #include <core/log/Log.h>
 
@@ -17,7 +19,7 @@
 #include <format>
 #include <vector>
 
-namespace mir
+namespace mir::vk
 {
     namespace
     {
@@ -74,14 +76,83 @@ namespace mir
         }
     }
 
-    bool VulkanRenderer::CreateSwapchain()
+    bool VulkanSwapchain::Initialize(VulkanDevice &device, const ISurfaceProvider &window)
+    {
+        mDevice = &device;
+        return Create(window);
+    }
+
+    void VulkanSwapchain::Shutdown()
+    {
+        if (mDevice != nullptr)
+            Destroy();
+    }
+
+    bool VulkanSwapchain::Recreate(const ISurfaceProvider &window)
+    {
+        Destroy();
+        if (!Create(window))
+            return false;
+
+        mOutOfDate = false;
+        return true;
+    }
+
+    bool VulkanSwapchain::NeedsRecreate(const ISurfaceProvider &window) const
+    {
+        return mOutOfDate || window.Width() != mExtent.width || window.Height() != mExtent.height;
+    }
+
+    bool VulkanSwapchain::Acquire(VkSemaphore signal, uint32_t &outImageIndex)
+    {
+        const VkResult result = vkAcquireNextImageKHR(
+            mDevice->Handle(), mSwapchain, UINT64_MAX, signal, VK_NULL_HANDLE, &outImageIndex);
+
+        if (result == VK_ERROR_OUT_OF_DATE_KHR)
+        {
+            mOutOfDate = true;
+            return false;
+        }
+
+        // Signalled and usable. Finish the frame, recreate next one.
+        if (result == VK_SUBOPTIMAL_KHR)
+        {
+            mOutOfDate = true;
+        }
+        else if (result != VK_SUCCESS)
+        {
+            MIR_LOG_ERROR("vkAcquireNextImageKHR failed: {}", static_cast<int>(result));
+            return false;
+        }
+
+        return true;
+    }
+
+    void VulkanSwapchain::Present(uint32_t imageIndex)
+    {
+        const VkPresentInfoKHR presentInfo{
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &mRenderComplete[imageIndex],
+            .swapchainCount = 1,
+            .pSwapchains = &mSwapchain,
+            .pImageIndices = &imageIndex };
+
+        const VkResult result = vkQueuePresentKHR(mDevice->Queue(), &presentInfo);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+            mOutOfDate = true;
+        else if (result != VK_SUCCESS)
+            MIR_LOG_ERROR("vkQueuePresentKHR failed: {}", static_cast<int>(result));
+    }
+
+    bool VulkanSwapchain::Create(const ISurfaceProvider &window)
     {
         VkSurfaceCapabilitiesKHR caps{};
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mDevice->Physical(), mDevice->Surface(), &caps);
 
         const VkSurfaceFormatKHR surfaceFormat = ChooseSurfaceFormat(mDevice->Physical(), mDevice->Surface());
         const VkPresentModeKHR presentMode = ChoosePresentMode(mDevice->Physical(), mDevice->Surface());
-        const VkExtent2D extent = ChooseExtent(caps, *mWindow);
+        const VkExtent2D extent = ChooseExtent(caps, window);
         mCanCapture = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
 
         uint32_t imageCount = caps.minImageCount + 1;
@@ -121,32 +192,43 @@ namespace mir
         if (oldSwapchain != VK_NULL_HANDLE)
             vkDestroySwapchainKHR(mDevice->Handle(), oldSwapchain, nullptr);
 
-        mSwapchainFormat = surfaceFormat.format;
-        mSwapchainExtent = extent;
+        mFormat = surfaceFormat.format;
+        mExtent = extent;
 
         // The swapchain creates and owns these. We never allocate or free them.
         uint32_t actualCount = 0;
         vkGetSwapchainImagesKHR(mDevice->Handle(), mSwapchain, &actualCount, nullptr);
-        mSwapchainImages.resize(actualCount);
-        vkGetSwapchainImagesKHR(mDevice->Handle(), mSwapchain, &actualCount, mSwapchainImages.data());
+        mImages.resize(actualCount);
+        vkGetSwapchainImagesKHR(mDevice->Handle(), mSwapchain, &actualCount, mImages.data());
 
         MIR_LOG_INFO("Swapchain: {}x{} | {} image(s), requested {} | present mode {}",
             extent.width, extent.height, actualCount, imageCount,
             presentMode == VK_PRESENT_MODE_MAILBOX_KHR ? "MAILBOX" : "FIFO");
 
-        return CreateImageViews() && CreateDepthResources() && CreateRtOutputImages();
-    }
-    bool VulkanRenderer::CreateImageViews()
-    {
-        mSwapchainViews.resize(mSwapchainImages.size(), VK_NULL_HANDLE);
+        if (!CreateImageViews() || !CreateDepthResources() || !CreateRenderCompleteSemaphores())
+            return false;
 
-        for (size_t i = 0; i < mSwapchainImages.size(); ++i)
+        mDevice->NameObject(VK_OBJECT_TYPE_SWAPCHAIN_KHR, reinterpret_cast<uint64_t>(mSwapchain), "Swapchain");
+        for (size_t i = 0; i < mImages.size(); ++i)
+        {
+            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mImages[i]),
+                std::format("Swapchain image {}", i).c_str());
+        }
+
+        return true;
+    }
+
+    bool VulkanSwapchain::CreateImageViews()
+    {
+        mViews.resize(mImages.size(), VK_NULL_HANDLE);
+
+        for (size_t i = 0; i < mImages.size(); ++i)
         {
             const VkImageViewCreateInfo info{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                .image = mSwapchainImages[i],
+                .image = mImages[i],
                 .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                .format = mSwapchainFormat,
+                .format = mFormat,
                 .subresourceRange{
                     .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                     .baseMipLevel = 0,
@@ -154,7 +236,7 @@ namespace mir
                     .baseArrayLayer = 0,
                     .layerCount = 1 } };
 
-            if (vkCreateImageView(mDevice->Handle(), &info, nullptr, &mSwapchainViews[i]) != VK_SUCCESS)
+            if (vkCreateImageView(mDevice->Handle(), &info, nullptr, &mViews[i]) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("vkCreateImageView failed for swapchain image {}", i);
                 return false;
@@ -163,7 +245,7 @@ namespace mir
 
         return true;
     }
-    bool VulkanRenderer::CreateDepthResources()
+    bool VulkanSwapchain::CreateDepthResources()
     {
         VkFormatProperties formatProps{};
         vkGetPhysicalDeviceFormatProperties(mDevice->Physical(), kDepthFormat, &formatProps);
@@ -179,7 +261,7 @@ namespace mir
                 .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                 .imageType = VK_IMAGE_TYPE_2D,
                 .format = kDepthFormat,
-                .extent{ mSwapchainExtent.width, mSwapchainExtent.height, 1 },
+                .extent{ mExtent.width, mExtent.height, 1 },
                 .mipLevels = 1,
                 .arrayLayers = 1,
                 .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -222,7 +304,7 @@ namespace mir
         return true;
     }
 
-    void VulkanRenderer::DestroyDepthResources()
+    void VulkanSwapchain::DestroyDepthResources()
     {
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
@@ -240,19 +322,19 @@ namespace mir
         }
     }
 
-    void VulkanRenderer::DestroySwapchain()
+    void VulkanSwapchain::Destroy()
     {
+        DestroyRenderCompleteSemaphores();
         // swapchain and depth go hand in hand
-        DestroyRtOutputImages();
         DestroyDepthResources();
 
-        for (VkImageView view : mSwapchainViews)
+        for (VkImageView view : mViews)
         {
             if (view != VK_NULL_HANDLE)
                 vkDestroyImageView(mDevice->Handle(), view, nullptr);
         }
-        mSwapchainViews.clear();
-        mSwapchainImages.clear();
+        mViews.clear();
+        mImages.clear();
 
         if (mSwapchain != VK_NULL_HANDLE)
         {
@@ -261,30 +343,12 @@ namespace mir
         }
     }
 
-    bool VulkanRenderer::RecreateSwapchain()
-    {
-        vkDeviceWaitIdle(mDevice->Handle());
-        DestroyRenderCompleteSemaphores();
-        DestroySwapchain();
-
-        if (!CreateSwapchain())
-            return false;
-        if (!CreateRenderCompleteSemaphores())
-            return false;
-
-        if (mDevice->RayTracingSupported())
-            WriteRtDescriptorSets();
-
-        mNeedRecreate = false;
-        return true;
-    }
-
-    bool VulkanRenderer::CreateRenderCompleteSemaphores()
+    bool VulkanSwapchain::CreateRenderCompleteSemaphores()
     {
         const VkSemaphoreCreateInfo info{
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
 
-        mRenderComplete.resize(mSwapchainImages.size(), VK_NULL_HANDLE);
+        mRenderComplete.resize(mImages.size(), VK_NULL_HANDLE);
 
         for (VkSemaphore &sem : mRenderComplete)
         {
@@ -297,7 +361,7 @@ namespace mir
         return true;
     }
 
-    void VulkanRenderer::DestroyRenderCompleteSemaphores()
+    void VulkanSwapchain::DestroyRenderCompleteSemaphores()
     {
         for (VkSemaphore sem : mRenderComplete)
         {

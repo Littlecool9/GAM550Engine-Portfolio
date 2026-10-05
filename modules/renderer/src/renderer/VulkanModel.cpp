@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 #include <renderer/VulkanRenderer.h>
+#include "vulkan/FrameSync.h"
 #include "vulkan/VulkanDevice.h"
 #include "vulkan/VulkanUtil.h"
 #include <vk_mem_alloc.h>
@@ -34,8 +35,8 @@ namespace mir
             .binding = 0,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT};
-        VkDescriptorSetLayoutCreateInfo info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT };
+        VkDescriptorSetLayoutCreateInfo info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
         info.bindingCount = 1;
         info.pBindings = &binding;
         if (vkCreateDescriptorSetLayout(mDevice->Handle(), &info, nullptr, &mModelSetLayout) != VK_SUCCESS)
@@ -44,8 +45,8 @@ namespace mir
             return false;
         }
         // One set per model draw per frame; the whole pool is reset each frame.
-        const VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxModelDrawsPerFrame};
-        VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        const VkDescriptorPoolSize size{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxModelDrawsPerFrame };
+        VkDescriptorPoolCreateInfo pool{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
         pool.maxSets = kMaxModelDrawsPerFrame;
         pool.poolSizeCount = 1;
         pool.pPoolSizes = &size;
@@ -73,14 +74,14 @@ namespace mir
         }
         ModelFrameBuffer buffer{};
         if (!vk::CreateUploadBuffer(mDevice->Allocator(), std::as_bytes(std::span(data)),
-                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.buffer, buffer.allocation))
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.buffer, buffer.allocation))
         {
             MIR_LOG_ERROR("model frame buffer allocation failed");
             return false;
         }
-        mModelBuffers[mFrameIndex].push_back(buffer);
-        VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        alloc.descriptorPool = mModelPools[mFrameIndex];
+        mModelBuffers[mFrameSync->Index()].push_back(buffer);
+        VkDescriptorSetAllocateInfo alloc{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+        alloc.descriptorPool = mModelPools[mFrameSync->Index()];
         alloc.descriptorSetCount = 1;
         alloc.pSetLayouts = &mModelSetLayout;
         VkDescriptorSet set;
@@ -89,8 +90,8 @@ namespace mir
             MIR_LOG_ERROR("model descriptor capacity exceeded ({} draws per frame)", kMaxModelDrawsPerFrame);
             return false;
         }
-        VkDescriptorBufferInfo bufferInfo{buffer.buffer, 0, VK_WHOLE_SIZE};
-        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        VkDescriptorBufferInfo bufferInfo{ buffer.buffer, 0, VK_WHOLE_SIZE };
+        VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
         write.dstSet = set;
         write.dstBinding = 0;
         write.descriptorCount = 1;

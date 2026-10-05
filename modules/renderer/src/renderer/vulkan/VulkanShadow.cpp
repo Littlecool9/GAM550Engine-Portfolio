@@ -7,6 +7,7 @@
  *
  */
 #include <renderer/VulkanRenderer.h>
+#include "FrameSync.h"
 #include "VulkanDevice.h"
 #include "VulkanUtil.h"
 #include "VulkanPushConstants.h"
@@ -25,7 +26,7 @@
 
 namespace mir
 {
- 
+
     bool VulkanRenderer::CreateShadowResources()
     {
         const VkSamplerCreateInfo samplerInfo{
@@ -49,7 +50,7 @@ namespace mir
             const VkImageCreateInfo imageInfo{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                 .imageType = VK_IMAGE_TYPE_2D,
-                .format = kDepthFormat,
+                .format = vk::kDepthFormat,
                 .extent{ kSunShadowResolution, kSunShadowResolution, 1 },
                 .mipLevels = 1,
                 .arrayLayers = 1,
@@ -72,7 +73,7 @@ namespace mir
                 .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                 .image = mSunShadowImages[i],
                 .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                .format = kDepthFormat,
+                .format = vk::kDepthFormat,
                 .subresourceRange{
                     .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
                     .baseMipLevel = 0,
@@ -95,7 +96,7 @@ namespace mir
             const VkImageCreateInfo imageInfo{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                 .imageType = VK_IMAGE_TYPE_2D,
-                .format = kDepthFormat,
+                .format = vk::kDepthFormat,
                 .extent{ kSpotShadowResolution, kSpotShadowResolution, 1 },
                 .mipLevels = 1,
                 .arrayLayers = kMaxSpotShadows,
@@ -118,7 +119,7 @@ namespace mir
                 .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                 .image = mSpotShadowImages[i],
                 .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
-                .format = kDepthFormat,
+                .format = vk::kDepthFormat,
                 .subresourceRange{
                     .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
                     .levelCount = 1,
@@ -136,7 +137,7 @@ namespace mir
                     .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                     .image = mSpotShadowImages[i],
                     .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                    .format = kDepthFormat,
+                    .format = vk::kDepthFormat,
                     .subresourceRange{
                         .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
                         .levelCount = 1,
@@ -174,7 +175,7 @@ namespace mir
             const VkImageCreateInfo depthImageInfo{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                 .imageType = VK_IMAGE_TYPE_2D,
-                .format = kDepthFormat,
+                .format = vk::kDepthFormat,
                 .extent{ kPointShadowResolution, kPointShadowResolution, 1 },
                 .mipLevels = 1,
                 .arrayLayers = kPointLayers,
@@ -220,7 +221,7 @@ namespace mir
                     .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                     .image = mPointShadowDepthImages[i],
                     .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                    .format = kDepthFormat,
+                    .format = vk::kDepthFormat,
                     .subresourceRange{
                         .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
                         .levelCount = 1,
@@ -451,7 +452,7 @@ namespace mir
         const VkPipelineRenderingCreateInfo renderingInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
             .colorAttachmentCount = 0,
-            .depthAttachmentFormat = kDepthFormat };
+            .depthAttachmentFormat = vk::kDepthFormat };
 
         const VkGraphicsPipelineCreateInfo pipelineInfo{
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -512,7 +513,7 @@ namespace mir
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
             .colorAttachmentCount = 1,
             .pColorAttachmentFormats = &kPointShadowColorFormat,
-            .depthAttachmentFormat = kDepthFormat };
+            .depthAttachmentFormat = vk::kDepthFormat };
 
         const VkGraphicsPipelineCreateInfo distancePipelineInfo{
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -703,7 +704,7 @@ namespace mir
 
         if (mHasSunShadow)
         {
-            vk::ImageBarrier(cmd, mSunShadowImages[mFrameIndex], VK_IMAGE_ASPECT_DEPTH_BIT,
+            vk::ImageBarrier(cmd, mSunShadowImages[mFrameSync->Index()], VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
@@ -711,7 +712,7 @@ namespace mir
 
             const VkRenderingAttachmentInfo depthAttachment{
                 .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = mSunShadowViews[mFrameIndex],
+                .imageView = mSunShadowViews[mFrameSync->Index()],
                 .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                 .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                 .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -737,7 +738,7 @@ namespace mir
 
             vkCmdEndRendering(cmd);
 
-            vk::ImageBarrier(cmd, mSunShadowImages[mFrameIndex], VK_IMAGE_ASPECT_DEPTH_BIT,
+            vk::ImageBarrier(cmd, mSunShadowImages[mFrameSync->Index()], VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
@@ -747,7 +748,7 @@ namespace mir
             [](const SpotShadowCaster &c) { return c.active; });
         if (anySpotActive)
         {
-            vk::ImageBarrier(cmd, mSpotShadowImages[mFrameIndex], VK_IMAGE_ASPECT_DEPTH_BIT,
+            vk::ImageBarrier(cmd, mSpotShadowImages[mFrameSync->Index()], VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
@@ -768,7 +769,7 @@ namespace mir
 
                 const VkRenderingAttachmentInfo depthAttachment{
                     .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                    .imageView = mSpotShadowLayerViews[mFrameIndex][slot],
+                    .imageView = mSpotShadowLayerViews[mFrameSync->Index()][slot],
                     .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                     .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                     .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -787,7 +788,7 @@ namespace mir
                 vkCmdEndRendering(cmd);
             }
 
-            vk::ImageBarrier(cmd, mSpotShadowImages[mFrameIndex], VK_IMAGE_ASPECT_DEPTH_BIT,
+            vk::ImageBarrier(cmd, mSpotShadowImages[mFrameSync->Index()], VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
@@ -800,14 +801,14 @@ namespace mir
         {
             constexpr uint32_t kPointLayers = kMaxPointShadows * 6;
 
-            vk::ImageBarrier(cmd, mPointShadowDepthImages[mFrameIndex], VK_IMAGE_ASPECT_DEPTH_BIT,
+            vk::ImageBarrier(cmd, mPointShadowDepthImages[mFrameSync->Index()], VK_IMAGE_ASPECT_DEPTH_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                 1, kPointLayers);
 
-            vk::ImageBarrier(cmd, mPointShadowColorImages[mFrameIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+            vk::ImageBarrier(cmd, mPointShadowColorImages[mFrameSync->Index()], VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
@@ -831,7 +832,7 @@ namespace mir
 
                     const VkRenderingAttachmentInfo colorAttachment{
                         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                        .imageView = mPointShadowColorLayerViews[mFrameIndex][layer],
+                        .imageView = mPointShadowColorLayerViews[mFrameSync->Index()][layer],
                         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -839,7 +840,7 @@ namespace mir
 
                     const VkRenderingAttachmentInfo depthAttachment{
                         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                        .imageView = mPointShadowDepthLayerViews[mFrameIndex][layer],
+                        .imageView = mPointShadowDepthLayerViews[mFrameSync->Index()][layer],
                         .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
                         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
                         .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE, // never sampled afterward
@@ -861,7 +862,7 @@ namespace mir
                 }
             }
 
-            vk::ImageBarrier(cmd, mPointShadowColorImages[mFrameIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+            vk::ImageBarrier(cmd, mPointShadowColorImages[mFrameSync->Index()], VK_IMAGE_ASPECT_COLOR_BIT,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,

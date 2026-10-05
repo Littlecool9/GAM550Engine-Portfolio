@@ -10,7 +10,9 @@
 #define NOMINMAX
 #endif
 #include <renderer/VulkanRenderer.h>
+#include "FrameSync.h"
 #include "VulkanDevice.h"
+#include "VulkanSwapchain.h"
 #include "VulkanUtil.h"
 #include "VulkanPushConstants.h"
 
@@ -24,64 +26,9 @@
 
 namespace mir
 {
-    bool VulkanRenderer::CreateFrameResources()
-    {
-        const VkCommandPoolCreateInfo poolInfo{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-            .flags = 0,
-            .queueFamilyIndex = mDevice->QueueFamily() };
-
-        const VkSemaphoreCreateInfo semInfo{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
-
-        for (uint32_t i = 0; i < kFramesInFlight; ++i)
-        {
-            if (vkCreateCommandPool(mDevice->Handle(), &poolInfo, nullptr, &mCmdPools[i]) != VK_SUCCESS)
-            {
-                MIR_LOG_CRITICAL("vkCreateCommandPool failed for frame {}", i);
-                return false;
-            }
-
-            const VkCommandBufferAllocateInfo allocInfo{
-                .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-                .commandPool = mCmdPools[i],
-                .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-                .commandBufferCount = 1 };
-
-            if (vkAllocateCommandBuffers(mDevice->Handle(), &allocInfo, &mCmdBuffers[i]) != VK_SUCCESS)
-            {
-                MIR_LOG_CRITICAL("vkAllocateCommandBuffers failed for frame {}", i);
-                return false;
-            }
-
-            if (vkCreateSemaphore(mDevice->Handle(), &semInfo, nullptr, &mImageAcquired[i]) != VK_SUCCESS)
-            {
-                MIR_LOG_CRITICAL("image-acquired semaphore failed for frame {}", i);
-                return false;
-            }
-        }
-
-        // Paired with mNextSignalValue = kFramesInFlight + 1
-        const VkSemaphoreTypeCreateInfo typeInfo{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
-            .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
-            .initialValue = kFramesInFlight };
-
-        const VkSemaphoreCreateInfo timelineInfo{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-            .pNext = &typeInfo };
-
-        if (vkCreateSemaphore(mDevice->Handle(), &timelineInfo, nullptr, &mTimeline) != VK_SUCCESS)
-        {
-            MIR_LOG_CRITICAL("timeline semaphore creation failed");
-            return false;
-        }
-
-        return CreateRenderCompleteSemaphores();
-    }
     void VulkanRenderer::RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex)
     {
-        const VkRect2D rect = vk::ResolveViewRect(view.rect, mSwapchainExtent);
+        const VkRect2D rect = vk::ResolveViewRect(view.rect, mSwapchain->Extent());
 
         const VkViewport viewport{
             .x = static_cast<float>(rect.offset.x),
@@ -96,9 +43,9 @@ namespace mir
         WriteCameraData(view, viewIndex);
         const uint32_t cameraOffset = static_cast<uint32_t>(viewIndex * mCameraAlignedSize);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
-            1, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
+            1, 1, &mCameraDescriptorSets[mFrameSync->Index()], 1, &cameraOffset);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout,
-            3, 1, &mShadowDescriptorSets[mFrameIndex], 0, nullptr);
+            3, 1, &mShadowDescriptorSets[mFrameSync->Index()], 0, nullptr);
 
         VkPipeline boundPipeline = VK_NULL_HANDLE;
         VkDescriptorSet boundDescriptorSet = VK_NULL_HANDLE;
@@ -160,7 +107,7 @@ namespace mir
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipeline);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mSkyPipelineLayout,
-                0, 1, &mCameraDescriptorSets[mFrameIndex], 1, &cameraOffset);
+                0, 1, &mCameraDescriptorSets[mFrameSync->Index()], 1, &cameraOffset);
             vkCmdDraw(cmd, 3, 1, 0, 0);
         }
     }
@@ -168,14 +115,14 @@ namespace mir
     void VulkanRenderer::RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views)
     {
         // get image ready
-        vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED,
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
 
-        vk::ImageBarrier(cmd, mDepthImages[mFrameIndex], VK_IMAGE_ASPECT_DEPTH_BIT,
+        vk::ImageBarrier(cmd, mSwapchain->DepthImage(mFrameSync->Index()), VK_IMAGE_ASPECT_DEPTH_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED,
             VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
@@ -184,7 +131,7 @@ namespace mir
 
         const VkRenderingAttachmentInfo colorAttachment{
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .imageView = mSwapchainViews[imageIndex],
+            .imageView = mSwapchain->View(imageIndex),
             .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -192,7 +139,7 @@ namespace mir
 
         const VkRenderingAttachmentInfo depthAttachment{
             .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .imageView = mDepthViews[mFrameIndex],
+            .imageView = mSwapchain->DepthView(mFrameSync->Index()),
             .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
@@ -201,7 +148,7 @@ namespace mir
         const VkRenderingInfo renderingInfo{
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
             // The stored extent, never the window: re-deriving it invites drift.
-            .renderArea{ .offset{ 0, 0 }, .extent = mSwapchainExtent },
+            .renderArea{ .offset{ 0, 0 }, .extent = mSwapchain->Extent() },
             .layerCount = 1,
             .colorAttachmentCount = 1,
             .pColorAttachments = &colorAttachment,
@@ -239,7 +186,7 @@ namespace mir
         const bool captured = RecordCapture(cmd, imageIndex);
 
         // give it back
-        vk::ImageBarrier(cmd, mSwapchainImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+        vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
             captured ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
             captured ? VK_PIPELINE_STAGE_2_TRANSFER_BIT : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
@@ -247,118 +194,33 @@ namespace mir
             VK_PIPELINE_STAGE_2_NONE, 0);
     }
 
-    void VulkanRenderer::DrawFrame(std::span<const RenderView> views)
+    std::optional<vk::FrameContext> VulkanRenderer::BeginFrame()
     {
         if (mWindow->Width() == 0 || mWindow->Height() == 0)
+            return std::nullopt;
+
+        if (mSwapchain->NeedsRecreate(*mWindow) && !RecreateSwapchain())
+            return std::nullopt;
+
+        const std::optional<vk::FrameContext> frame = mFrameSync->Begin(*mSwapchain);
+        // After Begin's wait: this slot's last frame is done with its set 2 buffers.
+        if (frame)
+            ResetModelFrame(mFrameSync->Index());
+        return frame;
+    }
+
+    void VulkanRenderer::DrawFrame(std::span<const RenderView> views)
+    {
+        const std::optional<vk::FrameContext> frame = BeginFrame();
+        if (!frame)
             return;
 
-        // check swapchain creation
-        if (mNeedRecreate || mWindow->Height() != mSwapchainExtent.height || mWindow->Width() != mSwapchainExtent.width)
-        {
-            if (!RecreateSwapchain())
-                return;
-        }
+        RecordShadowPasses(frame->cmd);
+        RecordCommands(frame->cmd, frame->imageIndex, views);
+        mFrameSync->End(*mSwapchain, *frame);
 
-        const uint64_t signalValue = mNextSignalValue++;
-        const uint64_t waitValue = signalValue - kFramesInFlight;
-
-        const VkSemaphoreWaitInfo waitInfo{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-            .semaphoreCount = 1,
-            .pSemaphores = &mTimeline,
-            .pValues = &waitValue };
-
-        // wait for next image to comeback from framesin flight
-        vkWaitSemaphores(mDevice->Handle(), &waitInfo, UINT64_MAX);
-        ResetModelFrame(mFrameIndex);
-
-        // Whole-pool reset, not per-buffer.
-        vkResetCommandPool(mDevice->Handle(), mCmdPools[mFrameIndex], 0);
-
-        uint32_t imageIndex = 0;
-        const VkResult acquireResult = vkAcquireNextImageKHR(
-            mDevice->Handle(), mSwapchain, UINT64_MAX,
-            mImageAcquired[mFrameIndex], VK_NULL_HANDLE, &imageIndex);
-
-        // The semaphore was not signalled, so this frame cannot proceed.
-        if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR)
-        {
-            // Roll the signal value back: nothing will signal it.
-            mNeedRecreate = true;
-            --mNextSignalValue;
-            return;
-        }
-
-        // Signalled and usable. Finish the frame, recreate next one.
-        if (acquireResult == VK_SUBOPTIMAL_KHR)
-        {
-            mNeedRecreate = true;
-        }
-        else if (acquireResult != VK_SUCCESS)
-        {
-            MIR_LOG_ERROR("vkAcquireNextImageKHR failed: {}", static_cast<int>(acquireResult));
-            --mNextSignalValue;
-            return;
-        }
-
-        VkCommandBuffer cmd = mCmdBuffers[mFrameIndex];
-
-        const VkCommandBufferBeginInfo beginInfo{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
-
-        vkBeginCommandBuffer(cmd, &beginInfo);
-        RecordShadowPasses(cmd);
-        RecordCommands(cmd, imageIndex, views);
-        vkEndCommandBuffer(cmd);
-
-        const VkSemaphoreSubmitInfo waitSem{
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-            .semaphore = mImageAcquired[mFrameIndex],
-            .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT };
-
-        const VkSemaphoreSubmitInfo signalSems[]{
-            { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-             .semaphore = mRenderComplete[imageIndex],
-             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT },
-            { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-             .semaphore = mTimeline,
-             .value = signalValue,
-             .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT } };
-
-        const VkCommandBufferSubmitInfo cmdInfo{
-            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
-            .commandBuffer = cmd };
-
-        const VkSubmitInfo2 submit{
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
-            .waitSemaphoreInfoCount = 1,
-            .pWaitSemaphoreInfos = &waitSem,
-            .commandBufferInfoCount = 1,
-            .pCommandBufferInfos = &cmdInfo,
-            .signalSemaphoreInfoCount = 2,
-            .pSignalSemaphoreInfos = signalSems };
-
-        if (vkQueueSubmit2(mDevice->Queue(), 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS)
-        {
-            MIR_LOG_ERROR("vkQueueSubmit2 failed");
-            return;
-        }
-        if (mCaptureBuffer != VK_NULL_HANDLE) FinishCapture();
-        const VkPresentInfoKHR presentInfo{
-            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &mRenderComplete[imageIndex],
-            .swapchainCount = 1,
-            .pSwapchains = &mSwapchain,
-            .pImageIndices = &imageIndex };
-
-        const VkResult presentResult = vkQueuePresentKHR(mDevice->Queue(), &presentInfo);
-        if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR)
-            mNeedRecreate = true;
-        else if (presentResult != VK_SUCCESS)
-            MIR_LOG_ERROR("vkQueuePresentKHR failed: {}", static_cast<int>(presentResult));
-
-        mFrameIndex = (mFrameIndex + 1) % kFramesInFlight;
+        // Waits for the queue to go idle, so the capture is complete.
+        if (mCaptureBuffer != VK_NULL_HANDLE)
+            FinishCapture();
     }
 }

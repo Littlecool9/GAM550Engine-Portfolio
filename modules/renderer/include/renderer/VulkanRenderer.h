@@ -15,6 +15,7 @@
 #include <renderer/Mesh.h>
 #include <renderer/Texture.h>
 #include <renderer/components/Sky.h>
+#include <renderer/vulkan/VulkanConstants.h>
 
 #include <volk.h>
 
@@ -29,6 +30,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -41,6 +43,9 @@ struct ImDrawData;
 namespace mir::vk
 {
     class VulkanDevice;
+    class VulkanSwapchain;
+    class FrameSync;
+    struct FrameContext;
 }
 
 namespace mir
@@ -170,7 +175,7 @@ namespace mir
             std::span<const MaterialHandle> materials,
             std::span<const TextureHandle> textures);
 
-        VkExtent2D SwapchainExtent() const { return mSwapchainExtent; }
+        VkExtent2D SwapchainExtent() const;
 
         void DrawFrame(std::span<const RenderView> views);
 
@@ -225,15 +230,9 @@ namespace mir
         struct GpuMaterial;
         struct GpuTexture;
 
-        bool CreateSwapchain();
-        bool CreateImageViews();
-        bool CreateDepthResources();
-        void DestroyDepthResources();
-        void DestroySwapchain();
         bool RecreateSwapchain();
-        bool CreateFrameResources();
-        bool CreateRenderCompleteSemaphores();
-        void DestroyRenderCompleteSemaphores();
+        // Shared prelude of DrawFrame and TraceFrame; nullopt skips the frame.
+        std::optional<vk::FrameContext> BeginFrame();
         bool CreatePipelineLayout();
         // One VkSampler per distinct SamplerDesc, shared by every material that
         // asks for it; VK_NULL_HANDLE on failure.
@@ -280,9 +279,7 @@ namespace mir
         uint32_t WriteViewLights(const RenderView &view, uint32_t viewIndex);
 
     private:
-        constexpr static uint32_t kFramesInFlight = 2;
-
-        constexpr static VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
+        constexpr static auto kFramesInFlight = vk::kFramesInFlight;
 
         glm::vec4 mClearColor{ 0.02f, 0.02f, 0.02f, 1.0f };
 
@@ -300,28 +297,8 @@ namespace mir
 
         // Created in the constructor, Initialize/Shutdown bound its Vulkan objects.
         std::unique_ptr<vk::VulkanDevice> mDevice;
-
-        VkSwapchainKHR mSwapchain = VK_NULL_HANDLE;
-        VkFormat mSwapchainFormat = VK_FORMAT_UNDEFINED;
-        VkExtent2D mSwapchainExtent{};
-
-        std::vector<VkImage> mSwapchainImages;
-        std::vector<VkImageView> mSwapchainViews;
-
-        VkImage mDepthImages[kFramesInFlight]{};
-        VmaAllocation mDepthAllocations[kFramesInFlight]{};
-        VkImageView mDepthViews[kFramesInFlight]{};
-
-        VkCommandPool mCmdPools[kFramesInFlight]{};
-        VkCommandBuffer mCmdBuffers[kFramesInFlight]{};
-        VkSemaphore mImageAcquired[kFramesInFlight]{};
-
-        std::vector<VkSemaphore> mRenderComplete;
-        VkSemaphore mTimeline = VK_NULL_HANDLE;
-
-        // waitvalue = signalValue - kFramesInFlight
-        // dont start at 0 or 1 or else underflows
-        uint64_t mNextSignalValue = kFramesInFlight + 1;
+        std::unique_ptr<vk::VulkanSwapchain> mSwapchain;
+        std::unique_ptr<vk::FrameSync> mFrameSync;
 
         VkPipelineLayout mPipelineLayout = VK_NULL_HANDLE;
 
@@ -422,7 +399,6 @@ namespace mir
         std::filesystem::path mCapturePath;
         VkBuffer mCaptureBuffer = VK_NULL_HANDLE;
         VmaAllocation mCaptureAllocation = VK_NULL_HANDLE;
-        bool mCanCapture = false;
 
         VkPipelineLayout mSkyPipelineLayout = VK_NULL_HANDLE;
         VkPipeline mSkyPipeline = VK_NULL_HANDLE;
@@ -514,9 +490,6 @@ namespace mir
 
         TextureHandle mDefaultWhiteTexture;
         TextureHandle mDefaultNormalTexture;
-
-        uint32_t mFrameIndex = 0;
-        bool mNeedRecreate = false;
 
         bool mImGuiBackendInitialized = false;
         ImDrawData *mImguiDrawData = nullptr;

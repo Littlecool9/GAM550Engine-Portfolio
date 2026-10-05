@@ -8,6 +8,7 @@
  */
 #include <renderer/VulkanRenderer.h>
 #include "VulkanDevice.h"
+#include "VulkanSwapchain.h"
 #include "VulkanUtil.h"
 #include "VulkanPushConstants.h"
 
@@ -196,11 +197,12 @@ namespace mir
             .dynamicStateCount = 2,
             .pDynamicStates = dynamicStates };
 
+        const VkFormat colorFormat = mSwapchain->Format();
         const VkPipelineRenderingCreateInfo renderingInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
             .colorAttachmentCount = 1,
-            .pColorAttachmentFormats = &mSwapchainFormat,
-            .depthAttachmentFormat = kDepthFormat };
+            .pColorAttachmentFormats = &colorFormat,
+            .depthAttachmentFormat = vk::kDepthFormat };
 
         const VkGraphicsPipelineCreateInfo pipelineInfo{
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
@@ -342,11 +344,12 @@ namespace mir
             .dynamicStateCount = 2,
             .pDynamicStates = dynamicStates };
 
+        const VkFormat colorFormat = mSwapchain->Format();
         const VkPipelineRenderingCreateInfo renderingInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
             .colorAttachmentCount = 1,
-            .pColorAttachmentFormats = &mSwapchainFormat,
-            .depthAttachmentFormat = kDepthFormat };
+            .pColorAttachmentFormats = &colorFormat,
+            .depthAttachmentFormat = vk::kDepthFormat };
 
         const VkGraphicsPipelineCreateInfo pipelineInfo{
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
