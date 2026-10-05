@@ -34,6 +34,12 @@ namespace
         kUINavigateAction, kUIConfirmAction, kUICancelAction, kUITabLeftAction, kUITabRightAction, kUIPauseAction,
     };
 
+    constexpr std::string_view kWindowActions[] = {
+        kToggleFullscreenAction,
+    };
+
+    constexpr size_t kDefaultActionCount = std::size(kUIActions) + std::size(kWindowActions);
+
     // the mouse navigates by pointing and pauses by clicking the HUD, so these
     // two have no mouse binding
     bool BindsMouse(std::string_view action) { return action != kUINavigateAction && action != kUIPauseAction; }
@@ -155,10 +161,10 @@ TEST_CASE("AddDefaultActions fills an empty map and then adds nothing more", "[i
 {
     InputMap map;
 
-    CHECK(AddDefaultActions(map) == std::size(kUIActions));
-    CHECK(map.Actions().size() == std::size(kUIActions));
+    CHECK(AddDefaultActions(map) == kDefaultActionCount);
+    CHECK(map.Actions().size() == kDefaultActionCount);
     CHECK(AddDefaultActions(map) == 0);
-    CHECK(map.Actions().size() == std::size(kUIActions));
+    CHECK(map.Actions().size() == kDefaultActionCount);
 }
 
 TEST_CASE("AddDefaultActions keeps a rebound default and the project's own actions", "[input]")
@@ -168,7 +174,7 @@ TEST_CASE("AddDefaultActions keeps a rebound default and the project's own actio
     map.AddAction(std::string(kUIConfirmAction), InputActionType::Button)
         .bindings.push_back(InputBinding{.device = DeviceKind::Keyboard, .key = Key::F});
 
-    CHECK(AddDefaultActions(map) == std::size(kUIActions) - 1);
+    CHECK(AddDefaultActions(map) == kDefaultActionCount - 1);
 
     const InputAction &confirm = *map.Find(kUIConfirmAction);
     REQUIRE(confirm.bindings.size() == 1);
@@ -240,6 +246,32 @@ TEST_CASE("UIPause comes from Escape and the gamepad's Start", "[input]")
     f.Update();
     CHECK(f.state.JustPressed(kUIPauseAction));
     CHECK_FALSE(f.state.IsDown(kUICancelAction));
+}
+
+TEST_CASE("ToggleFullscreen comes from F11 alone", "[input]")
+{
+    const InputMap map = DefaultInputMap();
+    const InputAction *action = map.Find(kToggleFullscreenAction);
+    REQUIRE(action != nullptr);
+    CHECK(action->type == InputActionType::Button);
+    REQUIRE(action->bindings.size() == 1);
+    CHECK(action->bindings[0].device == DeviceKind::Keyboard);
+    CHECK(action->bindings[0].key == Key::F11);
+
+    Fixture f;
+    f.SetKey(Key::F11, true);
+    f.Update();
+    CHECK(f.state.JustPressed(kToggleFullscreenAction));
+    f.Update();
+    CHECK_FALSE(f.state.JustPressed(kToggleFullscreenAction));
+
+    // typing into an editor field does not toggle it
+    f.SetKey(Key::F11, false);
+    f.Update();
+    f.state.SetUiCapture(true, false);
+    f.SetKey(Key::F11, true);
+    f.Update();
+    CHECK_FALSE(f.state.IsDown(kToggleFullscreenAction));
 }
 
 TEST_CASE("ForGame reads every action at rest while a game UI holds the input, and Get does not", "[input]")

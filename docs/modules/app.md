@@ -36,6 +36,7 @@ while not ShouldClose:
     ScriptReloadWatcher::Poll
     fixedSteps = FixedTimestep::Advance(dt)  every mode; FixedUpdate systems check IsSimulating
     SystemScheduler::Update            PreUpdate, Update, FixedUpdate x fixedSteps, PostUpdate, Render
+    if ToggleFullscreen just pressed: ToggleFullscreen    F11; the swapchain follows next frame
     ++frame
     halfway through mMaxFrames, if mSwitchProjectTo: RequestOpenProject
     if mMaxFrames reached: RequestClose
@@ -154,6 +155,14 @@ Accessors: `GetWorld()`, `Systems()`, `Scripts()`, `ScriptReload()`, `Splash()`,
 `Assets()`, `Scene()`, `Project()`, `AvailableProjects()` and `ProjectToOpen()`.
 `Renderer()` is marked a temporary seam, because `Renderer.h` is still an empty
 abstraction placeholder.
+
+`ToggleFullscreen()` switches the window between windowed and fullscreen and
+asks the renderer to recreate its swapchain at the start of the next frame. `Run`
+calls it when the `ToggleFullscreen` action is just pressed, F11 by default (see
+`input/DefaultInputMap.h`). The recreate is requested rather than left to the
+renderer's size check, because a window already the size of its monitor goes
+fullscreen without changing size. The action is read after `Update`, so the frame
+that saw the key renders at the old size and the next one at the new.
 
 Scene control is `NewScene(name)`, `SaveScene()` and `LoadScene()`, each of which
 replaces whatever `Scene()` currently holds. `NewScene`, `LoadScene` and
@@ -335,6 +344,12 @@ logged error.
    cheap for a large scene.
 
 ## Changed
+
+*2026-10-05* — **Fullscreen toggle.** Was: the window's mode was fixed at
+creation. Now: `App::ToggleFullscreen`, called from `Run` on the
+`ToggleFullscreen` action (F11), toggles the window (see
+[window.md](window.md)) and calls `VulkanRenderer::RequestSwapchainRecreate`.
+Because: issue #44.
 
 *2026-10-05* — **A failed renderer initialization shuts the renderer down.**
 Was: `App::Initialize` reset the window and returned when

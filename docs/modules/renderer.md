@@ -36,7 +36,7 @@ frame loop and pass recording. Pass recording stays on the facade because one
 pass reads six subsystems at once.
 
 A frame starts in `BeginFrame`. It recreates the swapchain when the window
-changed size, then `FrameSync::Begin` waits for the frame slot, acquires an image
+changed size, or when `RequestSwapchainRecreate` asked for it, then `FrameSync::Begin` waits for the frame slot, acquires an image
 and begins the command buffer. `DrawFrame` records the shadow passes, then each
 view, then the ImGui overlay and any capture, and `FrameSync::End` submits and
 presents. `TraceFrame` goes through the same `BeginFrame` and `End`, with
@@ -562,6 +562,11 @@ No tests. Everything here needs a device, and the module is verified by running.
    raster/RT, and RT inherits that gap rather than fixing it.
 
 ## Changed
+
+*2026-10-05* — **`RequestSwapchainRecreate`.** Was: only a size change or an
+out-of-date acquire or present recreated the swapchain. Now: a caller can force
+it for the next frame, through the same `RecreateSwapchain` path. `App` does on a
+fullscreen switch, which need not change the window's size. Because: issue #44.
 
 *2026-10-05* — **`VulkanRenderer` became a facade over subsystems.** Was: one
 class held every Vulkan object, about 4700 lines in one `.cpp` before the

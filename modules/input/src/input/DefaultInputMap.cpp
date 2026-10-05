@@ -84,12 +84,20 @@ namespace mir
                 PadButtonBinding(GamepadButton::Start),
             };
         }
+
+        void AddWindowActions(InputMap &map)
+        {
+            map.AddAction(std::string(kToggleFullscreenAction), InputActionType::Button).bindings = {
+                KeyBinding(Key::F11),
+            };
+        }
     }
 
     InputMap DefaultInputMap()
     {
         InputMap map;
         AddUIActions(map);
+        AddWindowActions(map);
         return map;
     }
 

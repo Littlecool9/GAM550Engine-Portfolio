@@ -63,8 +63,9 @@ namespace mir
                 // Claim the whole window as client area either way. When
                 // maximized, Windows still needs the invisible resize-frame
                 // padding subtracted back in, or the window overhangs each
-                // monitor edge by that amount.
-                if (wParam == TRUE && ::IsZoomed(hwnd))
+                // monitor edge by that amount. Fullscreen covers the monitor
+                // exactly, so it takes no padding.
+                if (wParam == TRUE && ::IsZoomed(hwnd) && !state->window->IsFullscreen())
                 {
                     auto *params = reinterpret_cast<NCCALCSIZE_PARAMS *>(lParam);
                     const int frame = ResizeBorderThicknessPx(hwnd);
@@ -84,6 +85,10 @@ namespace mir
 
             case WM_NCHITTEST:
             {
+
+                if (state->window->IsFullscreen())
+                    return HTCLIENT;
+
                 POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
                 ::ScreenToClient(hwnd, &pt);
                 RECT client{};
@@ -154,5 +159,11 @@ namespace mir
             ::RemovePropW(hwnd, kTitleBarPropName);
             delete state;
         }
+    }
+
+    void GLFWWindow::PlaceCustomTitleBarWindow(int x, int y, int width, int height)
+    {
+        HWND hwnd = static_cast<HWND>(glfwGetWin32Window(mHandle));
+        ::SetWindowPos(hwnd, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
     }
 }

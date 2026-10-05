@@ -362,6 +362,16 @@ namespace mir
         }
     }
 
+    void App::ToggleFullscreen()
+    {
+        if (!mInitialized)
+            return;
+
+        mWindow->ToggleFullscreen();
+
+        mRenderer.RequestSwapchainRecreate();
+    }
+
     void App::UnloadCurrentScene()
     {
         UnloadScene(mWorld, mScene);
@@ -510,6 +520,9 @@ namespace mir
             if (!mDesc.mCapturePath.empty() && mFrame + 1 == mDesc.mMaxFrames)
                 mRenderer.CaptureNextFrame(mDesc.mCapturePath);
             mScheduler.Update(context, fixedSteps, mFixedTimestep.mStep);
+
+            if (mWorld.Resource<InputState>().JustPressed(kToggleFullscreenAction))
+                ToggleFullscreen();
 
             audio::Update();
 

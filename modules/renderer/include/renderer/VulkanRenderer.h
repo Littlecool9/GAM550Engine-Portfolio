@@ -181,6 +181,8 @@ namespace mir
 
         VkExtent2D SwapchainExtent() const;
 
+        void RequestSwapchainRecreate();
+
         void DrawFrame(std::span<const RenderView> views);
 
         void TraceFrame(std::span<const RenderView> views);

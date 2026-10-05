@@ -80,7 +80,9 @@ data race on top of a GLFW violation.
 resize callback and the close flag. Skip it and `ShouldClose` never becomes true
 and the reported size goes stale.
 
-Size is a cached value updated only by that callback, not a query.
+Size is a cached value updated by that callback, not a query. The one other
+writer is `ToggleFullscreen`, which re-queries it straight after the switch
+rather than wait on a callback that may only come with the next `PollEvents`.
 
 **The window outlives its renderer.** The renderer builds a `VkSurfaceKHR` from
 the native handle, so destroying the window first leaves that surface pointing at
@@ -107,6 +109,33 @@ This departs from the convention that init paths return `bool`, and it leaves
 **The GLFW error callback is installed before `glfwInit`**, so GLFW's own
 diagnostics go through `MIR_LOG_ERROR` rather than being lost.
 
+**Fullscreen keeps the monitor's video mode.** `ToggleFullscreen` goes
+fullscreen on the monitor holding most of the window, at that monitor's current
+width, height and refresh rate, so the display never changes mode. The size may
+not change at all, as with a window already the monitor's size, so the caller
+also asks the renderer to recreate its swapchain rather than leave that to the
+size check (see [app.md](app.md)).
+
+A maximized window is restored before it goes fullscreen, and maximized again
+on the way back. That makes the saved rect the one to return to. It also keeps
+the window from being zoomed underneath fullscreen, where the custom title
+bar's `WM_NCCALCSIZE` would inset it by the maximized frame padding.
+
+GLFW minimizes a fullscreen window when it loses focus (`GLFW_AUTO_ICONIFY`),
+so Alt+Tab out of a fullscreen game minimizes it, and it comes back fullscreen.
+The hint stays on. With it off, a fullscreen GLFW window on Win32 stays
+topmost over whatever was switched to.
+
+**The custom title bar does not exist in fullscreen.** `HasCustomTitleBar` is
+false there, so the editor draws no strip, and the Win32 hook answers every
+`WM_NCHITTEST` with `HTCLIENT`, so nothing drags or resizes a fullscreen window.
+
+Leaving fullscreen goes through `glfwSetWindowMonitor`, which treats the saved
+size as client area and grows it by a native frame. The hook has made that frame
+client area, so `PlaceCustomTitleBarWindow` puts the window back on the exact
+saved rect. Without it the editor window would grow by one frame on every round
+trip.
+
 `GLFWLinux.cpp` picks between Wayland and X11 at runtime with `glfwGetPlatform()`,
 even though the file itself was selected at build time.
 
@@ -116,9 +145,12 @@ field on Xlib has to cast back the same way.
 
 ## State
 
-*As of 2026-09-06.* Creation, the event pump, the close flag, framebuffer size,
-content scale, the native handle and a native splash screen all work. That is the
-whole module.
+*As of 2026-10-05.* Creation, the event pump, the close flag, framebuffer size,
+content scale, the native handle, a native splash screen and a fullscreen toggle
+all work. Fullscreen was checked by hand on Windows, in the editor and without
+it. The Linux path compiles in no preset, so it is untried there. On Wayland
+fullscreen always goes to the primary monitor and leaving it keeps the
+compositor's placement, since a client cannot read its own position.
 
 No tests. Everything here needs a real window server, since `glfwInit` fails
 headless, and what remains after removing that is a handful of forwarding calls.
@@ -132,8 +164,8 @@ The module is covered in practice by the engine failing to start.
    drained by a system.
 2. **Resize and close notification.** The size updates silently and nothing is
    told.
-3. Fullscreen, monitor selection, cursor control, runtime title changes, and
-   programmatic close.
+3. Picking the fullscreen monitor, exclusive fullscreen at another video mode,
+   cursor control and runtime title changes.
 4. macOS has no native translation unit, so a macOS configure fails. Linux
    sources exist but there is no Linux preset, so that path is unbuilt.
 5. Undecided: `MIR_CHECK` versus returning `nullptr`. `App` already has a branch
@@ -142,3 +174,11 @@ The module is covered in practice by the engine failing to start.
 6. Undecided: whether multiple windows are a goal. The GLFW init refcount
    supports it, so the first window to die does not take the library down with
    it, but nothing else in the engine does.
+
+## Changed
+
+*2026-10-05* — **Fullscreen toggle.** Was: no fullscreen, so a window stayed
+windowed for its whole life. Now: `Window::ToggleFullscreen` and
+`IsFullscreen`, implemented by the GLFW backend on the monitor under the window
+at its current mode. `App` calls it on the `ToggleFullscreen` input action
+(F11). Because: issue #44.

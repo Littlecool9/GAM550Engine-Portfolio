@@ -34,7 +34,8 @@ namespace mir
         void *NativeHandleForImGui() const override { return mHandle; }
         float ContentScale() const override;
 
-        bool HasCustomTitleBar() const override { return mHasCustomTitleBar; }
+
+        bool HasCustomTitleBar() const override { return mHasCustomTitleBar && !IsFullscreen(); }
         const char *Title() const override { return mTitle.c_str(); }
         void SetTitleBarInteractiveRects(std::span<const PixelRect> rects) override
         {
@@ -46,6 +47,9 @@ namespace mir
         bool IsMaximized() const override;
         void RequestClose() override;
         void Show() override;
+
+        void ToggleFullscreen() override;
+        bool IsFullscreen() const override;
 
         const RawInputSnapshot &RawInput() const override { return mRawInput; }
 
@@ -69,6 +73,11 @@ namespace mir
         void InstallCustomTitleBar();
         void UninstallCustomTitleBar();
 
+
+        void PlaceCustomTitleBarWindow(int x, int y, int width, int height);
+
+        void RefreshFramebufferSize();
+
         GLFWwindow *mHandle = nullptr;
         uint32_t mWidth = 0;
         uint32_t mHeight = 0;
@@ -77,5 +86,12 @@ namespace mir
         std::vector<PixelRect> mTitleBarInteractiveRects;
         std::vector<std::string> mDroppedFiles;
         RawInputSnapshot mRawInput;
+
+    
+        int mWindowedX = 0;
+        int mWindowedY = 0;
+        int mWindowedWidth = 0;
+        int mWindowedHeight = 0;
+        bool mWindowedMaximized = false;
     };
 }

@@ -13,6 +13,9 @@
 
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
+#include <cstdint>
+
 namespace mir
 {
     namespace
@@ -24,6 +27,53 @@ namespace mir
         void OnGLFWError(int code, const char *description)
         {
             MIR_LOG_ERROR("GLFW error {}: {}", code, description);
+        }
+
+
+        bool WindowPositionKnown()
+        {
+            return glfwGetPlatform() != GLFW_PLATFORM_WAYLAND;
+        }
+
+        GLFWmonitor *MonitorUnderWindow(GLFWwindow *handle)
+        {
+            GLFWmonitor *best = glfwGetPrimaryMonitor();
+            if (!WindowPositionKnown())
+                return best;
+
+            int wx = 0;
+            int wy = 0;
+            int ww = 0;
+            int wh = 0;
+            glfwGetWindowPos(handle, &wx, &wy);
+            glfwGetWindowSize(handle, &ww, &wh);
+
+            int count = 0;
+            GLFWmonitor **monitors = glfwGetMonitors(&count);
+            int64_t bestArea = 0;
+            for (int i = 0; i < count; ++i)
+            {
+                const GLFWvidmode *mode = glfwGetVideoMode(monitors[i]);
+                if (mode == nullptr)
+                    continue;
+
+                int mx = 0;
+                int my = 0;
+                glfwGetMonitorPos(monitors[i], &mx, &my);
+
+                const int overlapW = std::min(wx + ww, mx + mode->width) - std::max(wx, mx);
+                const int overlapH = std::min(wy + wh, my + mode->height) - std::max(wy, my);
+                if (overlapW <= 0 || overlapH <= 0)
+                    continue;
+
+                const int64_t area = static_cast<int64_t>(overlapW) * overlapH;
+                if (area > bestArea)
+                {
+                    bestArea = area;
+                    best = monitors[i];
+                }
+            }
+            return best;
         }
 
         static_assert(static_cast<int>(Key::Space) == GLFW_KEY_SPACE);
@@ -81,11 +131,7 @@ namespace mir
         if (mHasCustomTitleBar)
             InstallCustomTitleBar();
 
-        int fbWidth = 0;
-        int fbHeight = 0;
-        glfwGetFramebufferSize(mHandle, &fbWidth, &fbHeight);
-        mWidth = static_cast<uint32_t>(fbWidth);
-        mHeight = static_cast<uint32_t>(fbHeight);
+        RefreshFramebufferSize();
 
         // Lets the static callbacks recover the owning instance.
         glfwSetWindowUserPointer(mHandle, this);
@@ -187,6 +233,58 @@ namespace mir
     void GLFWWindow::Show()
     {
         glfwShowWindow(mHandle);
+    }
+
+    void GLFWWindow::ToggleFullscreen()
+    {
+        if (IsFullscreen())
+        {
+            glfwSetWindowMonitor(mHandle, nullptr, mWindowedX, mWindowedY, mWindowedWidth, mWindowedHeight,
+                                 GLFW_DONT_CARE);
+            if (mHasCustomTitleBar)
+                PlaceCustomTitleBarWindow(mWindowedX, mWindowedY, mWindowedWidth, mWindowedHeight);
+            if (mWindowedMaximized)
+                glfwMaximizeWindow(mHandle);
+        }
+        else
+        {
+
+            GLFWmonitor *monitor = MonitorUnderWindow(mHandle);
+            const GLFWvidmode *mode = monitor != nullptr ? glfwGetVideoMode(monitor) : nullptr;
+            if (mode == nullptr)
+            {
+                MIR_LOG_WARN("ToggleFullscreen: no monitor to go fullscreen on, staying windowed");
+                return;
+            }
+
+            mWindowedMaximized = IsMaximized();
+            if (mWindowedMaximized)
+                glfwRestoreWindow(mHandle);
+
+            if (WindowPositionKnown())
+                glfwGetWindowPos(mHandle, &mWindowedX, &mWindowedY);
+            glfwGetWindowSize(mHandle, &mWindowedWidth, &mWindowedHeight);
+
+            //the monitor's current mode, so the display does not switch modes
+            glfwSetWindowMonitor(mHandle, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+        }
+
+        RefreshFramebufferSize();
+        MIR_LOG_INFO("Window {}: {}x{}", IsFullscreen() ? "fullscreen" : "windowed", mWidth, mHeight);
+    }
+
+    bool GLFWWindow::IsFullscreen() const
+    {
+        return glfwGetWindowMonitor(mHandle) != nullptr;
+    }
+
+    void GLFWWindow::RefreshFramebufferSize()
+    {
+        int fbWidth = 0;
+        int fbHeight = 0;
+        glfwGetFramebufferSize(mHandle, &fbWidth, &fbHeight);
+        mWidth = static_cast<uint32_t>(fbWidth);
+        mHeight = static_cast<uint32_t>(fbHeight);
     }
 
     void GLFWWindow::OnFramebufferSize(GLFWwindow *handle, int width, int height)
