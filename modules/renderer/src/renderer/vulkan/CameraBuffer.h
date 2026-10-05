@@ -25,7 +25,7 @@ VK_DEFINE_HANDLE(VmaAllocation)
 
 namespace mir::vk
 {
-    class VulkanDevice;
+    class Device;
 
     // Scene-wide state every view repeats in its camera data; the facade owns it.
     struct SceneLighting
@@ -49,7 +49,7 @@ namespace mir::vk
     class CameraBuffer
     {
     public:
-        bool Initialize(VulkanDevice &device);
+        bool Initialize(Device &device);
         void Shutdown();
 
         // Only staged: a frame slot's buffer may still be in use until that slot's wait.
@@ -65,7 +65,7 @@ namespace mir::vk
     private:
         uint32_t WriteViewLights(uint32_t frame, const RenderView &view, uint32_t viewIndex);
 
-        VulkanDevice *mDevice = nullptr;
+        Device *mDevice = nullptr;
 
         VkDescriptorSetLayout mSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool mPool = VK_NULL_HANDLE;

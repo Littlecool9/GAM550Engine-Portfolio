@@ -20,12 +20,12 @@ VK_DEFINE_HANDLE(VmaAllocation)
 
 namespace mir::vk
 {
-    class VulkanDevice;
+    class Device;
 
     class ModelDescriptors
     {
     public:
-        bool Initialize(VulkanDevice &device);
+        bool Initialize(Device &device);
         void Shutdown();
 
         // Frees the frame's buffers and resets its pool; the frame slot must have been waited on.
@@ -39,7 +39,7 @@ namespace mir::vk
         VkDescriptorSetLayout SetLayout() const { return mSetLayout; }
 
     private:
-        VulkanDevice *mDevice = nullptr;
+        Device *mDevice = nullptr;
 
         VkDescriptorSetLayout mSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool mPools[kFramesInFlight]{};

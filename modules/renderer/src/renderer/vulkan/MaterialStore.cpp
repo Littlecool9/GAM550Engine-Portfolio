@@ -7,8 +7,8 @@
  *
  */
 #include "MaterialStore.h"
+#include "Device.h"
 #include "ResourceStore.h"
-#include "VulkanDevice.h"
 #include "VulkanUtil.h"
 #include "VulkanPushConstants.h"
 
@@ -29,7 +29,7 @@ namespace mir::vk
         constexpr std::string_view kModelShaderName = "model";
     }
 
-    bool MaterialStore::Initialize(VulkanDevice &device, ResourceStore &resources, VkFormat colorFormat,
+    bool MaterialStore::Initialize(Device &device, ResourceStore &resources, VkFormat colorFormat,
         const std::array<VkDescriptorSetLayout, 3> &sharedLayouts)
     {
         mDevice = &device;

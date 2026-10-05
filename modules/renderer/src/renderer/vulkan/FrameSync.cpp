@@ -7,14 +7,14 @@
  *
  */
 #include "FrameSync.h"
-#include "VulkanDevice.h"
-#include "VulkanSwapchain.h"
+#include "Device.h"
+#include "Swapchain.h"
 
 #include <core/log/Log.h>
 
 namespace mir::vk
 {
-    bool FrameSync::Initialize(VulkanDevice &device)
+    bool FrameSync::Initialize(Device &device)
     {
         mDevice = &device;
 
@@ -100,7 +100,7 @@ namespace mir::vk
         }
     }
 
-    std::optional<FrameContext> FrameSync::Begin(VulkanSwapchain &swapchain)
+    std::optional<FrameContext> FrameSync::Begin(Swapchain &swapchain)
     {
         // The failed frame's value is never signalled, so waiting on it would never return.
         if (mStopped)
@@ -146,7 +146,7 @@ namespace mir::vk
         return FrameContext{ .cmd = cmd, .imageIndex = imageIndex, .signalValue = signalValue };
     }
 
-    bool FrameSync::End(VulkanSwapchain &swapchain, const FrameContext &frame)
+    bool FrameSync::End(Swapchain &swapchain, const FrameContext &frame)
     {
         vkEndCommandBuffer(frame.cmd);
 

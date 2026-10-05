@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 #include "ModelDescriptors.h"
-#include "VulkanDevice.h"
+#include "Device.h"
 #include "VulkanUtil.h"
 #include <vk_mem_alloc.h>
 
@@ -25,7 +25,7 @@ namespace mir::vk
         // this is a ceiling on model draws in one frame, not a total.
         constexpr uint32_t kMaxModelDrawsPerFrame = 4096;
     } // namespace
-    bool ModelDescriptors::Initialize(VulkanDevice &device)
+    bool ModelDescriptors::Initialize(Device &device)
     {
         mDevice = &device;
 

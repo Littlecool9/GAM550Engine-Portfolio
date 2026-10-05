@@ -44,20 +44,20 @@ target_sources(engine_renderer PRIVATE
     src/renderer/Shapes.cpp
     src/renderer/ViewSubmission.cpp
     src/renderer/VulkanRenderer.cpp
+    src/renderer/VulkanRendererCapture.cpp
+    src/renderer/VulkanRendererFrame.cpp
+    src/renderer/VulkanRendererImGui.cpp
+    src/renderer/VulkanRendererSky.cpp
     src/renderer/vulkan/CameraBuffer.cpp
+    src/renderer/vulkan/Device.cpp
     src/renderer/vulkan/FrameSync.cpp
     src/renderer/vulkan/MaterialStore.cpp
     src/renderer/vulkan/ModelDescriptors.cpp
     src/renderer/vulkan/RayTracer.cpp
     src/renderer/vulkan/ResourceStore.cpp
     src/renderer/vulkan/ShadowMaps.cpp
+    src/renderer/vulkan/Swapchain.cpp
     src/renderer/vulkan/VmaImpl.cpp
-    src/renderer/vulkan/VulkanCapture.cpp
-    src/renderer/vulkan/VulkanDevice.cpp
-    src/renderer/vulkan/VulkanFrame.cpp
-    src/renderer/vulkan/VulkanImGui.cpp
-    src/renderer/vulkan/VulkanSky.cpp
-    src/renderer/vulkan/VulkanSwapchain.cpp
     src/renderer/vulkan/VulkanUtil.cpp
 )
 if(ENGINE_FAMILY_DESKTOP)

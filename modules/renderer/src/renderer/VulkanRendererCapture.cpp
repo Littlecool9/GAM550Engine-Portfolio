@@ -1,5 +1,5 @@
 /**
- * @file VulkanCapture.cpp
+ * @file VulkanRendererCapture.cpp
  * @author Sumin Park
  * @brief Frame capture: copy the swapchain image to a buffer and write a PNG.
  *
@@ -10,8 +10,8 @@
 #define NOMINMAX
 #endif
 #include <renderer/VulkanRenderer.h>
-#include "VulkanDevice.h"
-#include "VulkanSwapchain.h"
+#include "vulkan/Device.h"
+#include "vulkan/Swapchain.h"
 
 #include <core/log/Log.h>
 

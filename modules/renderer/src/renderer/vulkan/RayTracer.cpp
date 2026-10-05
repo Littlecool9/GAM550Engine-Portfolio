@@ -7,9 +7,9 @@
  *
  */
 #include "RayTracer.h"
+#include "Device.h"
 #include "MaterialStore.h"
 #include "ResourceStore.h"
-#include "VulkanDevice.h"
 #include "VulkanUtil.h"
 #include "VulkanPushConstants.h"
 
@@ -75,7 +75,7 @@ namespace mir::vk
         }
     }
 
-    bool RayTracer::Initialize(VulkanDevice &device, VkExtent2D extent, VkDescriptorSetLayout cameraSetLayout)
+    bool RayTracer::Initialize(Device &device, VkExtent2D extent, VkDescriptorSetLayout cameraSetLayout)
     {
         mDevice = &device;
 

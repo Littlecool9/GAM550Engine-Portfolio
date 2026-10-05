@@ -1,13 +1,13 @@
 /**
- * @file VulkanSwapchain.cpp
+ * @file Swapchain.cpp
  * @author Sumin Park
  * @brief Swapchain, its image views, depth images and render-complete semaphores.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
-#include "VulkanSwapchain.h"
-#include "VulkanDevice.h"
+#include "Swapchain.h"
+#include "Device.h"
 
 #include <core/platform/Surface.h>
 
@@ -76,19 +76,19 @@ namespace mir::vk
         }
     }
 
-    bool VulkanSwapchain::Initialize(VulkanDevice &device, const ISurfaceProvider &window)
+    bool Swapchain::Initialize(Device &device, const ISurfaceProvider &window)
     {
         mDevice = &device;
         return Create(window);
     }
 
-    void VulkanSwapchain::Shutdown()
+    void Swapchain::Shutdown()
     {
         if (mDevice != nullptr)
             Destroy();
     }
 
-    bool VulkanSwapchain::Recreate(const ISurfaceProvider &window)
+    bool Swapchain::Recreate(const ISurfaceProvider &window)
     {
         Destroy();
         if (!Create(window))
@@ -98,12 +98,12 @@ namespace mir::vk
         return true;
     }
 
-    bool VulkanSwapchain::NeedsRecreate(const ISurfaceProvider &window) const
+    bool Swapchain::NeedsRecreate(const ISurfaceProvider &window) const
     {
         return mOutOfDate || window.Width() != mExtent.width || window.Height() != mExtent.height;
     }
 
-    bool VulkanSwapchain::Acquire(VkSemaphore signal, uint32_t &outImageIndex)
+    bool Swapchain::Acquire(VkSemaphore signal, uint32_t &outImageIndex)
     {
         const VkResult result = vkAcquireNextImageKHR(
             mDevice->Handle(), mSwapchain, UINT64_MAX, signal, VK_NULL_HANDLE, &outImageIndex);
@@ -128,7 +128,7 @@ namespace mir::vk
         return true;
     }
 
-    void VulkanSwapchain::Present(uint32_t imageIndex)
+    void Swapchain::Present(uint32_t imageIndex)
     {
         const VkPresentInfoKHR presentInfo{
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -145,7 +145,7 @@ namespace mir::vk
             MIR_LOG_ERROR("vkQueuePresentKHR failed: {}", static_cast<int>(result));
     }
 
-    bool VulkanSwapchain::Create(const ISurfaceProvider &window)
+    bool Swapchain::Create(const ISurfaceProvider &window)
     {
         VkSurfaceCapabilitiesKHR caps{};
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mDevice->Physical(), mDevice->Surface(), &caps);
@@ -218,7 +218,7 @@ namespace mir::vk
         return true;
     }
 
-    bool VulkanSwapchain::CreateImageViews()
+    bool Swapchain::CreateImageViews()
     {
         mViews.resize(mImages.size(), VK_NULL_HANDLE);
 
@@ -245,7 +245,7 @@ namespace mir::vk
 
         return true;
     }
-    bool VulkanSwapchain::CreateDepthResources()
+    bool Swapchain::CreateDepthResources()
     {
         VkFormatProperties formatProps{};
         vkGetPhysicalDeviceFormatProperties(mDevice->Physical(), kDepthFormat, &formatProps);
@@ -304,7 +304,7 @@ namespace mir::vk
         return true;
     }
 
-    void VulkanSwapchain::DestroyDepthResources()
+    void Swapchain::DestroyDepthResources()
     {
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
@@ -322,7 +322,7 @@ namespace mir::vk
         }
     }
 
-    void VulkanSwapchain::Destroy()
+    void Swapchain::Destroy()
     {
         DestroyRenderCompleteSemaphores();
         // swapchain and depth go hand in hand
@@ -343,7 +343,7 @@ namespace mir::vk
         }
     }
 
-    bool VulkanSwapchain::CreateRenderCompleteSemaphores()
+    bool Swapchain::CreateRenderCompleteSemaphores()
     {
         const VkSemaphoreCreateInfo info{
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
@@ -361,7 +361,7 @@ namespace mir::vk
         return true;
     }
 
-    void VulkanSwapchain::DestroyRenderCompleteSemaphores()
+    void Swapchain::DestroyRenderCompleteSemaphores()
     {
         for (VkSemaphore sem : mRenderComplete)
         {

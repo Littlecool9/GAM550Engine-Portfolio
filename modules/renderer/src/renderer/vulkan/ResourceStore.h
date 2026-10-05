@@ -24,7 +24,7 @@ VK_DEFINE_HANDLE(VmaAllocation)
 
 namespace mir::vk
 {
-    class VulkanDevice;
+    class Device;
 
     // One buffer pair per mesh
     struct GpuMesh
@@ -53,7 +53,7 @@ namespace mir::vk
     {
     public:
         // Uploads the default textures.
-        bool Initialize(VulkanDevice &device);
+        bool Initialize(Device &device);
         void Shutdown();
 
         MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
@@ -85,7 +85,7 @@ namespace mir::vk
         void DestroyTextures();
         void DestroySamplers();
 
-        VulkanDevice *mDevice = nullptr;
+        Device *mDevice = nullptr;
 
         std::vector<GpuMesh> mMeshes;
         std::vector<uint32_t> mFreeMeshIndices;

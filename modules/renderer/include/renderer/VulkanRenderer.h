@@ -41,8 +41,8 @@ struct ImDrawData;
 
 namespace mir::vk
 {
-    class VulkanDevice;
-    class VulkanSwapchain;
+    class Device;
+    class Swapchain;
     class FrameSync;
     struct FrameContext;
     class ResourceStore;
@@ -267,8 +267,8 @@ namespace mir
         const ISurfaceProvider *mWindow;
 
         // Created in the constructor, Initialize/Shutdown bound its Vulkan objects.
-        std::unique_ptr<vk::VulkanDevice> mDevice;
-        std::unique_ptr<vk::VulkanSwapchain> mSwapchain;
+        std::unique_ptr<vk::Device> mDevice;
+        std::unique_ptr<vk::Swapchain> mSwapchain;
         std::unique_ptr<vk::FrameSync> mFrameSync;
         std::unique_ptr<vk::ResourceStore> mResources;
         std::unique_ptr<vk::MaterialStore> mMaterialStore;

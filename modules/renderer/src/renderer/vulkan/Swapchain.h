@@ -1,5 +1,5 @@
 /**
- * @file VulkanSwapchain.h
+ * @file Swapchain.h
  * @author Sumin Park
  * @brief Swapchain, its image views, per-frame depth images and render-complete semaphores.
  *
@@ -24,12 +24,12 @@ namespace mir
 
 namespace mir::vk
 {
-    class VulkanDevice;
+    class Device;
 
-    class VulkanSwapchain
+    class Swapchain
     {
     public:
-        bool Initialize(VulkanDevice &device, const ISurfaceProvider &window);
+        bool Initialize(Device &device, const ISurfaceProvider &window);
         void Shutdown();
 
         // The caller idles the device first: in-flight frames still use the old images.
@@ -70,7 +70,7 @@ namespace mir::vk
         bool CreateRenderCompleteSemaphores();
         void DestroyRenderCompleteSemaphores();
 
-        VulkanDevice *mDevice = nullptr;
+        Device *mDevice = nullptr;
 
         VkSwapchainKHR mSwapchain = VK_NULL_HANDLE;
         VkFormat mFormat = VK_FORMAT_UNDEFINED;

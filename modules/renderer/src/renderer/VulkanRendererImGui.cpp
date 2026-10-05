@@ -1,5 +1,5 @@
 /**
- * @file VulkanImGui.cpp
+ * @file VulkanRendererImGui.cpp
  * @author Sumin Park
  * @brief ImGui Vulkan backend init and shutdown.
  *
@@ -7,8 +7,8 @@
  *
  */
 #include <renderer/VulkanRenderer.h>
-#include "VulkanDevice.h"
-#include "VulkanSwapchain.h"
+#include "vulkan/Device.h"
+#include "vulkan/Swapchain.h"
 
 #include <core/log/Log.h>
 
@@ -36,7 +36,7 @@ namespace mir
             .depthAttachmentFormat = vk::kDepthFormat };
 
         ImGui_ImplVulkan_InitInfo initInfo{};
-        initInfo.ApiVersion = vk::VulkanDevice::kApiVersion;
+        initInfo.ApiVersion = vk::Device::kApiVersion;
         initInfo.Instance = mDevice->Instance();
         initInfo.PhysicalDevice = mDevice->Physical();
         initInfo.Device = mDevice->Handle();

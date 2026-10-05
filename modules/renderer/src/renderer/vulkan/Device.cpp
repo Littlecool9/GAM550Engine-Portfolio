@@ -1,12 +1,12 @@
 /**
- * @file VulkanDevice.cpp
+ * @file Device.cpp
  * @author Sumin Park
  * @brief Vulkan instance, debug messenger, surface, physical and logical device, allocator.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
-#include "VulkanDevice.h"
+#include "Device.h"
 #include "VulkanSurface.h"
 
 #include <renderer/VulkanRenderer.h>
@@ -190,7 +190,7 @@ namespace mir::vk
         }
     }
 
-    bool VulkanDevice::Initialize(const RendererDesc &desc)
+    bool Device::Initialize(const RendererDesc &desc)
     {
         if (volkInitialize() != VK_SUCCESS)
         {
@@ -224,7 +224,7 @@ namespace mir::vk
         return true;
     }
 
-    void VulkanDevice::Shutdown()
+    void Device::Shutdown()
     {
         if (mAllocator != VK_NULL_HANDLE)
         {
@@ -267,7 +267,7 @@ namespace mir::vk
         volkFinalize();
     }
 
-    bool VulkanDevice::CreateInstance(const RendererDesc &desc)
+    bool Device::CreateInstance(const RendererDesc &desc)
     {
         // to fill data, read twice : once for count, once to fill
         uint32_t layerCount = 0;
@@ -360,7 +360,7 @@ namespace mir::vk
 
         return true;
     }
-    bool VulkanDevice::CreateDebugMessenger()
+    bool Device::CreateDebugMessenger()
     {
         const VkDebugUtilsMessengerCreateInfoEXT info = MakeMessengerCreateInfo();
 
@@ -371,7 +371,7 @@ namespace mir::vk
         }
         return true;
     }
-    bool VulkanDevice::CreateSurface(const RendererDesc &desc)
+    bool Device::CreateSurface(const RendererDesc &desc)
     {
         mSurface = vk::CreateSurface(mInstance, desc.window->NativeWindow());
 
@@ -383,7 +383,7 @@ namespace mir::vk
         return true;
     }
 
-    bool VulkanDevice::FindPhysicalDevice()
+    bool Device::FindPhysicalDevice()
     {
         uint32_t count = 0;
         vkEnumeratePhysicalDevices(mInstance, &count, nullptr);
@@ -471,7 +471,7 @@ namespace mir::vk
         return true;
     }
 
-    bool VulkanDevice::CreateLogicalDevice()
+    bool Device::CreateLogicalDevice()
     {
         // required even for single queue, needed in infostruct
         const float queuePriority = 1.0f;
@@ -546,7 +546,7 @@ namespace mir::vk
 
         return true;
     }
-    bool VulkanDevice::CreateAllocator()
+    bool Device::CreateAllocator()
     {
         const VmaVulkanFunctions functions{
             .vkGetInstanceProcAddr = vkGetInstanceProcAddr,
@@ -568,7 +568,7 @@ namespace mir::vk
         return true;
     }
 
-    void VulkanDevice::NameObject(VkObjectType type, uint64_t handle, const char *name) const
+    void Device::NameObject(VkObjectType type, uint64_t handle, const char *name) const
     {
         // only when debugging
         if (!mValidationEnabled || handle == 0)

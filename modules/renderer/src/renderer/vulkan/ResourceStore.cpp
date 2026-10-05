@@ -10,7 +10,7 @@
 #define NOMINMAX
 #endif
 #include "ResourceStore.h"
-#include "VulkanDevice.h"
+#include "Device.h"
 #include "VulkanUtil.h"
 
 #include <core/log/Log.h>
@@ -106,7 +106,7 @@ namespace mir::vk
         }
     }
 
-    bool ResourceStore::Initialize(VulkanDevice &device)
+    bool ResourceStore::Initialize(Device &device)
     {
         mDevice = &device;
         return CreateDefaultTextures();

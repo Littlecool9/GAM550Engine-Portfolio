@@ -20,7 +20,7 @@
 
 namespace mir::vk
 {
-    class VulkanDevice;
+    class Device;
     class ResourceStore;
 
     struct GpuMaterial
@@ -42,7 +42,7 @@ namespace mir::vk
     public:
         // sharedLayouts are sets 1-3, borrowed for the pipeline layout; their owners destroy them.
         // Also creates the default material.
-        bool Initialize(VulkanDevice &device, ResourceStore &resources, VkFormat colorFormat,
+        bool Initialize(Device &device, ResourceStore &resources, VkFormat colorFormat,
             const std::array<VkDescriptorSetLayout, 3> &sharedLayouts);
         void Shutdown();
 
@@ -66,7 +66,7 @@ namespace mir::vk
         void FreeMaterial(GpuMaterial &material);
         void DestroyMaterials();
 
-        VulkanDevice *mDevice = nullptr;
+        Device *mDevice = nullptr;
 
         VkPipelineLayout mPipelineLayout = VK_NULL_HANDLE;
 

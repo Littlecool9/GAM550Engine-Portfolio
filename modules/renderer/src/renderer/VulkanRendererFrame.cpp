@@ -1,5 +1,5 @@
 /**
- * @file VulkanFrame.cpp
+ * @file VulkanRendererFrame.cpp
  * @author Sumin Park
  * @brief Per-frame command recording and submission for the raster path.
  *
@@ -10,17 +10,17 @@
 #define NOMINMAX
 #endif
 #include <renderer/VulkanRenderer.h>
-#include "CameraBuffer.h"
-#include "FrameSync.h"
-#include "MaterialStore.h"
-#include "RayTracer.h"
-#include "ModelDescriptors.h"
-#include "ResourceStore.h"
-#include "ShadowMaps.h"
-#include "VulkanDevice.h"
-#include "VulkanSwapchain.h"
-#include "VulkanUtil.h"
-#include "VulkanPushConstants.h"
+#include "vulkan/CameraBuffer.h"
+#include "vulkan/Device.h"
+#include "vulkan/FrameSync.h"
+#include "vulkan/MaterialStore.h"
+#include "vulkan/ModelDescriptors.h"
+#include "vulkan/RayTracer.h"
+#include "vulkan/ResourceStore.h"
+#include "vulkan/ShadowMaps.h"
+#include "vulkan/Swapchain.h"
+#include "vulkan/VulkanUtil.h"
+#include "vulkan/VulkanPushConstants.h"
 
 #include <core/log/Log.h>
 

@@ -1,5 +1,5 @@
 /**
- * @file VulkanDevice.h
+ * @file Device.h
  * @author Sumin Park
  * @brief Vulkan instance, debug messenger, surface, physical and logical device, queue, allocator.
  *
@@ -21,7 +21,7 @@ namespace mir
 
 namespace mir::vk
 {
-    class VulkanDevice
+    class Device
     {
     public:
         constexpr static uint32_t kApiVersion{ VK_API_VERSION_1_4 };

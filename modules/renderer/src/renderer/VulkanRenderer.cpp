@@ -6,6 +6,7 @@
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
+#include "vulkan/Device.h"
 #include "renderer/VulkanRenderer.h"
 #include "vulkan/CameraBuffer.h"
 #include "vulkan/FrameSync.h"
@@ -14,8 +15,7 @@
 #include "vulkan/RayTracer.h"
 #include "vulkan/ResourceStore.h"
 #include "vulkan/ShadowMaps.h"
-#include "vulkan/VulkanDevice.h"
-#include "vulkan/VulkanSwapchain.h"
+#include "vulkan/Swapchain.h"
 #include "vulkan/VulkanUtil.h"
 
 #include <core/log/Log.h>
@@ -27,8 +27,8 @@
 namespace mir
 {
     VulkanRenderer::VulkanRenderer()
-        : mDevice(std::make_unique<vk::VulkanDevice>()),
-        mSwapchain(std::make_unique<vk::VulkanSwapchain>()),
+        : mDevice(std::make_unique<vk::Device>()),
+        mSwapchain(std::make_unique<vk::Swapchain>()),
         mFrameSync(std::make_unique<vk::FrameSync>()),
         mResources(std::make_unique<vk::ResourceStore>()),
         mMaterialStore(std::make_unique<vk::MaterialStore>()),

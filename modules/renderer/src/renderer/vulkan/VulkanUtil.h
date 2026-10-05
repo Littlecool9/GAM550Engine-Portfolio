@@ -19,7 +19,7 @@
 
 namespace mir::vk
 {
-    class VulkanDevice;
+    class Device;
 
     bool CreateBuffer(VmaAllocator allocator,
         VkDeviceSize size,
@@ -49,5 +49,5 @@ namespace mir::vk
     VkShaderModule CreateShaderModule(VkDevice device, const std::filesystem::path &path);
 
     // Records into a throwaway command buffer, submits it and waits for the queue to go idle.
-    bool SubmitAndWait(const VulkanDevice &device, const std::function<void(VkCommandBuffer)> &record);
+    bool SubmitAndWait(const Device &device, const std::function<void(VkCommandBuffer)> &record);
 }

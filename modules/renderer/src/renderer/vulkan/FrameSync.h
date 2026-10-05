@@ -17,8 +17,8 @@
 
 namespace mir::vk
 {
-    class VulkanDevice;
-    class VulkanSwapchain;
+    class Device;
+    class Swapchain;
 
     struct FrameContext
     {
@@ -30,15 +30,15 @@ namespace mir::vk
     class FrameSync
     {
     public:
-        bool Initialize(VulkanDevice &device);
+        bool Initialize(Device &device);
         void Shutdown();
 
         // Waits for this frame slot, acquires an image and begins its command buffer.
         // nullopt when acquire fails or Stopped(); the frame is skipped and nothing was submitted.
-        std::optional<FrameContext> Begin(VulkanSwapchain &swapchain);
+        std::optional<FrameContext> Begin(Swapchain &swapchain);
 
         // False when the submit failed and nothing was presented.
-        bool End(VulkanSwapchain &swapchain, const FrameContext &frame);
+        bool End(Swapchain &swapchain, const FrameContext &frame);
 
         uint32_t Index() const { return mFrameIndex; }
 
@@ -46,7 +46,7 @@ namespace mir::vk
         bool Stopped() const { return mStopped; }
 
     private:
-        VulkanDevice *mDevice = nullptr;
+        Device *mDevice = nullptr;
 
         VkCommandPool mCmdPools[kFramesInFlight]{};
         VkCommandBuffer mCmdBuffers[kFramesInFlight]{};

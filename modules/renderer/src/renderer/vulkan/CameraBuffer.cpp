@@ -10,7 +10,7 @@
 #define NOMINMAX
 #endif
 #include "CameraBuffer.h"
-#include "VulkanDevice.h"
+#include "Device.h"
 #include "VulkanUtil.h"
 
 #include <core/log/Log.h>
@@ -57,7 +57,7 @@ namespace mir::vk
         };
     }
 
-    bool CameraBuffer::Initialize(VulkanDevice &device)
+    bool CameraBuffer::Initialize(Device &device)
     {
         mDevice = &device;
 

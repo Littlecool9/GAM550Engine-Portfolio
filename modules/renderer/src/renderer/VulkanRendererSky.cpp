@@ -1,5 +1,5 @@
 /**
- * @file VulkanSky.cpp
+ * @file VulkanRendererSky.cpp
  * @author Sumin Park
  * @brief Sky pipeline: a fullscreen pass that reads only the camera set.
  *
@@ -7,10 +7,10 @@
  *
  */
 #include <renderer/VulkanRenderer.h>
-#include "CameraBuffer.h"
-#include "VulkanDevice.h"
-#include "VulkanSwapchain.h"
-#include "VulkanUtil.h"
+#include "vulkan/CameraBuffer.h"
+#include "vulkan/Device.h"
+#include "vulkan/Swapchain.h"
+#include "vulkan/VulkanUtil.h"
 
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>

@@ -22,7 +22,7 @@ VK_DEFINE_HANDLE(VmaAllocation)
 
 namespace mir::vk
 {
-    class VulkanDevice;
+    class Device;
     class ResourceStore;
     class MaterialStore;
     struct GpuMesh;
@@ -32,7 +32,7 @@ namespace mir::vk
     {
     public:
         // The output images match `extent`; the camera set is borrowed as set 1 of the pipeline layout.
-        bool Initialize(VulkanDevice &device, VkExtent2D extent, VkDescriptorSetLayout cameraSetLayout);
+        bool Initialize(Device &device, VkExtent2D extent, VkDescriptorSetLayout cameraSetLayout);
         void Shutdown();
 
         // Recreates the output images at the swapchain's new extent; the caller idles the device first.
@@ -75,7 +75,7 @@ namespace mir::vk
         void RecordTlasBuild(VkCommandBuffer cmd, uint32_t frame, std::span<const DrawItem> items,
             const ResourceStore &resources, const MaterialStore &materials);
 
-        VulkanDevice *mDevice = nullptr;
+        Device *mDevice = nullptr;
 
         VkDescriptorSetLayout mSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool mPool = VK_NULL_HANDLE;

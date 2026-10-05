@@ -10,7 +10,7 @@
 #define NOMINMAX
 #endif
 #include "VulkanUtil.h"
-#include "VulkanDevice.h"
+#include "Device.h"
 
 #include <core/fs/FileIO.h>
 #include <core/log/Log.h>
@@ -150,7 +150,7 @@ namespace mir::vk
         return module;
     }
 
-    bool SubmitAndWait(const VulkanDevice &device, const std::function<void(VkCommandBuffer)> &record)
+    bool SubmitAndWait(const Device &device, const std::function<void(VkCommandBuffer)> &record)
     {
         VkCommandPool pool = VK_NULL_HANDLE;
         const VkCommandPoolCreateInfo poolInfo{

@@ -7,8 +7,8 @@
  *
  */
 #include "ShadowMaps.h"
+#include "Device.h"
 #include "ResourceStore.h"
-#include "VulkanDevice.h"
 #include "VulkanUtil.h"
 #include "VulkanPushConstants.h"
 
@@ -27,7 +27,7 @@
 
 namespace mir::vk
 {
-    bool ShadowMaps::Initialize(VulkanDevice &device)
+    bool ShadowMaps::Initialize(Device &device)
     {
         mDevice = &device;
 

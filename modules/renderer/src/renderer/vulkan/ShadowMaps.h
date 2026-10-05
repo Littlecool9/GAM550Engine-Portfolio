@@ -25,13 +25,13 @@ VK_DEFINE_HANDLE(VmaAllocation)
 
 namespace mir::vk
 {
-    class VulkanDevice;
+    class Device;
     class ResourceStore;
 
     class ShadowMaps
     {
     public:
-        bool Initialize(VulkanDevice &device);
+        bool Initialize(Device &device);
         void Shutdown();
 
         // The spans are borrowed until the next frame records its passes.
@@ -54,7 +54,7 @@ namespace mir::vk
         constexpr static uint32_t kSpotShadowResolution = 1024;
         constexpr static uint32_t kPointShadowResolution = 512;
 
-        VulkanDevice *mDevice = nullptr;
+        Device *mDevice = nullptr;
 
         VkSampler mSampler = VK_NULL_HANDLE;
 
