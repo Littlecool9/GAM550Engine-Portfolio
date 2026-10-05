@@ -73,7 +73,7 @@ namespace mir
         mSwitchHookFired = false;
         mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
 
-        //audio teardown to call when other thigns fail to initialize
+        //audio teardown to call when other things fail to initialize
         const auto fail = [this] {
 #if MIR_WITH_EDITOR
             mAssetImport.Shutdown();
