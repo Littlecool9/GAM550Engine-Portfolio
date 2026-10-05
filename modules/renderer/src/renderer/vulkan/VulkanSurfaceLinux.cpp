@@ -53,13 +53,13 @@ namespace mir::vk
         }
         else
         {
-            MIR_LOG_ERROR("Unsupported window backend for Vulkan surface creation");
+            MIR_LOG_ERROR("CreateSurface: Unsupported window backend for Vulkan surface creation");
             return VK_NULL_HANDLE;
         }
 
         if (result != VK_SUCCESS)
         {
-            MIR_LOG_ERROR("Vulkan surface creation failed");
+            MIR_LOG_ERROR("CreateSurface: Vulkan surface creation failed");
             return VK_NULL_HANDLE;
         }
         return surface;

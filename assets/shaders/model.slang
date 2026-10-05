@@ -35,7 +35,7 @@ struct RasterPushConstants
 };
 
 // set 2, binding 0: this draw's morph/skin data. Slot 2 is the material
-// channel the renderer writes in; see BindModelDescriptors.
+// channel the renderer writes in; see vk::ModelDescriptors::Bind.
 [[vk::binding(0, 2)]] StructuredBuffer<float4> deformation;
 
 [shader("vertex")] VSOutput vertexMain(VSInput input, uint vertex : SV_VertexID) {

@@ -336,6 +336,13 @@ logged error.
 
 ## Changed
 
+*2026-10-05* — **A failed renderer initialization shuts the renderer down.**
+Was: `App::Initialize` reset the window and returned when
+`VulkanRenderer::Initialize` failed, so whatever the renderer had created
+before the failure was never freed. Now: it calls `mRenderer.Shutdown()` first,
+then resets the window, which the renderer's surface needs until its own
+shutdown.
+
 *2026-10-02* — **Terrain draw glue (#14).** Was: app did not link `terrain`.
 Now: it links it privately for `src/app/TerrainRender.{h,cpp}`, which uploads
 terrain tile meshes and publishes their draws. Nothing calls it

@@ -72,6 +72,16 @@ namespace mir
         mProjectToOpen.reset();
         mSwitchHookFired = false;
         mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
+
+        //audio teardown to call when other things fail to initialize
+        const auto fail = [this] {
+#if MIR_WITH_EDITOR
+            mAssetImport.Shutdown();
+#endif
+            audio::Terminate();
+            return false;
+        };
+
 #if MIR_WITH_EDITOR
         mAssetImport.Initialize(mProject);
 #else
@@ -105,7 +115,7 @@ namespace mir
         if (!mWindow)
         {
             MIR_LOG_ERROR("Window creation failed");
-            return false;
+            return fail();
         }
 
         mSplash.SetProgress("Initializing renderer...", 0.2f);
@@ -113,8 +123,10 @@ namespace mir
                 {.window = mWindow.get(), .appName = desc.mAppName, .enableValidation = desc.mEnableValidation}))
         {
             MIR_LOG_ERROR("Renderer initialization failed");
+            // Frees whatever Initialize created before it failed; the window must outlive the surface.
+            mRenderer.Shutdown();
             mWindow.reset();
-            return false;
+            return fail();
         }
 
         mSplash.SetProgress("Initializing UI...", 0.4f);
@@ -123,7 +135,7 @@ namespace mir
             MIR_LOG_ERROR("ImGui initialization failed");
             mRenderer.Shutdown();
             mWindow.reset();
-            return false;
+            return fail();
         }
 
 #if MIR_WITH_EDITOR
@@ -134,7 +146,7 @@ namespace mir
             mImGui.Shutdown(mRenderer);
             mRenderer.Shutdown();
             mWindow.reset();
-            return false;
+            return fail();
         }
 #endif
 

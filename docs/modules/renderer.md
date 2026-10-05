@@ -8,10 +8,39 @@ drives it from the ECS.
 
 ## Model
 
-`VulkanRenderer` is one class holding everything: instance, debug messenger,
-surface, device, VMA allocator, swapchain, per-frame command pools and buffers, a
-depth image per frame, an uploaded-mesh table, a pipeline-per-material table, and
-frame pacing on a timeline semaphore with `kFramesInFlight = 2`.
+`VulkanRenderer` is the module's public face, and it coordinates rather than
+owns. Its Vulkan state lives in subsystems under `src/renderer/vulkan/`, in
+namespace `mir::vk`. The public header only forward-declares them and holds
+each through a `std::unique_ptr`, so no Vulkan internals reach `app` or game
+code. Each subsystem owns its objects and stores the `Device` it was given in
+`Initialize`. Anything else it needs arrives as a call parameter, so no
+subsystem holds a pointer to the facade or to another subsystem.
+
+| Subsystem | Owns |
+|---|---|
+| `Device` | instance, debug messenger, surface, physical and logical device, queue, VMA allocator, cached device properties |
+| `Swapchain` | swapchain images and views, one depth image per frame in flight, render-complete semaphores, acquire and present |
+| `FrameSync` | command pools and buffers, image-acquired semaphores, the frame timeline with `kFramesInFlight = 2` |
+| `ResourceStore` | meshes, textures, samplers and the two default textures, behind slot/generation handles |
+| `MaterialStore` | materials and their pipelines, set 0, the pipeline layout every material shares, the sky pipeline |
+| `CameraBuffer` | set 1: per-view camera data and light list, plus the directional light, ambient, fog and atmosphere |
+| `ModelDescriptors` | set 2: per-draw model data, reset each frame |
+| `ShadowMaps` | set 3: Sun, spot and point shadow maps, their pipelines and casters |
+| `RayTracer` | a BLAS per mesh slot, a TLAS per frame, the RT pipeline, SBT and output images |
+| `FrameCapture` | the `CaptureNextFrame` buffer and the PNG it writes |
+| `ImGuiOverlay` | ImGui's Vulkan backend and the draw data it overlays |
+
+The facade's own code is `VulkanRenderer.cpp`, which holds initialize, shutdown,
+the resource calls and the setters, and `VulkanRendererFrame.cpp`, which holds the
+frame loop and pass recording. Pass recording stays on the facade because one
+pass reads six subsystems at once.
+
+A frame starts in `BeginFrame`. It recreates the swapchain when the window
+changed size, then `FrameSync::Begin` waits for the frame slot, acquires an image
+and begins the command buffer. `DrawFrame` records the shadow passes, then each
+view, then the ImGui overlay and any capture, and `FrameSync::End` submits and
+presents. `TraceFrame` goes through the same `BeginFrame` and `End`, with
+`RayTracer::Record` and a blit to the swapchain image in between.
 
 `RenderSystem` is the only thing connecting the ECS to it. It is an `ISystem` in
 `SystemPhase::Render` holding a `VulkanRenderer&`, and it owns a list of
@@ -117,39 +146,42 @@ lacking them stays fully usable for raster, same floor as today.
 `VkPhysicalDeviceAccelerationStructureFeaturesKHR`/
 `RayTracingPipelineFeaturesKHR` onto the `pNext` chain when
 `mRayTracingSupported` is true; false, the chain is byte-for-byte what it
-was before ray tracing existed. Every RT object downstream (BLAS on
-`GpuMesh`, the TLAS/SBT/pipeline/output-image state on `VulkanRenderer`
-itself) follows the same shape: null/empty when unsupported, and
-`Initialize`/`CreateMesh` skip creating it outright rather than creating and
-never using it.
+was before ray tracing existed. Every RT object downstream lives in
+`RayTracer` and follows the same shape: `Initialize` never initializes
+`RayTracer` on an unsupported device, and `CreateMesh` never asks it for a
+BLAS there.
 
 **TLAS, its scratch buffer, the instance buffer it's built from, and the RT
 output image are each one array of `kFramesInFlight`, not one shared
-instance** - same reasoning as `mCameraBuffers`/`mDepthImages`: two frames'
+instance** - same reasoning as `CameraBuffer`'s buffers and `Swapchain`'s
+depth images: two frames'
 GPU work can be in flight at once, and a shared, every-frame-rewritten
 resource would let frame N's rebuild stomp on data frame N-1's GPU commands
 haven't finished reading yet. The TLAS itself is created once, sized for
-`kMaxRtInstances` (a fixed cap - see Backlog), and every `TraceFrame` call
+`RayTracer::kMaxInstances` (a fixed cap - see Backlog), and every `TraceFrame` call
 rebuilds it *in place* with however many `DrawItem`s that frame actually has
 a BLAS for (`RecordTlasBuild`) rather than recreating the acceleration
 structure object each time.
 
-**A mesh's BLAS is built eagerly in `CreateMesh`, in the same one-shot
-command buffer as its vertex/index upload**, immediately after the copies
-that write those buffers (with a copy-write -> AS-build-read barrier
-between them - see `BuildBLAS`). Same "everything happens at load time"
+**A mesh's BLAS is built eagerly in `CreateMesh`, in its own submit right
+after the mesh upload.** `ResourceStore::CreateMesh` uploads the vertex and
+index buffers and returns the handle. The facade then calls
+`RayTracer::BuildMeshBlas` with that handle's slot, which records the build
+into a second `vk::SubmitAndWait`. The build keeps its copy-write ->
+AS-build-read barrier, whose first scope covers the earlier upload submit on
+the same queue. The BLAS lives in `RayTracer`, indexed by mesh slot, so
+`ResourceStore` never sees ray tracing. Same "everything happens at load time"
 posture `CreateMaterial`'s eager pipeline build already has. A BLAS build
-failure is logged and leaves the mesh's BLAS null; it does not fail mesh
+failure is logged and leaves the slot's BLAS null; it does not fail mesh
 creation; `RecordTlasBuild` simply skips any `DrawItem` whose mesh has no
-BLAS. `BuildBLAS`'s scratch buffer is *not* freed by `BuildBLAS` itself - the
-command buffer it built into hasn't been submitted yet when it returns, so
-`CreateMesh` frees it after its own submit+`vkQueueWaitIdle`, the same way
-it already frees its staging buffer.
+BLAS. The scratch buffer outlives `BuildBLAS` because the command buffer has
+not been submitted when `BuildBLAS` returns, so `BuildMeshBlas` frees it after
+the submit and wait.
 
 **Terrain tiles are traced like any other mesh.** Each tile gets its own BLAS
 and one TLAS instance per frame, so the project's `rayTracing` setting alone
 (with device support and a single view) picks the path, terrain or not.
-`kMaxRtInstances` is 16384 because one 4096 m chunk is already 256 tiles. Two
+`RayTracer::kMaxInstances` is 16384 because one 4096 m chunk is already 256 tiles. Two
 limits stay open: a tile edge is shared by two instances, and ray/instance
 intersection is not watertight across them, so a seam may leak a rare pixel
 that raster's `translationGrid` closes; and BLAS memory (not yet measured)
@@ -180,18 +212,17 @@ Three regions (raygen/miss/hit), one shader-group handle each, all
 individually rounded up to that same alignment for simplicity (a fourth,
 callable, stays zeroed/unused - nothing traces callable shaders here).
 
-**`TraceFrame` is a second, independent entry point next to `DrawFrame`, not
-a parameter on it.** It shares `DrawFrame`'s acquire/wait/submit/present
-skeleton (duplicated, not extracted - see `RecordRtFrame` vs
-`RecordCommands`) so that "no change to raster behavior when RT is off"
-holds by construction: `DrawFrame` itself is untouched by this feature.
+**`TraceFrame` is a second entry point next to `DrawFrame`, not a parameter
+on it.** Both go through `BeginFrame` and `FrameSync::End` for the
+wait/acquire/submit/present loop. Only the recording between them differs:
+`RecordCommands` for raster, `RecordRtFrame` for ray tracing.
 `RecordRtFrame` traces `views[0]` only, clipped to that viewport's own rect
 the same way `RecordView` clips raster (`ResolveViewRect`, shared by both -
 a zero-extent `RenderView::rect` means "the whole swapchain," anything else
 gets clamped to it). `vkCmdTraceRaysKHR`'s dispatch width/height is the
 rect's extent, not the swapchain's, so an editor's docked scene panel (or
 one half of a split screen) only costs rays over its own pixels. Ray-gen
-writes into `mRtOutputImages[mFrameIndex]` (`R8G8B8A8_UNORM`, `STORAGE_BIT`
+writes into the frame's `RayTracer` output image (`R8G8B8A8_UNORM`, `STORAGE_BIT`
 - the swapchain's own images carry no storage usage), which is always
 swapchain-sized regardless of the rect, so `RtPushConstants::outputOffset` (a
 push constant, `rect.offset`) tells ray-gen where in it this dispatch's
@@ -200,7 +231,7 @@ push constant, `rect.offset`) tells ray-gen where in it this dispatch's
 already scoped to the rect by the dispatch call itself, so no shader-side
 rect math beyond the output offset), but writes `gOutput[pixel +
 outputOffset]` instead of `gOutput[pixel]`. `RecordRtFrame` first
-`vkCmdClearColorImage`s the *whole* swapchain image to `mClearColor` -
+`vkCmdClearColorImage`s the *whole* swapchain image to the clear color -
 matching `RecordCommands`' `LOAD_OP_CLEAR` over its whole render area -
 before **blitting**, not copying, only that same rect region from the
 output image over it: a raw `vkCmdCopyImage` assumes identical texel
@@ -250,10 +281,9 @@ comes from `GpuMaterial::mUnlit`, set once in `CreateMaterial` from
 `desc.shaderName == "unlit"` - the only reason a `MaterialHandle` couldn't
 answer "which shader was this built from" before now is that nothing
 needed to ask; the shader name was read once, at `BuildPipeline` time, and
-discarded. `RecordTlasBuild` resolves each item's material the same way
-`RecordView` already does (`FindMaterial`, falling back to
-`mDefaultMaterial` on a miss) rather than inventing a second fallback
-rule. `closestHitMain` fetches the hit triangle's 3 indices, then either
+discarded. `RecordTlasBuild` resolves each item's material through
+`MaterialStore::FindOrDefault`, the same call `RecordView` makes, so raster
+and RT share one fallback rule. `closestHitMain` fetches the hit triangle's 3 indices, then either
 its 3 vertex colors (unlit - `Vertex::color`, `renderer/Mesh.h`, offset 3
 floats into its 16-float stride) or its 3 normals (lit, offset 6),
 barycentric-interpolates, and runs the exact same math its raster
@@ -318,8 +348,9 @@ binding 1 is the normal map, both combined image samplers read in the
 fragment stage.
 
 **Set 1 is the camera, a dynamic uniform buffer bound once per `RenderView`.**
-One buffer per frame-in-flight, sliced into up to `kMaxViewsPerFrame` views;
-`RecordView` writes its `RenderView::viewProj` into its slice and binds set 1
+`CameraBuffer` keeps one buffer per frame-in-flight, sliced into up to
+`kMaxViewsPerFrame` views. `RecordView` has `CameraBuffer::WriteView` fill the
+view's slice and binds set 1
 with a dynamic offset before its per-item loop, so several viewports/cameras
 can share one command buffer without colliding. Only `DrawItem::model` (the
 world transform) and the normal matrix still travel per-item, in the push
@@ -342,9 +373,9 @@ vertex/fragment shaders that already use it, since the flag only says who's
 **The same set-1 buffer also carries the scene's one directional light and
 flat ambient term**, read in both the vertex and fragment stages now
 (`VkDescriptorSetLayoutBinding::stageFlags` covers both). There is no
-separate light buffer or per-light entity yet, so `SetDirectionalLight`/
-`SetAmbientColor` set renderer-wide state that `WriteCameraData` copies into
-every view's slice, duplicated across views like the rest of that struct.
+separate buffer for it, so `SetDirectionalLight`/`SetAmbientColor` store
+scene-wide state in `CameraBuffer`, which copies it into every view's slice,
+duplicated across views like the rest of that struct.
 
 **`CameraData`'s field order is append-only.** `viewProj`/`lightDirWS`/
 `lightColor`/`ambientColor` must stay first, in that order — inserting a
@@ -360,14 +391,15 @@ material shader reads the complete layout; a future shader that truly
 needs nothing past `viewProj` can still declare only that leading prefix.
 
 **The sky is its own pipeline with its own (smaller) layout** — set 0 is
-`mCameraSetLayout` and nothing else, no material set, no push constants —
-built by `CreateSkyPipeline` alongside `CreatePipelineLayout` rather than
-going through `CreateMaterial`/`MaterialDesc`, since it isn't a per-mesh
-material and needs no vertex buffer (its vertex shader synthesizes a
-fullscreen triangle from `SV_VertexID`). Its depth-stencil state is
-`LESS_OR_EQUAL`/no-write against the same depth image opaque items wrote, so
-early-z skips the fragment shader — a ~128-tap ray march — everywhere
-opaque geometry already covered.
+`CameraBuffer`'s set layout and nothing else, no material set, no push
+constants. `MaterialStore` builds it in `Initialize`, through the same
+`CreateGraphicsPipeline` its material pipelines use, rather than through
+`CreateMaterial`/`MaterialDesc`. The sky isn't a per-mesh material and needs no
+vertex buffer, since its vertex shader synthesizes a fullscreen triangle from
+`SV_VertexID`. Its depth-stencil state is `GREATER_OR_EQUAL`/no-write against
+the same reverse-Z depth image opaque items wrote, so early-z skips the
+fragment shader — a ~128-tap ray march — everywhere opaque geometry already
+covered.
 
 **An invalid material falls back to the default** rather than failing the
 draw, so one bad handle does not blank the frame. The same rule applies one
@@ -388,25 +420,24 @@ unloading a scene, when no `MeshRenderer` is left.
 **`DestroyMesh`/`DestroyMaterial` free one handle at a time, unlike
 `ReleaseSceneResources`, and unlike it they *do* bump the slot's generation**
 — immediately, at destroy, not when the slot is later reused — so every
-outstanding copy of that handle fails `FindMesh`/`FindMaterial` from the
-moment it's destroyed, not just once something else happens to occupy its
-slot. The freed index goes on a small free-list (`mFreeMeshIndices`/
-`mFreeMaterialIndices`) that the next `CreateMesh`/`CreateMaterial` checks
-before growing the vector, so a create/destroy/create cycle reuses the slot
-rather than growing forever. Both wait for the device to go idle first, same
+outstanding copy of that handle fails the store's lookup from the moment
+it's destroyed, not just once something else happens to occupy its slot. The
+freed index goes on the owning store's free-list, which the next
+`CreateMesh`/`CreateMaterial` checks before growing the vector, so a
+create/destroy/create cycle reuses the slot rather than growing forever.
+`Slots.h` holds that bookkeeping once for both stores. Both wait for the device to go idle first, same
 reason as `ReleaseSceneResources` — an in-flight frame may still be drawing
 from the buffers/pipeline about to be freed. **Same caller-vouches-for-
 handles rule as `ReleaseSceneResources`**, just at one-handle granularity: a
 `MeshRenderer`/material reference that outlives its handle's destroy isn't
-prevented, it just starts missing in `FindMesh`/`FindMaterial` and silently
+prevented, it just starts missing in the store's lookup and silently
 stops drawing (`RecordView`'s existing null-mesh skip / default-material
 fallback), rather than crashing. `DestroyMaterial` additionally always
-refuses on `mDefaultMaterial` — `CreateMaterial`'s own invalid-handle
+refuses on the default material — `CreateMaterial`'s own invalid-handle
 fallback needs it alive for the process lifetime, the same reason
-`ReleaseSceneResources` special-cases it. Textures have no per-handle
-destroy yet (see Backlog); `FindMaterial` now checks `GpuMaterial::mGeneration`
-too, matching the mesh/texture slots — it previously only bounds-checked,
-since nothing before this could make a stale material index possible.
+`ReleaseSceneResources` special-cases it. Textures have no public per-handle
+destroy yet (see Backlog). Material lookups check the generation the same
+way mesh and texture lookups do.
 
 **`RenderSystem` runs in `Render` because `TransformPropagateSystem` runs in
 `PostUpdate`.** Placed any earlier, it would draw the previous frame's matrices.
@@ -430,6 +461,19 @@ viewport's geometry never bleeds into another's rect.
 ImGui's draw data composites on top afterwards, unclipped and after every
 `RenderView`, because ImGui manages its own per-window clip rects. The draw data
 comes from `ImGuiRuntime::EndFrame`, which `App` passes through.
+
+**`ImGuiOverlay`'s backend starts and stops with the app's ImGui context, not
+with the renderer.** `ImGui_ImplVulkan_Init` needs the app's context, and
+`ImGui_ImplVulkan_Shutdown` has to run before that context is destroyed. So
+`imguiruntime` calls `InitImGuiVulkanBackend`/`ShutdownImGuiVulkanBackend`, and
+the renderer's own `Initialize`/`Shutdown` never touch the overlay.
+
+**Subsystems initialize in dependency order, and `Device` shuts down last.**
+`MaterialStore` and the sky pipeline borrow set layouts from `CameraBuffer`,
+`ModelDescriptors` and `ShadowMaps`, so those three initialize first, and the
+borrowers shut down before them. `Device::Shutdown` logs VMA's live bytes before
+it destroys the allocator, so every other subsystem has to be gone by then for
+that count to report leaks.
 
 **A viewport's camera resolves in this order: external, then a specific
 `Entity`, then the first `Camera` found.** `SetExternalCamera` is for a camera
@@ -461,7 +505,9 @@ No tests. Everything here needs a device, and the module is verified by running.
 
 1. **Per-handle destroy for textures.** Meshes and materials have it
    (`DestroyMesh`/`DestroyMaterial` — see Changed); textures still only go
-   away in bulk, via `ReleaseSceneResources`/`DestroyTextures`. Lower
+   away in bulk, via `ReleaseSceneResources` and `ReleaseModelResources`.
+   `ResourceStore::DestroyTexture` exists, but the public API does not expose
+   it. Lower
    priority than meshes/materials were: nothing today creates or discards
    textures at a rate that makes the gap felt.
 2. **Draw-item sorting and batching.** There is one pipeline bind per item today,
@@ -503,7 +549,7 @@ No tests. Everything here needs a device, and the module is verified by running.
 8. **RT still isn't full parity with raster.** Shadows are now one gap that's
    *closed* rather than open (RT's occlusion rays and raster's shadow maps
    agree on what's lit, by construction - see Changed); what's left:
-   `kMaxRtInstances` (256) is a fixed cap with no overflow handling beyond
+   `RayTracer::kMaxInstances` (256) is a fixed cap with no overflow handling beyond
    silently dropping the rest; the TLAS rebuilds fully every `TraceFrame`
    call with no dirty-tracking (see the Rules section above - correct, just
    not efficient; shadow occlusion rays add up to `1 + lightingMeta.x` extra
@@ -517,10 +563,26 @@ No tests. Everything here needs a device, and the module is verified by running.
 
 ## Changed
 
+*2026-10-05* — **`VulkanRenderer` became a facade over subsystems.** Was: one
+class held every Vulkan object, about 4700 lines in one `.cpp` before the
+file split, and `DrawFrame` and `TraceFrame` each carried their own copy of
+the wait/acquire/submit/present loop. Now: the state lives in the eleven
+`mir::vk` subsystems listed in Model, and both frame paths share
+`FrameSync::Begin`/`End`. The public API did not change, apart from the setters
+and `CaptureNextFrame` moving out of line with the same signatures. Behaviour
+changed in six places. The set-2 frame reset runs on ray traced frames too. A
+failed queue submit or timeline wait stops rendering for good, where it used to
+hang two frames later. A failed swapchain or RT-output recreate retries on the
+next frame. A capture finishes after present, and a frame that was never
+submitted writes no PNG. `ReleaseModelResources` frees each released mesh's
+BLAS, which it used to leak. Each BLAS is built in its own submit after its
+mesh's upload. Because: with one class owning everything, a change to one
+concern touched unrelated state, and the frame loop had to be fixed twice.
+
 *2026-10-02* — **Terrain draws (#14).** Was: `RenderSystem` drew
 `MeshRenderer` entities and `ModelDrawItems` only, and the TLAS held at most
 256 instances. Now: a persistent `TerrainDrawItems` resource is merged with the
-other draws and traced like them; `kMaxRtInstances` is 16384; and
+other draws and traced like them; `kMaxInstances` is 16384; and
 `WorldDrawItem::translationGrid` lets `BuildViewDrawItems` round a draw's
 translation to a fixed grid so neighbouring terrain tiles leave no pixel
 cracks. Other draws narrow as before.
