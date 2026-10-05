@@ -1,7 +1,7 @@
 /**
  * @file TerrainRender.h
  * @author Jackey Cen
- * @brief Uploads terrain tile meshes as raster-only draws placed in the Scene world.
+ * @brief Uploads terrain tile meshes as draws placed in the Scene world.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -24,7 +24,6 @@
 
 namespace mir
 {
-    class RenderSystem;
     class World;
 
     // P1 diagnostic look: the default material times this tint.
@@ -59,6 +58,6 @@ namespace mir
         std::vector<WorldDrawItem> mDraws;
     };
 
-    // Keeps raster on while there are draws; publish none before freeing the meshes.
-    void PublishTerrainDraws(World &world, RenderSystem &renderSystem, std::span<const WorldDrawItem> draws);
+    // Publish an empty span before the meshes are freed.
+    void PublishTerrainDraws(World &world, std::span<const WorldDrawItem> draws);
 }

@@ -99,7 +99,7 @@ namespace mir
     // picked up by RenderSystem as a World resource.
     struct ModelDrawItems { std::vector<WorldDrawItem> items; };
 
-    // Raster-only terrain tile draws. Unlike ModelDrawItems they persist until their producer clears them.
+    // Terrain tile draws. Unlike ModelDrawItems they persist until their producer clears them.
     struct TerrainDrawItems { std::vector<WorldDrawItem> items; };
 
     // A Point/Spot/Area light in world space; the renderer narrows it against
@@ -140,8 +140,7 @@ namespace mir
 
         // abstraction from imgui
         void SetImGuiDrawData(ImDrawData *drawData) { mImguiDrawData = drawData; }
-        MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices,
-            MeshUsage usage = MeshUsage::RasterAndRayTracing);
+        MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
 
         bool DestroyMesh(MeshHandle handle);
 
@@ -368,7 +367,7 @@ namespace mir
         VkStridedDeviceAddressRegionKHR mSbtHitRegion{};
         VkStridedDeviceAddressRegionKHR mSbtCallableRegion{};
 
-        constexpr static uint32_t kMaxRtInstances = 256;
+        constexpr static uint32_t kMaxRtInstances = 16384;
         bool mWarnedRtInstanceCap = false;
 
         VkImage mRtOutputImages[kFramesInFlight]{};

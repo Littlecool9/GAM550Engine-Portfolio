@@ -125,7 +125,7 @@ if (built.IsOk())
 ```
 
 The mesh has no renderer types. `app` converts it to renderer vertices,
-uploads it without ray-tracing data and places the draw at placement plus
+uploads it (traced like any mesh when ray tracing is on) and places the draw at placement plus
 origin in double (see [renderer.md](renderer.md) and [app.md](app.md)).
 
 ## API

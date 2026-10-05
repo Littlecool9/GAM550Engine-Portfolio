@@ -26,13 +26,6 @@ namespace mir
         glm::vec4 tangent{1,0,0,1};
     };
 
-    // RasterOnly gets no BLAS, so TraceFrame cannot see the mesh.
-    enum class MeshUsage : uint8_t
-    {
-        RasterAndRayTracing,
-        RasterOnly,
-    };
-
     struct MeshHandle
     {
         static constexpr uint32_t kNullIndex = UINT32_MAX;

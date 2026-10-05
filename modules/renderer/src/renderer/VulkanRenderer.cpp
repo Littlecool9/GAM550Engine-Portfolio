@@ -2740,7 +2740,7 @@ namespace mir
     }
 
     MeshHandle VulkanRenderer::CreateMesh(std::span<const Vertex> vertices,
-        std::span<const uint32_t> indices, MeshUsage usage)
+        std::span<const uint32_t> indices)
     {
         if (vertices.empty() || indices.empty())
         {
@@ -2774,9 +2774,8 @@ namespace mir
         mesh.mIndexCount = static_cast<uint32_t>(indices.size());
         mesh.mGeneration = 1;
 
-        const bool traceable = mRayTracingSupported && usage == MeshUsage::RasterAndRayTracing;
         VkBufferUsageFlags extraUsage = 0;
-        if (traceable)
+        if (mRayTracingSupported)
             extraUsage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 
@@ -2837,7 +2836,7 @@ namespace mir
 
         VkBuffer blasScratch = VK_NULL_HANDLE;
         VmaAllocation blasScratchAllocation = VK_NULL_HANDLE;
-        if (traceable)
+        if (mRayTracingSupported)
         {
             if (!BuildBLAS(mesh, static_cast<uint32_t>(vertices.size()),
                 static_cast<uint32_t>(indices.size()), uploadCmd, blasScratch, blasScratchAllocation))
@@ -2880,9 +2879,8 @@ namespace mir
         NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mesh.mIndexBuffer),
             std::format("Mesh {} indices", index).c_str());
 
-        MIR_LOG_INFO("Mesh {} uploaded: {} vertices, {} indices, {} bytes{}",
-            index, vertices.size(), indices.size(), vertexBytes + indexBytes,
-            mRayTracingSupported && !traceable ? ", raster only" : "");
+        MIR_LOG_INFO("Mesh {} uploaded: {} vertices, {} indices, {} bytes",
+            index, vertices.size(), indices.size(), vertexBytes + indexBytes);
 
         return MeshHandle{ index, mesh.mGeneration };
     }

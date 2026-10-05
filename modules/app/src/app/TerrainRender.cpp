@@ -1,7 +1,7 @@
 /**
  * @file TerrainRender.cpp
  * @author Jackey Cen
- * @brief Uploads terrain tile meshes as raster-only draws placed in the Scene world.
+ * @brief Uploads terrain tile meshes as draws placed in the Scene world.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -11,7 +11,6 @@
 #include <core/ecs/World.h>
 #include <core/ecs/components/WorldTransform.h>
 #include <core/log/Log.h>
-#include <renderer/RenderSystem.h>
 
 namespace mir
 {
@@ -43,7 +42,7 @@ namespace mir
         }
 
         const std::vector<Vertex> vertices = MakeTerrainVertices(mesh);
-        const MeshHandle handle = renderer.CreateMesh(vertices, mesh.indices, MeshUsage::RasterOnly);
+        const MeshHandle handle = renderer.CreateMesh(vertices, mesh.indices);
         if (handle.IsNull())
             return false;
 
@@ -72,12 +71,11 @@ namespace mir
         mRelease.reset();
     }
 
-    void PublishTerrainDraws(World &world, RenderSystem &renderSystem, std::span<const WorldDrawItem> draws)
+    void PublishTerrainDraws(World &world, std::span<const WorldDrawItem> draws)
     {
         TerrainDrawItems *resource = world.TryResource<TerrainDrawItems>();
         if (!resource)
             resource = &world.EmplaceResource<TerrainDrawItems>();
         resource->items.assign(draws.begin(), draws.end());
-        renderSystem.SetForceRaster(!draws.empty());
     }
 }

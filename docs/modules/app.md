@@ -199,13 +199,13 @@ inside the same two methods.
 `src/app/TerrainRender.{h,cpp}` is the only place terrain meets the renderer,
 since neither module may link the other. `TerrainRenderTiles::Add` takes a
 `TerrainTileMesh` (see [terrain.md](terrain.md)), converts it with
-`MakeTerrainVertices`, uploads it with `MeshUsage::RasterOnly` and records a
+`MakeTerrainVertices`, uploads it (with a BLAS on an RT device) and records a
 `WorldDrawItem` at placement plus tile origin, added in double, with the
 diagnostic tint on the default material and a `translationGrid` of 1/4096 m.
 All tiles in one `TerrainRenderTiles` must come from one release; a mesh from
 another is refused. `PublishTerrainDraws` copies the draws into the
-`TerrainDrawItems` resource and turns `RenderSystem::SetForceRaster` on while
-there are any (see [renderer.md](renderer.md)). The `TerrainInstance` work
+`TerrainDrawItems` resource (see [renderer.md](renderer.md)); the project's
+ray tracing setting decides how they are drawn. The `TerrainInstance` work
 (#118) will call it from scene load.
 
 ## Rules
@@ -338,7 +338,7 @@ logged error.
 
 *2026-10-02* — **Terrain draw glue (#14).** Was: app did not link `terrain`.
 Now: it links it privately for `src/app/TerrainRender.{h,cpp}`, which uploads
-terrain tile meshes raster-only and publishes their draws. Nothing calls it
+terrain tile meshes and publishes their draws. Nothing calls it
 until scenes can hold terrain (#118); `App` itself is unchanged.
 
 *2026-10-02* — **A build without the editor.** Was: `app` linked `mir::editor`

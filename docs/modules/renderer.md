@@ -50,8 +50,7 @@ barriers, and frame pacing is one timeline semaphore rather than a fence pool.
 ```cpp
 bool Initialize(const RendererDesc &desc);   // takes an ISurfaceProvider, never a Window
 
-MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices,
-                      MeshUsage usage = MeshUsage::RasterAndRayTracing); // RasterOnly: no BLAS
+MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
 bool DestroyMesh(MeshHandle handle);         // false if handle is null/stale; frees that mesh alone
 TextureHandle CreateTexture(const TextureDesc &desc);
 MaterialHandle CreateMaterial(const MaterialDesc &desc);
@@ -81,14 +80,12 @@ void RemoveViewport(ViewportId id);          // viewport 0 cannot be removed
 void SetViewportRect(ViewportId id, VkRect2D rect);
 void SetViewportCamera(ViewportId id, Entity camera);           // a World camera
 void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera &camera); // one the World doesn't own
-void SetForceRaster(bool force);             // whole frames raster while on (terrain); not persisted
 ```
 
 | Type | Header | Role |
 |---|---|---|
-| `Vertex`, `MeshHandle`, `MeshUsage` | `renderer/Mesh.h` | `{pos, color, normal}`; a `{index, generation}` handle; `RasterOnly` skips the BLAS and the RT buffer usage |
+| `Vertex`, `MeshHandle` | `renderer/Mesh.h` | `{pos, color, normal}`; a `{index, generation}` handle |
 | `TerrainDrawItems` | `renderer/VulkanRenderer.h` | World resource of entity-free terrain `WorldDrawItem`s, merged after `ModelDrawItems`; filled and emptied by app's terrain glue, not per frame |
-| `ChooseRenderPath`, `RenderPathChoice`, `RasterFallback` | `renderer/RenderPath.h` | whole-frame RT or raster from (requested, supported, forced raster, view count), with the reason RT was not used |
 | `TextureDesc`, `TextureHandle` | `renderer/Texture.h` | `{width, height, pixels, srgb}`, tightly-packed RGBA8; `kNullTexture` falls back to a default in `CreateMaterial` |
 | `MaterialDesc`, `MaterialHandle` | `renderer/Material.h` | `{shaderName, cullMode, polygonMode, baseColorTexture, normalTexture}`; `kNullMaterial` means the default |
 | `DrawItem` | `renderer/Renderer.h` | `{mesh, model, normalMatrix, tint, material}` — `model` is the world transform, not premultiplied by any camera |
@@ -149,22 +146,14 @@ command buffer it built into hasn't been submitted yet when it returns, so
 `CreateMesh` frees it after its own submit+`vkQueueWaitIdle`, the same way
 it already frees its staging buffer.
 
-**`MeshUsage::RasterOnly` opts a mesh out of ray tracing.** It gets no BLAS,
-and its buffers skip the device-address and acceleration-structure-input
-usage, even on a device that supports RT. `RecordTlasBuild` already skips
-meshes without a BLAS, so a traced frame would simply lose them: whoever
-creates one keeps the scene on raster with `SetForceRaster`. Terrain tiles are
-the only user (terrain ADR 0016, which measures the BLAS cost they avoid).
-
-**Ray tracing or raster is decided per frame, for the whole frame.**
-`ChooseRenderPath` traces only when RT is requested, supported, not forced off
-and there is exactly one view; otherwise every view rasters. The reasons are
-checked in that order (unsupported, forced raster, several views) and each has
-its own one-time warning. `RenderSystem::SetForceRaster(true)` is the forced
-case: a scene with terrain renders entirely with raster instead of tracing
-everything else and dropping the terrain. It is runtime state, not a project
-setting; `RenderSettings::rayTracing` is untouched, and clearing the flag arms
-its warning again.
+**Terrain tiles are traced like any other mesh.** Each tile gets its own BLAS
+and one TLAS instance per frame, so the project's `rayTracing` setting alone
+(with device support and a single view) picks the path, terrain or not.
+`kMaxRtInstances` is 16384 because one 4096 m chunk is already 256 tiles. Two
+limits stay open: a tile edge is shared by two instances, and ray/instance
+intersection is not watertight across them, so a seam may leak a rare pixel
+that raster's `translationGrid` closes; and BLAS memory (not yet measured)
+counts against the terrain residency budget.
 
 **`TerrainDrawItems` persists; `ModelDrawItems` does not.** Both are World
 resources of entity-free `WorldDrawItem`s that `RenderSystem` appends after the
@@ -520,16 +509,13 @@ No tests. Everything here needs a device, and the module is verified by running.
 
 ## Changed
 
-*2026-10-02* — **Raster-only meshes, terrain draws and a whole-scene raster
-switch (#14).** Was: `CreateMesh` built a BLAS for every mesh on an RT device,
-`RenderSystem` drew `MeshRenderer` entities and `ModelDrawItems` only, and the
-RT/raster choice looked at the setting, the device and the view count. Now:
-`CreateMesh` takes a `MeshUsage` (`RasterOnly` skips the BLAS); a persistent
-`TerrainDrawItems` resource is merged with the other draws; `SetForceRaster`
-keeps whole frames on raster with its own warning, decided by
-`ChooseRenderPath` (`renderer/RenderPath.h`); and `WorldDrawItem::translationGrid`
-lets `BuildViewDrawItems` round a draw's translation to a fixed grid so
-neighbouring terrain tiles leave no pixel cracks. Other draws narrow as before.
+*2026-10-02* — **Terrain draws (#14).** Was: `RenderSystem` drew
+`MeshRenderer` entities and `ModelDrawItems` only, and the TLAS held at most
+256 instances. Now: a persistent `TerrainDrawItems` resource is merged with the
+other draws and traced like them; `kMaxRtInstances` is 16384; and
+`WorldDrawItem::translationGrid` lets `BuildViewDrawItems` round a draw's
+translation to a fixed grid so neighbouring terrain tiles leave no pixel
+cracks. Other draws narrow as before.
 
 *2026-09-30* — **Depth is reverse-Z, and a lens can have no far plane.** Was:
 `MakeViewProjection(cameraWorld, fov, near, far, aspect)` mapped near to depth 0
