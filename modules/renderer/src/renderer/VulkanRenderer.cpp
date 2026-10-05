@@ -11,6 +11,7 @@
 #include "vulkan/FrameSync.h"
 #include "vulkan/MaterialStore.h"
 #include "vulkan/ModelDescriptors.h"
+#include "vulkan/RayTracer.h"
 #include "vulkan/ResourceStore.h"
 #include "vulkan/ShadowMaps.h"
 #include "vulkan/VulkanDevice.h"
@@ -33,7 +34,8 @@ namespace mir
         mMaterialStore(std::make_unique<vk::MaterialStore>()),
         mCameraBuffer(std::make_unique<vk::CameraBuffer>()),
         mShadowMaps(std::make_unique<vk::ShadowMaps>()),
-        mModelDescriptors(std::make_unique<vk::ModelDescriptors>())
+        mModelDescriptors(std::make_unique<vk::ModelDescriptors>()),
+        mRayTracer(std::make_unique<vk::RayTracer>())
     {}
     VulkanRenderer::~VulkanRenderer() = default;
 
@@ -55,9 +57,6 @@ namespace mir
             return false;
 
         if (!mSwapchain->Initialize(*mDevice, *mWindow))
-            return false;
-
-        if (!CreateRtOutputImages())
             return false;
 
         if (!mFrameSync->Initialize(*mDevice))
@@ -82,14 +81,9 @@ namespace mir
         if (!CreateSkyPipeline())
             return false;
 
-        if (mDevice->RayTracingSupported())
-        {
-            if (!CreateRtScene())
-                return false;
-            if (!CreateRtPipeline())
-                return false;
-            WriteRtDescriptorSets();
-        }
+        if (mDevice->RayTracingSupported() &&
+            !mRayTracer->Initialize(*mDevice, mSwapchain->Extent(), mCameraBuffer->SetLayout()))
+            return false;
 
         mDevice->NameObject(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(mSkyPipeline), "Sky pipeline");
 
@@ -101,16 +95,13 @@ namespace mir
         vkDeviceWaitIdle(mDevice->Handle());
 
         // The swapchain cannot reach ray tracing, so the facade resizes its output images.
-        DestroyRtOutputImages();
-        if (!mSwapchain->Recreate(*mWindow) || !CreateRtOutputImages())
+        if (!mSwapchain->Recreate(*mWindow) ||
+            (mDevice->RayTracingSupported() && !mRayTracer->Resize(mSwapchain->Extent())))
         {
             // Recreate may have cleared the flag already; set it so the next frame retries.
             mSwapchain->MarkOutOfDate();
             return false;
         }
-
-        if (mDevice->RayTracingSupported())
-            WriteRtDescriptorSets();
 
         return true;
     }
@@ -124,7 +115,7 @@ namespace mir
             mFrameSync->Shutdown();
 
             mMaterialStore->Shutdown();
-            DestroyBlases();
+            mRayTracer->Shutdown();
             mResources->Shutdown();
             DestroyCaptureBuffer();
             mModelDescriptors->Shutdown();
@@ -143,40 +134,6 @@ namespace mir
                 mSkyPipelineLayout = VK_NULL_HANDLE;
             }
 
-            DestroyRtScene();
-
-            if (mSbtBuffer != VK_NULL_HANDLE)
-            {
-                vmaDestroyBuffer(mDevice->Allocator(), mSbtBuffer, mSbtAllocation);
-                mSbtBuffer = VK_NULL_HANDLE;
-                mSbtAllocation = VK_NULL_HANDLE;
-            }
-
-            if (mRtPipeline != VK_NULL_HANDLE)
-            {
-                vkDestroyPipeline(mDevice->Handle(), mRtPipeline, nullptr);
-                mRtPipeline = VK_NULL_HANDLE;
-            }
-
-            if (mRtPipelineLayout != VK_NULL_HANDLE)
-            {
-                vkDestroyPipelineLayout(mDevice->Handle(), mRtPipelineLayout, nullptr);
-                mRtPipelineLayout = VK_NULL_HANDLE;
-            }
-
-            if (mRtDescriptorPool != VK_NULL_HANDLE)
-            {
-                vkDestroyDescriptorPool(mDevice->Handle(), mRtDescriptorPool, nullptr);
-                mRtDescriptorPool = VK_NULL_HANDLE;
-            }
-
-            if (mRtSetLayout != VK_NULL_HANDLE)
-            {
-                vkDestroyDescriptorSetLayout(mDevice->Handle(), mRtSetLayout, nullptr);
-                mRtSetLayout = VK_NULL_HANDLE;
-            }
-
-            DestroyRtOutputImages();
             mSwapchain->Shutdown();
         }
 
@@ -190,27 +147,8 @@ namespace mir
         if (handle.IsNull() || !mDevice->RayTracingSupported())
             return handle;
 
-        if (mBlases.size() <= handle.mIndex)
-            mBlases.resize(handle.mIndex + 1);
-        MeshBlas &blas = mBlases[handle.mIndex];
-
-        VkBuffer scratch = VK_NULL_HANDLE;
-        VmaAllocation scratchAllocation = VK_NULL_HANDLE;
-        bool built = false;
-        const bool submitted = vk::SubmitAndWait(*mDevice, [&](VkCommandBuffer cmd)
-            {
-                built = BuildBLAS(*mResources->FindMesh(handle), static_cast<uint32_t>(vertices.size()), cmd,
-                    blas, scratch, scratchAllocation);
-            });
-
-        if (scratch != VK_NULL_HANDLE)
-            vmaDestroyBuffer(mDevice->Allocator(), scratch, scratchAllocation);
-
-        if (!built || !submitted)
-        {
-            DestroyBLAS(blas);
+        if (!mRayTracer->BuildMeshBlas(handle.mIndex, *mResources->FindMesh(handle), static_cast<uint32_t>(vertices.size())))
             MIR_LOG_ERROR("CreateMesh: BLAS build failed, mesh will raster only");
-        }
 
         return handle;
     }
@@ -227,7 +165,7 @@ namespace mir
         // drawing from this buffer - see ReleaseSceneResources.
         vkDeviceWaitIdle(mDevice->Handle());
 
-        DestroyMeshBlas(handle.mIndex);
+        mRayTracer->DestroyMeshBlas(handle.mIndex);
         return mResources->DestroyMesh(handle);
     }
 
@@ -269,7 +207,7 @@ namespace mir
         // in-flight frames may still use them
         vkDeviceWaitIdle(mDevice->Handle());
 
-        DestroyBlases();
+        mRayTracer->DestroyBlases();
         const std::size_t meshCount = mResources->ReleaseMeshes();
         mModelDescriptors->ResetFrames();
         // The default textures and material stay: CreateMaterial and draws fall back to them.
@@ -292,7 +230,7 @@ namespace mir
         for (const MeshHandle handle : meshes)
         {
             if (mResources->DestroyMesh(handle))
-                DestroyMeshBlas(handle.mIndex);
+                mRayTracer->DestroyMeshBlas(handle.mIndex);
         }
 
         for (const MaterialHandle handle : materials)

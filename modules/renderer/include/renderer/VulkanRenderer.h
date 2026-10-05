@@ -50,9 +50,8 @@ namespace mir::vk
     class CameraBuffer;
     class ShadowMaps;
     class ModelDescriptors;
+    class RayTracer;
     struct SceneLighting;
-    struct GpuMesh;
-    struct GpuMaterial;
 }
 
 namespace mir
@@ -233,8 +232,6 @@ namespace mir
         void Shutdown();
 
     private:
-        struct MeshBlas;
-
         bool RecreateSwapchain();
         // Shared prelude of DrawFrame and TraceFrame; nullopt skips the frame.
         std::optional<vk::FrameContext> BeginFrame();
@@ -244,21 +241,6 @@ namespace mir
         void DestroyCaptureBuffer();
         bool CreateSkyPipeline();
 
-        bool CreateAccelerationStructureObject(VkDeviceSize size, VkAccelerationStructureTypeKHR type,
-            VkBuffer &outBuffer, VmaAllocation &outAllocation, VkAccelerationStructureKHR &outAS);
-        bool CreateRtOutputImages();
-        void DestroyRtOutputImages();
-        bool CreateRtScene();
-        void DestroyRtScene();
-        bool CreateRtPipeline();
-        void WriteRtDescriptorSets();
-        bool BuildBLAS(const vk::GpuMesh &mesh, uint32_t vertexCount, VkCommandBuffer cmd, MeshBlas &outBlas,
-            VkBuffer &outScratchBuffer, VmaAllocation &outScratchAllocation);
-        void DestroyBLAS(MeshBlas &blas);
-        // No-op for a slot that never had a BLAS.
-        void DestroyMeshBlas(uint32_t meshIndex);
-        void DestroyBlases();
-        void RecordTlasBuild(VkCommandBuffer cmd, uint32_t frameIndex, std::span<const DrawItem> items);
         void RecordRtFrame(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
 
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
@@ -294,6 +276,8 @@ namespace mir
         std::unique_ptr<vk::CameraBuffer> mCameraBuffer;
         std::unique_ptr<vk::ShadowMaps> mShadowMaps;
         std::unique_ptr<vk::ModelDescriptors> mModelDescriptors;
+        // Initialized only on a device with ray tracing; its Shutdown is a no-op otherwise.
+        std::unique_ptr<vk::RayTracer> mRayTracer;
 
         std::filesystem::path mCapturePath;
         VkBuffer mCaptureBuffer = VK_NULL_HANDLE;
@@ -302,52 +286,6 @@ namespace mir
         VkPipelineLayout mSkyPipelineLayout = VK_NULL_HANDLE;
         VkPipeline mSkyPipeline = VK_NULL_HANDLE;
 
-        VkDescriptorSetLayout mRtSetLayout = VK_NULL_HANDLE;
-        VkDescriptorPool mRtDescriptorPool = VK_NULL_HANDLE;
-        VkDescriptorSet mRtDescriptorSets[kFramesInFlight]{};
-        VkPipelineLayout mRtPipelineLayout = VK_NULL_HANDLE;
-        VkPipeline mRtPipeline = VK_NULL_HANDLE;
-
-        VkBuffer mSbtBuffer = VK_NULL_HANDLE;
-        VmaAllocation mSbtAllocation = VK_NULL_HANDLE;
-        VkStridedDeviceAddressRegionKHR mSbtRaygenRegion{};
-        VkStridedDeviceAddressRegionKHR mSbtMissRegion{};
-        VkStridedDeviceAddressRegionKHR mSbtHitRegion{};
-        VkStridedDeviceAddressRegionKHR mSbtCallableRegion{};
-
-        constexpr static uint32_t kMaxRtInstances = 256;
-        bool mWarnedRtInstanceCap = false;
-
-        VkImage mRtOutputImages[kFramesInFlight]{};
-        VmaAllocation mRtOutputAllocations[kFramesInFlight]{};
-        VkImageView mRtOutputViews[kFramesInFlight]{};
-
-        VkAccelerationStructureKHR mTlas[kFramesInFlight]{};
-        VkBuffer mTlasBuffers[kFramesInFlight]{};
-        VmaAllocation mTlasAllocations[kFramesInFlight]{};
-
-        VkBuffer mTlasScratchBuffers[kFramesInFlight]{};
-        VmaAllocation mTlasScratchAllocations[kFramesInFlight]{};
-        VkDeviceAddress mTlasScratchAddresses[kFramesInFlight]{};
-
-        VkBuffer mInstanceBuffers[kFramesInFlight]{};
-        VmaAllocation mInstanceAllocations[kFramesInFlight]{};
-        std::byte *mInstanceMapped[kFramesInFlight]{};
-
-        VkBuffer mRtInstanceInfoBuffers[kFramesInFlight]{};
-        VmaAllocation mRtInstanceInfoAllocations[kFramesInFlight]{};
-        std::byte *mRtInstanceInfoMapped[kFramesInFlight]{};
-
-        struct MeshBlas
-        {
-            VkAccelerationStructureKHR mBlas = VK_NULL_HANDLE;
-            VkBuffer mBuffer = VK_NULL_HANDLE;
-            VmaAllocation mAllocation = VK_NULL_HANDLE;
-            VkDeviceAddress mAddress = 0;
-        };
-
-        // Indexed by mesh slot, so the resource store never sees ray tracing.
-        std::vector<MeshBlas> mBlases;
 
         bool mImGuiBackendInitialized = false;
         ImDrawData *mImguiDrawData = nullptr;

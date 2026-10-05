@@ -1,18 +1,15 @@
 /**
- * @file VulkanRayTracing.cpp
+ * @file RayTracer.cpp
  * @author Sumin Park
- * @brief Ray tracing: BLAS, TLAS, SBT, RT pipeline and the traced frame.
+ * @brief Ray tracing: BLAS, TLAS, SBT, RT pipeline and output images.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
-#include <renderer/VulkanRenderer.h>
-#include "CameraBuffer.h"
-#include "FrameSync.h"
+#include "RayTracer.h"
 #include "MaterialStore.h"
 #include "ResourceStore.h"
 #include "VulkanDevice.h"
-#include "VulkanSwapchain.h"
 #include "VulkanUtil.h"
 #include "VulkanPushConstants.h"
 
@@ -21,8 +18,6 @@
 #include <core/math/Align.h>
 
 #include <vk_mem_alloc.h>
-#include <imgui.h>
-#include <imgui_impl_vulkan.h>
 #include <glm/glm.hpp>
 
 #include <array>
@@ -30,7 +25,7 @@
 #include <format>
 #include <vector>
 
-namespace mir
+namespace mir::vk
 {
     namespace
     {
@@ -80,18 +75,103 @@ namespace mir
         }
     }
 
-    bool VulkanRenderer::CreateRtOutputImages()
+    bool RayTracer::Initialize(VulkanDevice &device, VkExtent2D extent, VkDescriptorSetLayout cameraSetLayout)
     {
-        if (!mDevice->RayTracingSupported())
-            return true;
+        mDevice = &device;
 
+        if (!CreateOutputImages(extent) || !CreateScene() || !CreatePipeline(cameraSetLayout))
+            return false;
+
+        WriteDescriptorSets();
+        return true;
+    }
+
+    void RayTracer::Shutdown()
+    {
+        if (mDevice == nullptr)
+            return;
+
+        DestroyBlases();
+        DestroyScene();
+
+        if (mSbtBuffer != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(mDevice->Allocator(), mSbtBuffer, mSbtAllocation);
+            mSbtBuffer = VK_NULL_HANDLE;
+            mSbtAllocation = VK_NULL_HANDLE;
+        }
+
+        if (mPipeline != VK_NULL_HANDLE)
+        {
+            vkDestroyPipeline(mDevice->Handle(), mPipeline, nullptr);
+            mPipeline = VK_NULL_HANDLE;
+        }
+
+        if (mPipelineLayout != VK_NULL_HANDLE)
+        {
+            vkDestroyPipelineLayout(mDevice->Handle(), mPipelineLayout, nullptr);
+            mPipelineLayout = VK_NULL_HANDLE;
+        }
+
+        if (mPool != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorPool(mDevice->Handle(), mPool, nullptr);
+            mPool = VK_NULL_HANDLE;
+        }
+
+        if (mSetLayout != VK_NULL_HANDLE)
+        {
+            vkDestroyDescriptorSetLayout(mDevice->Handle(), mSetLayout, nullptr);
+            mSetLayout = VK_NULL_HANDLE;
+        }
+
+        DestroyOutputImages();
+    }
+
+    bool RayTracer::Resize(VkExtent2D extent)
+    {
+        DestroyOutputImages();
+        if (!CreateOutputImages(extent))
+            return false;
+
+        WriteDescriptorSets();
+        return true;
+    }
+
+    bool RayTracer::BuildMeshBlas(uint32_t meshIndex, const GpuMesh &mesh, uint32_t vertexCount)
+    {
+        if (mBlases.size() <= meshIndex)
+            mBlases.resize(meshIndex + 1);
+        MeshBlas &blas = mBlases[meshIndex];
+
+        VkBuffer scratch = VK_NULL_HANDLE;
+        VmaAllocation scratchAllocation = VK_NULL_HANDLE;
+        bool built = false;
+        const bool submitted = SubmitAndWait(*mDevice, [&](VkCommandBuffer cmd)
+            {
+                built = BuildBLAS(mesh, vertexCount, cmd, blas, scratch, scratchAllocation);
+            });
+
+        if (scratch != VK_NULL_HANDLE)
+            vmaDestroyBuffer(mDevice->Allocator(), scratch, scratchAllocation);
+
+        if (!built || !submitted)
+        {
+            DestroyBLAS(blas);
+            return false;
+        }
+        return true;
+    }
+
+    bool RayTracer::CreateOutputImages(VkExtent2D extent)
+    {
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
             const VkImageCreateInfo imageInfo{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                 .imageType = VK_IMAGE_TYPE_2D,
                 .format = VK_FORMAT_R8G8B8A8_UNORM,
-                .extent{ mSwapchain->Extent().width, mSwapchain->Extent().height, 1 },
+                .extent{ extent.width, extent.height, 1 },
                 .mipLevels = 1,
                 .arrayLayers = 1,
                 .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -103,7 +183,7 @@ namespace mir
             const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
 
             if (vmaCreateImage(mDevice->Allocator(), &imageInfo, &allocInfo,
-                &mRtOutputImages[i], &mRtOutputAllocations[i], nullptr) != VK_SUCCESS)
+                &mOutputImages[i], &mOutputAllocations[i], nullptr) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("vmaCreateImage failed for RT output image {}", i);
                 return false;
@@ -111,7 +191,7 @@ namespace mir
 
             const VkImageViewCreateInfo viewInfo{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                .image = mRtOutputImages[i],
+                .image = mOutputImages[i],
                 .viewType = VK_IMAGE_VIEW_TYPE_2D,
                 .format = VK_FORMAT_R8G8B8A8_UNORM,
                 .subresourceRange{
@@ -121,43 +201,43 @@ namespace mir
                     .baseArrayLayer = 0,
                     .layerCount = 1 } };
 
-            if (vkCreateImageView(mDevice->Handle(), &viewInfo, nullptr, &mRtOutputViews[i]) != VK_SUCCESS)
+            if (vkCreateImageView(mDevice->Handle(), &viewInfo, nullptr, &mOutputViews[i]) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("vkCreateImageView failed for RT output image {}", i);
                 return false;
             }
 
-            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mRtOutputImages[i]),
+            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mOutputImages[i]),
                 std::format("RT output image {}", i).c_str());
         }
 
         return true;
     }
 
-    void VulkanRenderer::DestroyRtOutputImages()
+    void RayTracer::DestroyOutputImages()
     {
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
-            if (mRtOutputViews[i] != VK_NULL_HANDLE)
+            if (mOutputViews[i] != VK_NULL_HANDLE)
             {
-                vkDestroyImageView(mDevice->Handle(), mRtOutputViews[i], nullptr);
-                mRtOutputViews[i] = VK_NULL_HANDLE;
+                vkDestroyImageView(mDevice->Handle(), mOutputViews[i], nullptr);
+                mOutputViews[i] = VK_NULL_HANDLE;
             }
-            if (mRtOutputImages[i] != VK_NULL_HANDLE)
+            if (mOutputImages[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyImage(mDevice->Allocator(), mRtOutputImages[i], mRtOutputAllocations[i]);
-                mRtOutputImages[i] = VK_NULL_HANDLE;
-                mRtOutputAllocations[i] = VK_NULL_HANDLE;
+                vmaDestroyImage(mDevice->Allocator(), mOutputImages[i], mOutputAllocations[i]);
+                mOutputImages[i] = VK_NULL_HANDLE;
+                mOutputAllocations[i] = VK_NULL_HANDLE;
             }
         }
     }
 
-    bool VulkanRenderer::CreateRtPipeline()
+    bool RayTracer::CreatePipeline(VkDescriptorSetLayout cameraSetLayout)
     {
-        VkShaderModule raygenModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("raytrace.rayGenMain.spv"));
-        VkShaderModule missModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("raytrace.missMain.spv"));
-        VkShaderModule shadowMissModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("raytrace.shadowMissMain.spv"));
-        VkShaderModule hitModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("raytrace.closestHitMain.spv"));
+        VkShaderModule raygenModule = CreateShaderModule(mDevice->Handle(), ShaderPath("raytrace.rayGenMain.spv"));
+        VkShaderModule missModule = CreateShaderModule(mDevice->Handle(), ShaderPath("raytrace.missMain.spv"));
+        VkShaderModule shadowMissModule = CreateShaderModule(mDevice->Handle(), ShaderPath("raytrace.shadowMissMain.spv"));
+        VkShaderModule hitModule = CreateShaderModule(mDevice->Handle(), ShaderPath("raytrace.closestHitMain.spv"));
 
         if (raygenModule == VK_NULL_HANDLE || missModule == VK_NULL_HANDLE ||
             shadowMissModule == VK_NULL_HANDLE || hitModule == VK_NULL_HANDLE)
@@ -192,9 +272,9 @@ namespace mir
             .bindingCount = static_cast<uint32_t>(setBindings.size()),
             .pBindings = setBindings.data() };
 
-        if (vkCreateDescriptorSetLayout(mDevice->Handle(), &setLayoutInfo, nullptr, &mRtSetLayout) != VK_SUCCESS)
+        if (vkCreateDescriptorSetLayout(mDevice->Handle(), &setLayoutInfo, nullptr, &mSetLayout) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateRtPipeline: vkCreateDescriptorSetLayout failed");
+            MIR_LOG_CRITICAL("RayTracer::CreatePipeline: vkCreateDescriptorSetLayout failed");
             vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
             vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
             vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
@@ -213,9 +293,9 @@ namespace mir
             .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
             .pPoolSizes = poolSizes.data() };
 
-        if (vkCreateDescriptorPool(mDevice->Handle(), &poolInfo, nullptr, &mRtDescriptorPool) != VK_SUCCESS)
+        if (vkCreateDescriptorPool(mDevice->Handle(), &poolInfo, nullptr, &mPool) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateRtPipeline: vkCreateDescriptorPool failed");
+            MIR_LOG_CRITICAL("RayTracer::CreatePipeline: vkCreateDescriptorPool failed");
             vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
             vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
             vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
@@ -227,13 +307,13 @@ namespace mir
         {
             const VkDescriptorSetAllocateInfo setAllocInfo{
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                .descriptorPool = mRtDescriptorPool,
+                .descriptorPool = mPool,
                 .descriptorSetCount = 1,
-                .pSetLayouts = &mRtSetLayout };
+                .pSetLayouts = &mSetLayout };
 
-            if (vkAllocateDescriptorSets(mDevice->Handle(), &setAllocInfo, &mRtDescriptorSets[i]) != VK_SUCCESS)
+            if (vkAllocateDescriptorSets(mDevice->Handle(), &setAllocInfo, &mSets[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("CreateRtPipeline: descriptor set allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("RayTracer::CreatePipeline: descriptor set allocation failed for frame {}", i);
                 vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
                 vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
                 vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
@@ -242,12 +322,12 @@ namespace mir
             }
         }
 
-        const std::array<VkDescriptorSetLayout, 2> setLayouts{ mRtSetLayout, mCameraBuffer->SetLayout() };
+        const std::array<VkDescriptorSetLayout, 2> setLayouts{ mSetLayout, cameraSetLayout };
 
         const VkPushConstantRange pushConstantRange{
             .stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR,
             .offset = 0,
-            .size = sizeof(vk::RtPushConstants) };
+            .size = sizeof(RtPushConstants) };
 
         const VkPipelineLayoutCreateInfo pipelineLayoutInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -256,9 +336,9 @@ namespace mir
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &pushConstantRange };
 
-        if (vkCreatePipelineLayout(mDevice->Handle(), &pipelineLayoutInfo, nullptr, &mRtPipelineLayout) != VK_SUCCESS)
+        if (vkCreatePipelineLayout(mDevice->Handle(), &pipelineLayoutInfo, nullptr, &mPipelineLayout) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateRtPipeline: vkCreatePipelineLayout failed");
+            MIR_LOG_CRITICAL("RayTracer::CreatePipeline: vkCreatePipelineLayout failed");
             vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
             vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
             vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
@@ -317,10 +397,10 @@ namespace mir
             .groupCount = static_cast<uint32_t>(groups.size()),
             .pGroups = groups.data(),
             .maxPipelineRayRecursionDepth = 2,
-            .layout = mRtPipelineLayout };
+            .layout = mPipelineLayout };
 
         const VkResult pipelineResult = vkCreateRayTracingPipelinesKHR(
-            mDevice->Handle(), VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &mRtPipeline);
+            mDevice->Handle(), VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &mPipeline);
 
         vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
         vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
@@ -329,7 +409,7 @@ namespace mir
 
         if (pipelineResult != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateRtPipeline: vkCreateRayTracingPipelinesKHR failed: {}", static_cast<int>(pipelineResult));
+            MIR_LOG_CRITICAL("RayTracer::CreatePipeline: vkCreateRayTracingPipelinesKHR failed: {}", static_cast<int>(pipelineResult));
             return false;
         }
 
@@ -340,10 +420,10 @@ namespace mir
         const VkDeviceSize sbtSize = regionSize * kGroupCount;
 
         std::vector<std::byte> handles(static_cast<size_t>(handleSize) * kGroupCount);
-        if (vkGetRayTracingShaderGroupHandlesKHR(mDevice->Handle(), mRtPipeline, 0, kGroupCount,
+        if (vkGetRayTracingShaderGroupHandlesKHR(mDevice->Handle(), mPipeline, 0, kGroupCount,
             handles.size(), handles.data()) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateRtPipeline: vkGetRayTracingShaderGroupHandlesKHR failed");
+            MIR_LOG_CRITICAL("RayTracer::CreatePipeline: vkGetRayTracingShaderGroupHandlesKHR failed");
             return false;
         }
 
@@ -362,7 +442,7 @@ namespace mir
         if (vmaCreateBufferWithAlignment(mDevice->Allocator(), &sbtBufferInfo, &sbtAllocInfo,
             mDevice->RtProperties().shaderGroupBaseAlignment, &mSbtBuffer, &mSbtAllocation, &sbtInfo) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateRtPipeline: SBT buffer allocation failed");
+            MIR_LOG_CRITICAL("RayTracer::CreatePipeline: SBT buffer allocation failed");
             return false;
         }
 
@@ -379,7 +459,7 @@ namespace mir
         return true;
     }
 
-    void VulkanRenderer::WriteRtDescriptorSets()
+    void RayTracer::WriteDescriptorSets()
     {
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
@@ -389,29 +469,29 @@ namespace mir
                 .pAccelerationStructures = &mTlas[i] };
 
             const VkDescriptorImageInfo imageInfo{
-                .imageView = mRtOutputViews[i],
+                .imageView = mOutputViews[i],
                 .imageLayout = VK_IMAGE_LAYOUT_GENERAL };
 
             const VkDescriptorBufferInfo instanceInfoBufferInfo{
-                .buffer = mRtInstanceInfoBuffers[i],
+                .buffer = mInstanceInfoBuffers[i],
                 .offset = 0,
                 .range = VK_WHOLE_SIZE };
 
             const std::array<VkWriteDescriptorSet, 3> writes{ {
                 { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                  .pNext = &accelWrite,
-                 .dstSet = mRtDescriptorSets[i],
+                 .dstSet = mSets[i],
                  .dstBinding = 0,
                  .descriptorCount = 1,
                  .descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR },
                 { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                 .dstSet = mRtDescriptorSets[i],
+                 .dstSet = mSets[i],
                  .dstBinding = 1,
                  .descriptorCount = 1,
                  .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                  .pImageInfo = &imageInfo },
                 { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                 .dstSet = mRtDescriptorSets[i],
+                 .dstSet = mSets[i],
                  .dstBinding = 2,
                  .descriptorCount = 1,
                  .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -421,34 +501,34 @@ namespace mir
         }
     }
 
-    bool VulkanRenderer::CreateRtScene()
+    bool RayTracer::CreateScene()
     {
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
             VmaAllocationInfo instanceInfo{};
-            if (!vk::CreateBuffer(mDevice->Allocator(), sizeof(VkAccelerationStructureInstanceKHR) * kMaxRtInstances,
+            if (!CreateBuffer(mDevice->Allocator(), sizeof(VkAccelerationStructureInstanceKHR) * kMaxInstances,
                 VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
                 mInstanceBuffers[i], mInstanceAllocations[i], &instanceInfo))
             {
-                MIR_LOG_CRITICAL("CreateRtScene: instance buffer allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("RayTracer::CreateScene: instance buffer allocation failed for frame {}", i);
                 return false;
             }
             mInstanceMapped[i] = static_cast<std::byte *>(instanceInfo.pMappedData);
 
             VmaAllocationInfo instanceRtInfo{};
-            if (!vk::CreateBuffer(mDevice->Allocator(), sizeof(RtInstanceInfo) * kMaxRtInstances,
+            if (!CreateBuffer(mDevice->Allocator(), sizeof(RtInstanceInfo) * kMaxInstances,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
-                mRtInstanceInfoBuffers[i], mRtInstanceInfoAllocations[i], &instanceRtInfo))
+                mInstanceInfoBuffers[i], mInstanceInfoAllocations[i], &instanceRtInfo))
             {
-                MIR_LOG_CRITICAL("CreateRtScene: instance info buffer allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("RayTracer::CreateScene: instance info buffer allocation failed for frame {}", i);
                 return false;
             }
-            mRtInstanceInfoMapped[i] = static_cast<std::byte *>(instanceRtInfo.pMappedData);
+            mInstanceInfoMapped[i] = static_cast<std::byte *>(instanceRtInfo.pMappedData);
 
             const VkAccelerationStructureGeometryInstancesDataKHR instancesData{
                 .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR,
@@ -467,21 +547,21 @@ namespace mir
                 .geometryCount = 1,
                 .pGeometries = &geometry };
 
-            const AccelBuildSizes sizes = QueryAccelBuildSizes(mDevice->Handle(), buildInfo, kMaxRtInstances);
+            const AccelBuildSizes sizes = QueryAccelBuildSizes(mDevice->Handle(), buildInfo, kMaxInstances);
 
             if (!CreateAccelerationStructureObject(sizes.accelerationStructureSize,
                 VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
                 mTlasBuffers[i], mTlasAllocations[i], mTlas[i]))
             {
-                MIR_LOG_CRITICAL("CreateRtScene: TLAS creation failed for frame {}", i);
+                MIR_LOG_CRITICAL("RayTracer::CreateScene: TLAS creation failed for frame {}", i);
                 return false;
             }
 
-            if (!vk::CreateBuffer(mDevice->Allocator(), sizes.buildScratchSize,
+            if (!CreateBuffer(mDevice->Allocator(), sizes.buildScratchSize,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 0, mTlasScratchBuffers[i], mTlasScratchAllocations[i], nullptr))
             {
-                MIR_LOG_CRITICAL("CreateRtScene: TLAS scratch buffer allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("RayTracer::CreateScene: TLAS scratch buffer allocation failed for frame {}", i);
                 return false;
             }
             mTlasScratchAddresses[i] = GetBufferAddress(mDevice->Handle(), mTlasScratchBuffers[i]);
@@ -493,7 +573,7 @@ namespace mir
         return true;
     }
 
-    void VulkanRenderer::DestroyRtScene()
+    void RayTracer::DestroyScene()
     {
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
@@ -521,36 +601,37 @@ namespace mir
                 mInstanceAllocations[i] = VK_NULL_HANDLE;
                 mInstanceMapped[i] = nullptr;
             }
-            if (mRtInstanceInfoBuffers[i] != VK_NULL_HANDLE)
+            if (mInstanceInfoBuffers[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyBuffer(mDevice->Allocator(), mRtInstanceInfoBuffers[i], mRtInstanceInfoAllocations[i]);
-                mRtInstanceInfoBuffers[i] = VK_NULL_HANDLE;
-                mRtInstanceInfoAllocations[i] = VK_NULL_HANDLE;
-                mRtInstanceInfoMapped[i] = nullptr;
+                vmaDestroyBuffer(mDevice->Allocator(), mInstanceInfoBuffers[i], mInstanceInfoAllocations[i]);
+                mInstanceInfoBuffers[i] = VK_NULL_HANDLE;
+                mInstanceInfoAllocations[i] = VK_NULL_HANDLE;
+                mInstanceInfoMapped[i] = nullptr;
             }
             mTlasScratchAddresses[i] = 0;
         }
     }
 
-    void VulkanRenderer::RecordTlasBuild(VkCommandBuffer cmd, uint32_t frameIndex, std::span<const DrawItem> items)
+    void RayTracer::RecordTlasBuild(VkCommandBuffer cmd, uint32_t frameIndex, std::span<const DrawItem> items,
+        const ResourceStore &resources, const MaterialStore &materials)
     {
         auto *const instances = reinterpret_cast<VkAccelerationStructureInstanceKHR *>(mInstanceMapped[frameIndex]);
-        auto *const instanceInfos = reinterpret_cast<RtInstanceInfo *>(mRtInstanceInfoMapped[frameIndex]);
+        auto *const instanceInfos = reinterpret_cast<RtInstanceInfo *>(mInstanceInfoMapped[frameIndex]);
 
         uint32_t instanceCount = 0;
         for (const DrawItem &item : items)
         {
-            if (instanceCount >= kMaxRtInstances)
+            if (instanceCount >= kMaxInstances)
             {
-                if (!mWarnedRtInstanceCap)
+                if (!mWarnedInstanceCap)
                 {
-                    MIR_LOG_WARN("RecordTlasBuild: more than {} draws; the rest are not traced", kMaxRtInstances);
-                    mWarnedRtInstanceCap = true;
+                    MIR_LOG_WARN("RecordTlasBuild: more than {} draws; the rest are not traced", kMaxInstances);
+                    mWarnedInstanceCap = true;
                 }
                 break;
             }
 
-            const vk::GpuMesh *const mesh = mResources->FindMesh(item.mesh);
+            const GpuMesh *const mesh = resources.FindMesh(item.mesh);
             if (mesh == nullptr || item.mesh.mIndex >= mBlases.size() || mBlases[item.mesh.mIndex].mBlas == VK_NULL_HANDLE)
                 continue;
 
@@ -562,7 +643,7 @@ namespace mir
                 .flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR,
                 .accelerationStructureReference = mBlases[item.mesh.mIndex].mAddress };
 
-            const vk::GpuMaterial *const material = mMaterialStore->FindOrDefault(item.material);
+            const GpuMaterial *const material = materials.FindOrDefault(item.material);
 
             instanceInfos[instanceCount] = RtInstanceInfo{
                 .vertexAddress = GetBufferAddress(mDevice->Handle(), mesh->mVertexBuffer),
@@ -582,7 +663,7 @@ namespace mir
 
         const VkDeviceSize instanceInfoBytes = sizeof(RtInstanceInfo) * instanceCount;
         if (instanceInfoBytes > 0)
-            vmaFlushAllocation(mDevice->Allocator(), mRtInstanceInfoAllocations[frameIndex], 0, instanceInfoBytes);
+            vmaFlushAllocation(mDevice->Allocator(), mInstanceInfoAllocations[frameIndex], 0, instanceInfoBytes);
 
         const VkAccelerationStructureGeometryInstancesDataKHR instancesData{
             .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR,
@@ -610,10 +691,10 @@ namespace mir
         vkCmdBuildAccelerationStructuresKHR(cmd, 1, &buildInfo, &pRange);
     }
 
-    bool VulkanRenderer::CreateAccelerationStructureObject(VkDeviceSize size, VkAccelerationStructureTypeKHR type,
+    bool RayTracer::CreateAccelerationStructureObject(VkDeviceSize size, VkAccelerationStructureTypeKHR type,
         VkBuffer &outBuffer, VmaAllocation &outAllocation, VkAccelerationStructureKHR &outAS)
     {
-        if (!vk::CreateBuffer(mDevice->Allocator(), size,
+        if (!CreateBuffer(mDevice->Allocator(), size,
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             0, outBuffer, outAllocation, nullptr))
             return false;
@@ -634,7 +715,7 @@ namespace mir
         return true;
     }
 
-    void VulkanRenderer::DestroyBLAS(MeshBlas &blas)
+    void RayTracer::DestroyBLAS(MeshBlas &blas)
     {
         if (blas.mBlas != VK_NULL_HANDLE)
         {
@@ -650,20 +731,20 @@ namespace mir
         blas.mAddress = 0;
     }
 
-    void VulkanRenderer::DestroyMeshBlas(uint32_t meshIndex)
+    void RayTracer::DestroyMeshBlas(uint32_t meshIndex)
     {
         if (meshIndex < mBlases.size())
             DestroyBLAS(mBlases[meshIndex]);
     }
 
-    void VulkanRenderer::DestroyBlases()
+    void RayTracer::DestroyBlases()
     {
         for (MeshBlas &blas : mBlases)
             DestroyBLAS(blas);
         mBlases.clear();
     }
 
-    bool VulkanRenderer::BuildBLAS(const vk::GpuMesh &mesh, uint32_t vertexCount, VkCommandBuffer cmd, MeshBlas &outBlas,
+    bool RayTracer::BuildBLAS(const GpuMesh &mesh, uint32_t vertexCount, VkCommandBuffer cmd, MeshBlas &outBlas,
         VkBuffer &outScratchBuffer, VmaAllocation &outScratchAllocation)
     {
         const VkDeviceAddress vertexAddress = GetBufferAddress(mDevice->Handle(), mesh.mVertexBuffer);
@@ -704,7 +785,7 @@ namespace mir
             return false;
         }
 
-        if (!vk::CreateBuffer(mDevice->Allocator(), sizes.buildScratchSize,
+        if (!CreateBuffer(mDevice->Allocator(), sizes.buildScratchSize,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             0, outScratchBuffer, outScratchAllocation, nullptr))
         {
@@ -741,29 +822,16 @@ namespace mir
         return true;
     }
 
-    void VulkanRenderer::RecordRtFrame(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views)
+    void RayTracer::Record(VkCommandBuffer cmd, uint32_t frame, std::span<const DrawItem> items, const VkRect2D &rect,
+        VkDescriptorSet cameraSet, uint32_t cameraOffset, const ResourceStore &resources,
+        const MaterialStore &materials)
     {
-        const RenderView &view = views[0];
-
-        const VkRect2D rect = vk::ResolveViewRect(view.rect, mSwapchain->Extent());
-
-        const uint32_t cameraOffset = WriteCameraData(view, 0);
-
-        if (mDevice->ValidationEnabled())
-        {
-            const VkDebugUtilsLabelEXT label{
-                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
-                .pLabelName = "Ray Trace Pass",
-                .color{ 0.0f, 1.0f, 1.0f, 1.0f } };
-            vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
-        }
-
-        vk::ImageBarrier(cmd, mRtOutputImages[mFrameSync->Index()], VK_IMAGE_ASPECT_COLOR_BIT,
+        ImageBarrier(cmd, mOutputImages[frame], VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
-        RecordTlasBuild(cmd, mFrameSync->Index(), view.items);
+        RecordTlasBuild(cmd, frame, items, resources, materials);
 
         const VkMemoryBarrier2 tlasBarrier{
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
@@ -779,119 +847,24 @@ namespace mir
 
         if (rect.extent.width > 0 && rect.extent.height > 0)
         {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, mRtPipeline);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, mPipeline);
 
-            const std::array<VkDescriptorSet, 2> sets{ mRtDescriptorSets[mFrameSync->Index()], mCameraBuffer->Set(mFrameSync->Index()) };
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, mRtPipelineLayout,
+            const std::array<VkDescriptorSet, 2> sets{ mSets[frame], cameraSet };
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, mPipelineLayout,
                 0, static_cast<uint32_t>(sets.size()), sets.data(), 1, &cameraOffset);
 
-            const vk::RtPushConstants pushConstants{
+            const RtPushConstants pushConstants{
                 .outputOffset{ static_cast<uint32_t>(rect.offset.x), static_cast<uint32_t>(rect.offset.y) } };
-            vkCmdPushConstants(cmd, mRtPipelineLayout, VK_SHADER_STAGE_RAYGEN_BIT_KHR,
-                0, sizeof(vk::RtPushConstants), &pushConstants);
+            vkCmdPushConstants(cmd, mPipelineLayout, VK_SHADER_STAGE_RAYGEN_BIT_KHR,
+                0, sizeof(RtPushConstants), &pushConstants);
 
             vkCmdTraceRaysKHR(cmd, &mSbtRaygenRegion, &mSbtMissRegion, &mSbtHitRegion, &mSbtCallableRegion,
                 rect.extent.width, rect.extent.height, 1);
         }
 
-        vk::ImageBarrier(cmd, mRtOutputImages[mFrameSync->Index()], VK_IMAGE_ASPECT_COLOR_BIT,
+        ImageBarrier(cmd, mOutputImages[frame], VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-
-        vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-
-        const VkClearColorValue clearColor{ .float32{ mClearColor.r, mClearColor.g, mClearColor.b, mClearColor.a } };
-        const VkImageSubresourceRange wholeImage{
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 1 };
-        vkCmdClearColorImage(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            &clearColor, 1, &wholeImage);
-
-        vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-
-        if (rect.extent.width > 0 && rect.extent.height > 0)
-        {
-            const int32_t left = rect.offset.x;
-            const int32_t top = rect.offset.y;
-            const int32_t right = left + static_cast<int32_t>(rect.extent.width);
-            const int32_t bottom = top + static_cast<int32_t>(rect.extent.height);
-            const VkImageBlit blitRegion{
-                .srcSubresource{ .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1 },
-                .srcOffsets{ { left, top, 0 },{ right, bottom, 1 } },
-                .dstSubresource{ .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1 },
-                .dstOffsets{ { left, top, 0 },{ right, bottom, 1 } } };
-
-            vkCmdBlitImage(cmd,
-                mRtOutputImages[mFrameSync->Index()], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                mSwapchain->Image(imageIndex), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                1, &blitRegion, VK_FILTER_NEAREST);
-        }
-
-        if (mImguiDrawData != nullptr)
-        {
-            vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
-
-            const VkRenderingAttachmentInfo colorAttachment{
-                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = mSwapchain->View(imageIndex),
-                .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-                .storeOp = VK_ATTACHMENT_STORE_OP_STORE };
-
-            const VkRenderingInfo renderingInfo{
-                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                .renderArea{ .offset{ 0, 0 }, .extent = mSwapchain->Extent() },
-                .layerCount = 1,
-                .colorAttachmentCount = 1,
-                .pColorAttachments = &colorAttachment };
-
-            vkCmdBeginRendering(cmd, &renderingInfo);
-            ImGui_ImplVulkan_RenderDrawData(mImguiDrawData, cmd);
-            vkCmdEndRendering(cmd);
-
-            vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_NONE, 0);
-        }
-        else
-        {
-            vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                VK_PIPELINE_STAGE_2_NONE, 0);
-        }
-
-        if (mDevice->ValidationEnabled())
-            vkCmdEndDebugUtilsLabelEXT(cmd);
-    }
-
-    void VulkanRenderer::TraceFrame(std::span<const RenderView> views)
-    {
-        if (!mDevice->RayTracingSupported())
-        {
-            MIR_LOG_ERROR("TraceFrame: called without ray tracing support; ignored");
-            return;
-        }
-
-        if (views.empty())
-            return;
-
-        const std::optional<vk::FrameContext> frame = BeginFrame();
-        if (!frame)
-            return;
-
-        RecordRtFrame(frame->cmd, frame->imageIndex, views);
-        mFrameSync->End(*mSwapchain, *frame);
     }
 }

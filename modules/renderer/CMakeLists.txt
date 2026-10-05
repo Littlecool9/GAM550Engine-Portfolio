@@ -48,6 +48,7 @@ target_sources(engine_renderer PRIVATE
     src/renderer/vulkan/FrameSync.cpp
     src/renderer/vulkan/MaterialStore.cpp
     src/renderer/vulkan/ModelDescriptors.cpp
+    src/renderer/vulkan/RayTracer.cpp
     src/renderer/vulkan/ResourceStore.cpp
     src/renderer/vulkan/ShadowMaps.cpp
     src/renderer/vulkan/VmaImpl.cpp
@@ -55,7 +56,6 @@ target_sources(engine_renderer PRIVATE
     src/renderer/vulkan/VulkanDevice.cpp
     src/renderer/vulkan/VulkanFrame.cpp
     src/renderer/vulkan/VulkanImGui.cpp
-    src/renderer/vulkan/VulkanRayTracing.cpp
     src/renderer/vulkan/VulkanSky.cpp
     src/renderer/vulkan/VulkanSwapchain.cpp
     src/renderer/vulkan/VulkanUtil.cpp

@@ -13,6 +13,7 @@
 #include "CameraBuffer.h"
 #include "FrameSync.h"
 #include "MaterialStore.h"
+#include "RayTracer.h"
 #include "ModelDescriptors.h"
 #include "ResourceStore.h"
 #include "ShadowMaps.h"
@@ -225,6 +226,122 @@ namespace mir
 
         if (mCaptureBuffer != VK_NULL_HANDLE)
             FinishCapture(submitted);
+    }
+
+    void VulkanRenderer::RecordRtFrame(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views)
+    {
+        const RenderView &view = views[0];
+
+        const VkRect2D rect = vk::ResolveViewRect(view.rect, mSwapchain->Extent());
+
+        const uint32_t cameraOffset = WriteCameraData(view, 0);
+
+        if (mDevice->ValidationEnabled())
+        {
+            const VkDebugUtilsLabelEXT label{
+                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
+                .pLabelName = "Ray Trace Pass",
+                .color{ 0.0f, 1.0f, 1.0f, 1.0f } };
+            vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
+        }
+
+        mRayTracer->Record(cmd, mFrameSync->Index(), view.items, rect, mCameraBuffer->Set(mFrameSync->Index()),
+            cameraOffset, *mResources, *mMaterialStore);
+
+        vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, 0,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+        const VkClearColorValue clearColor{ .float32{ mClearColor.r, mClearColor.g, mClearColor.b, mClearColor.a } };
+        const VkImageSubresourceRange wholeImage{
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 1 };
+        vkCmdClearColorImage(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            &clearColor, 1, &wholeImage);
+
+        vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+
+        if (rect.extent.width > 0 && rect.extent.height > 0)
+        {
+            const int32_t left = rect.offset.x;
+            const int32_t top = rect.offset.y;
+            const int32_t right = left + static_cast<int32_t>(rect.extent.width);
+            const int32_t bottom = top + static_cast<int32_t>(rect.extent.height);
+            const VkImageBlit blitRegion{
+                .srcSubresource{ .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1 },
+                .srcOffsets{ { left, top, 0 },{ right, bottom, 1 } },
+                .dstSubresource{ .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1 },
+                .dstOffsets{ { left, top, 0 },{ right, bottom, 1 } } };
+
+            vkCmdBlitImage(cmd,
+                mRayTracer->OutputImage(mFrameSync->Index()), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                mSwapchain->Image(imageIndex), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &blitRegion, VK_FILTER_NEAREST);
+        }
+
+        if (mImguiDrawData != nullptr)
+        {
+            vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+
+            const VkRenderingAttachmentInfo colorAttachment{
+                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                .imageView = mSwapchain->View(imageIndex),
+                .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
+                .storeOp = VK_ATTACHMENT_STORE_OP_STORE };
+
+            const VkRenderingInfo renderingInfo{
+                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                .renderArea{ .offset{ 0, 0 }, .extent = mSwapchain->Extent() },
+                .layerCount = 1,
+                .colorAttachmentCount = 1,
+                .pColorAttachments = &colorAttachment };
+
+            vkCmdBeginRendering(cmd, &renderingInfo);
+            ImGui_ImplVulkan_RenderDrawData(mImguiDrawData, cmd);
+            vkCmdEndRendering(cmd);
+
+            vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_NONE, 0);
+        }
+        else
+        {
+            vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_NONE, 0);
+        }
+
+        if (mDevice->ValidationEnabled())
+            vkCmdEndDebugUtilsLabelEXT(cmd);
+    }
+
+    void VulkanRenderer::TraceFrame(std::span<const RenderView> views)
+    {
+        if (!mDevice->RayTracingSupported())
+        {
+            MIR_LOG_ERROR("TraceFrame: called without ray tracing support; ignored");
+            return;
+        }
+
+        if (views.empty())
+            return;
+
+        const std::optional<vk::FrameContext> frame = BeginFrame();
+        if (!frame)
+            return;
+
+        RecordRtFrame(frame->cmd, frame->imageIndex, views);
+        mFrameSync->End(*mSwapchain, *frame);
     }
 
     uint32_t VulkanRenderer::WriteCameraData(const RenderView &view, uint32_t viewIndex)
