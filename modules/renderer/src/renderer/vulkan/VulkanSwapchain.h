@@ -37,6 +37,9 @@ namespace mir::vk
 
         bool NeedsRecreate(const ISurfaceProvider &window) const;
 
+        // Forces a recreate next frame, even when the extent already matches the window.
+        void MarkOutOfDate() { mOutOfDate = true; }
+
         // False when the frame cannot proceed: `signal` was not signalled.
         bool Acquire(VkSemaphore signal, uint32_t &outImageIndex);
 

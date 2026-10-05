@@ -249,7 +249,8 @@ namespace mir
         void ResetModelFrame(uint32_t frame);
         void DestroyModelResources(bool shutdown);
         bool RecordCapture(VkCommandBuffer cmd, uint32_t imageIndex);
-        void FinishCapture();
+        // Writes the PNG only for a submitted frame; frees the capture buffer either way.
+        void FinishCapture(bool submitted);
         VkPipeline BuildPipeline(const MaterialDesc &desc);
         bool CreateSkyPipeline();
         void DestroyMeshes();

@@ -92,10 +92,12 @@ namespace mir
 
         // The swapchain cannot reach ray tracing, so the facade resizes its output images.
         DestroyRtOutputImages();
-        if (!mSwapchain->Recreate(*mWindow))
+        if (!mSwapchain->Recreate(*mWindow) || !CreateRtOutputImages())
+        {
+            // Recreate may have cleared the flag already; set it so the next frame retries.
+            mSwapchain->MarkOutOfDate();
             return false;
-        if (!CreateRtOutputImages())
-            return false;
+        }
 
         if (mDevice->RayTracingSupported())
             WriteRtDescriptorSets();

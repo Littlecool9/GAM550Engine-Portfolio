@@ -102,6 +102,10 @@ namespace mir::vk
 
     std::optional<FrameContext> FrameSync::Begin(VulkanSwapchain &swapchain)
     {
+        // The failed frame's value is never signalled, so waiting on it would never return.
+        if (mStopped)
+            return std::nullopt;
+
         const uint64_t signalValue = mNextSignalValue++;
         const uint64_t waitValue = signalValue - kFramesInFlight;
 
@@ -112,7 +116,13 @@ namespace mir::vk
             .pValues = &waitValue };
 
         // wait for next image to comeback from framesin flight
-        vkWaitSemaphores(mDevice->Handle(), &waitInfo, UINT64_MAX);
+        if (vkWaitSemaphores(mDevice->Handle(), &waitInfo, UINT64_MAX) != VK_SUCCESS)
+        {
+            MIR_LOG_CRITICAL("vkWaitSemaphores failed; rendering stopped");
+            mStopped = true;
+            --mNextSignalValue;
+            return std::nullopt;
+        }
 
         // Whole-pool reset, not per-buffer.
         vkResetCommandPool(mDevice->Handle(), mCmdPools[mFrameIndex], 0);
@@ -136,7 +146,7 @@ namespace mir::vk
         return FrameContext{ .cmd = cmd, .imageIndex = imageIndex, .signalValue = signalValue };
     }
 
-    void FrameSync::End(VulkanSwapchain &swapchain, const FrameContext &frame)
+    bool FrameSync::End(VulkanSwapchain &swapchain, const FrameContext &frame)
     {
         vkEndCommandBuffer(frame.cmd);
 
@@ -167,14 +177,17 @@ namespace mir::vk
             .signalSemaphoreInfoCount = 2,
             .pSignalSemaphoreInfos = signalSems };
 
-        if (vkQueueSubmit2(mDevice->Queue(), 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS)
+        const VkResult result = vkQueueSubmit2(mDevice->Queue(), 1, &submit, VK_NULL_HANDLE);
+        if (result != VK_SUCCESS)
         {
-            MIR_LOG_ERROR("vkQueueSubmit2 failed");
-            return;
+            MIR_LOG_CRITICAL("vkQueueSubmit2 failed: {}; rendering stopped", static_cast<int>(result));
+            mStopped = true;
+            return false;
         }
 
         swapchain.Present(frame.imageIndex);
 
         mFrameIndex = (mFrameIndex + 1) % kFramesInFlight;
+        return true;
     }
 }

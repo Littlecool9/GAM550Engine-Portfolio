@@ -196,7 +196,7 @@ namespace mir
 
     std::optional<vk::FrameContext> VulkanRenderer::BeginFrame()
     {
-        if (mWindow->Width() == 0 || mWindow->Height() == 0)
+        if (mFrameSync->Stopped() || mWindow->Width() == 0 || mWindow->Height() == 0)
             return std::nullopt;
 
         if (mSwapchain->NeedsRecreate(*mWindow) && !RecreateSwapchain())
@@ -217,10 +217,9 @@ namespace mir
 
         RecordShadowPasses(frame->cmd);
         RecordCommands(frame->cmd, frame->imageIndex, views);
-        mFrameSync->End(*mSwapchain, *frame);
+        const bool submitted = mFrameSync->End(*mSwapchain, *frame);
 
-        // Waits for the queue to go idle, so the capture is complete.
         if (mCaptureBuffer != VK_NULL_HANDLE)
-            FinishCapture();
+            FinishCapture(submitted);
     }
 }

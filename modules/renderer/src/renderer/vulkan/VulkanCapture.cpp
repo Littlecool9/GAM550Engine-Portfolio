@@ -81,23 +81,31 @@ namespace mir
         vkCmdPipelineBarrier2(cmd, &dep);
         return true;
     }
-    void VulkanRenderer::FinishCapture()
+    void VulkanRenderer::FinishCapture(bool submitted)
     {
-        vkQueueWaitIdle(mDevice->Queue());
-        vmaInvalidateAllocation(mDevice->Allocator(), mCaptureAllocation, 0, VK_WHOLE_SIZE);
-        VmaAllocationInfo info{};
-        vmaGetAllocationInfo(mDevice->Allocator(), mCaptureAllocation, &info);
-        const auto size = size_t(mSwapchain->Extent().width) * mSwapchain->Extent().height * 4;
-        const auto *begin = static_cast<const uint8_t *>(info.pMappedData);
-        std::vector<uint8_t> pixels(begin, begin + size);
-        if (mSwapchain->Format() == VK_FORMAT_B8G8R8A8_SRGB)
-            for (size_t i = 0; i < size; i += 4)
-                std::swap(pixels[i], pixels[i + 2]);
-        if (!stbi_write_png(mCapturePath.string().c_str(), int(mSwapchain->Extent().width), int(mSwapchain->Extent().height), 4,
-            pixels.data(), int(mSwapchain->Extent().width * 4)))
-            MIR_LOG_ERROR("cannot write frame capture: {}", mCapturePath.string());
+        // Unsubmitted: no GPU work references the buffer, so it can be freed without a wait.
+        if (!submitted)
+        {
+            MIR_LOG_ERROR("frame capture dropped, the frame was not submitted: {}", mCapturePath.string());
+        }
         else
-            MIR_LOG_INFO("Captured frame: {}", mCapturePath.string());
+        {
+            vkQueueWaitIdle(mDevice->Queue());
+            vmaInvalidateAllocation(mDevice->Allocator(), mCaptureAllocation, 0, VK_WHOLE_SIZE);
+            VmaAllocationInfo info{};
+            vmaGetAllocationInfo(mDevice->Allocator(), mCaptureAllocation, &info);
+            const auto size = size_t(mSwapchain->Extent().width) * mSwapchain->Extent().height * 4;
+            const auto *begin = static_cast<const uint8_t *>(info.pMappedData);
+            std::vector<uint8_t> pixels(begin, begin + size);
+            if (mSwapchain->Format() == VK_FORMAT_B8G8R8A8_SRGB)
+                for (size_t i = 0; i < size; i += 4)
+                    std::swap(pixels[i], pixels[i + 2]);
+            if (!stbi_write_png(mCapturePath.string().c_str(), int(mSwapchain->Extent().width), int(mSwapchain->Extent().height), 4,
+                pixels.data(), int(mSwapchain->Extent().width * 4)))
+                MIR_LOG_ERROR("cannot write frame capture: {}", mCapturePath.string());
+            else
+                MIR_LOG_INFO("Captured frame: {}", mCapturePath.string());
+        }
         vmaDestroyBuffer(mDevice->Allocator(), mCaptureBuffer, mCaptureAllocation);
         mCaptureBuffer = VK_NULL_HANDLE;
         mCaptureAllocation = VK_NULL_HANDLE;

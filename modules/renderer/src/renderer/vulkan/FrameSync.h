@@ -34,13 +34,16 @@ namespace mir::vk
         void Shutdown();
 
         // Waits for this frame slot, acquires an image and begins its command buffer.
-        // nullopt when acquire fails; the frame is skipped and nothing was submitted.
+        // nullopt when acquire fails or Stopped(); the frame is skipped and nothing was submitted.
         std::optional<FrameContext> Begin(VulkanSwapchain &swapchain);
 
-        // Ends, submits and presents the frame, then moves to the next slot.
-        void End(VulkanSwapchain &swapchain, const FrameContext &frame);
+        // False when the submit failed and nothing was presented.
+        bool End(VulkanSwapchain &swapchain, const FrameContext &frame);
 
         uint32_t Index() const { return mFrameIndex; }
+
+        // True once a submit or wait failed; no frame begins after that.
+        bool Stopped() const { return mStopped; }
 
     private:
         VulkanDevice *mDevice = nullptr;
@@ -56,5 +59,6 @@ namespace mir::vk
         uint64_t mNextSignalValue = kFramesInFlight + 1;
 
         uint32_t mFrameIndex = 0;
+        bool mStopped = false;
     };
 }
