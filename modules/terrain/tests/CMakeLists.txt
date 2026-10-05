@@ -1,5 +1,5 @@
 engine_add_module_tests(terrain
-    MockTerrainSource.tests.cpp
+    TerrainHeightQuery.tests.cpp
     TerrainIdentity.tests.cpp
     TerrainLayout.tests.cpp
     TerrainPackFormat.tests.cpp

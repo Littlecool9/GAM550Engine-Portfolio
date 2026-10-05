@@ -4,13 +4,14 @@ Terrain data that does not depend on a GPU or a physics engine: tile addresses,
 the shared sample grid, finite map bounds, placement in the Scene world, the
 identities of a terrain's source, baked format and release, the versioned files
 a baked release is stored in, with a reader that fetches one tile by byte
-range, and the canonical surface over a release's final samples. It does not
-bake, publish, stream, mesh or collide terrain yet; those are later P1 issues
-and P3. Generating heights is offline work: the `terrain_bake` library in
-`tools/TerrainTool/` reads a source recipe and produces source heights on this
-module's grid; the engine never links it.
+range, the canonical surface over a release's final samples, and a resident
+height query over one release. It does not bake, publish, stream, mesh or
+collide terrain yet; those are later P1 issues and P3. Generating heights is
+offline work: the `terrain_bake` library in `tools/TerrainTool/` reads a source
+recipe and produces source heights on this module's grid; the engine never
+links it.
 
-`mir::terrain` · depends `mir::assets`, `mir::core` (public) · API `modules/terrain/include/terrain/` · maintainer Jackey Cen · reviewed 2026-10-01
+`mir::terrain` · depends `mir::assets`, `mir::core` (public) · API `modules/terrain/include/terrain/` · maintainer Jackey Cen · reviewed 2026-10-02
 
 ## Model
 
@@ -73,6 +74,39 @@ A `TerrainReleaseHandle` is bound to the release it opened. When a later
 publish moves `current`, the handle keeps reading its own files, which are
 never changed after publication.
 
+### Height queries
+
+A `TerrainHeightQuery` holds the final heights of one release in memory and
+answers height requests from them. The caller names the release it is bound
+to and the coarsest sample spacing it accepts; the result says how the answer
+relates to that requirement instead of returning a bare float:
+
+```cpp
+const TerrainReleaseHandle &handle = *release.value;
+TerrainHeightQuery query = TerrainHeightQuery::Create(handle);  // reads nothing
+PreloadAllTerrainTiles(query, handle);                          // P1: synchronous, outside queries
+const TerrainHeightResult r = query.HeightAt(world, placement, {handle.Info(), 1.0});
+switch (r.status)
+{
+case TerrainHeightStatus::MeetsRequirement:     Land(r.worldPoint->Meters().y); break;
+case TerrainHeightStatus::CoarserAtSourceLimit: Decide(r.spacing, r.maxError); break; // never gets finer
+case TerrainHeightStatus::CoarserWhileLoading:
+case TerrainHeightStatus::Loading:              Wait(); break;                       // requested
+default:                                        Protect(r.failure); break;           // OutsideMap, Failed
+}
+```
+
+A query never reads files or blocks. When the data it needs is not resident it
+records a `TerrainPayloadRequest` (release, tile key, layer, spacing) once; a
+loader takes them with `TakePayloadRequests` and hands back `TileHeights` with
+`Insert`, or a failure with `MarkFailed`. In P1 nothing drains the requests:
+the release is preloaded whole. P3's scheduler takes over that loop.
+
+A query has one or more *layers*, finest first, each a layout of one spacing
+over the same tiles. A P1 release is exactly one layer. Per-tile source
+precision (P2) is a finer layer that bakes only some tiles, and coarser levels
+(P3) are extra layers, so a coarse tile can answer while the fine one loads.
+
 ## API
 
 | Type | Header | Role |
@@ -82,7 +116,6 @@ never changed after publication.
 | `TerrainPlacement` | `terrain/TerrainPlacement.h` | asset id plus a `WorldPosition` translation |
 | `TileAddress` | `terrain/TileAddressing.h` | `AddressLocal`, `AddressWorld`: status, tile, within-tile meters, `SampleCell` |
 | `TerrainSourceFingerprint`, `TerrainFormatVersion`, `TerrainReleaseId`, `TerrainReleaseInfo` | `terrain/TerrainIdentity.h` | three identities that never convert into each other |
-| `MockTerrainSource` | `terrain/MockTerrainSource.h` | analytic heights on the sample grid; temporary; `Lookup` from world position to key, release and corner `WorldPosition`s |
 | `TileHeights` | `terrain/TileHeights.h` | one tile's `(n+1)^2` float32 samples; `At`, `Set`, `Samples` |
 | `TerrainIndex`, `TerrainTileRecord`, `TerrainPackRecord`, `TerrainResult`, `TerrainPackError` | `terrain/TerrainPackFormat.h` | the format 1.0 byte layout and version numbers; `ParseTerrainIndex`, `DecodeTerrainTile` (bytes from any reader), `TerrainPackFileName` |
 | `EncodeTerrainRelease`, `MintTerrainReleaseId` | `terrain/TerrainPackWriter.h` | index and pack bytes from `TileHeights`, in memory; `TerrainHeightsHash`, `MakeTerrainReleaseNonce` |
@@ -92,6 +125,10 @@ never changed after publication.
 | `CellTriangulation`, `TriangulateCell` | `terrain/TerrainSurface.h` | a cell's diagonal and two triangles as global sample indices, counter-clockwise from +Y |
 | `SurfaceSample`, `SurfaceStatus` | `terrain/TerrainSurface.h` | `EvaluateSurface` (owner tile), `EvaluateSurfaceInCell` (a chosen cell): status, height, normal, tile, cell, triangle |
 | `SurfaceTolerance`, `kTerrainSurfaceVersion` | `terrain/TerrainSurface.h` | agreement bound between two evaluations at one point; the surface contract version derived data records |
+| `TerrainHeightQuery` | `terrain/TerrainHeightQuery.h` | resident heights of one release; `HeightAt` (terrain-local, or world plus placement), `Insert`, `MarkFailed`, `Residency`, `ResidentTile`, `TileError`, `PayloadRequests`, `TakePayloadRequests` |
+| `TerrainHeightRequest`, `TerrainHeightResult`, `TerrainHeightStatus`, `TerrainHeightFailure` | `terrain/TerrainHeightQuery.h` | bound release and required spacing in; status, local height, `worldPoint`, spacing, source spacing, known or unknown `maxError`, release, tile and layer out |
+| `TerrainHeightLayer`, `TerrainPayloadRequest`, `TerrainTileResidency` | `terrain/TerrainHeightQuery.h` | one spacing of the release (baked tiles, measured deviation); a missing payload for a loader; a tile's slot state |
+| `PreloadTerrainTiles`, `PreloadAllTerrainTiles` | `terrain/TerrainHeightQuery.h` | P1's synchronous fill of a query from its own release handle, recording per-tile failures |
 
 ## Rules
 
@@ -181,16 +218,11 @@ float, with no per-tile state, so neighbours share edge and corner samples bit
 for bit and tile order cannot change a sample. Its output is source height, not
 the final height a release stores (#114, #115).
 
-**Terrain-local and world convert only through core.** `AddressWorld` uses
-`TryWorldToTerrainLocal` and the mock places corners with
-`TryTerrainLocalToWorld`, so an overflow is refused instead of turning into an
-infinite coordinate. Adding `translation.Meters()` by hand skips that check.
-
-**`MockTerrainSource` is temporary and is not a height query.** It has no
-interpolation, no residency and no files; it exists to prove the coordinate and
-identity chain (#111). Only tests and #111's checks may use it. Once the query
-service (#117) lands and #111 moves to it, the class and its tests are deleted.
-Heights inside a cell come from `TerrainSurface`, not from the mock.
+**Terrain-local and world convert only through core.** `AddressWorld` and the
+height query use `TryWorldToTerrainLocal`, and the query places its surface
+point with `TryTerrainLocalToWorld`, so an overflow is refused instead of
+turning into an infinite coordinate. Adding `translation.Meters()` by hand
+skips that check.
 
 **One surface for query, mesh and collision.** Every cell is split along
 `(i, k)`–`(i + 1, k + 1)` whatever its tile, parity or origin: the diagonal Jolt's
@@ -227,23 +259,59 @@ including a P2 border band the baker rewrites so fine edge samples lie on the
 coarse edge, keep the version; a different diagonal, tie rule, ownership or
 formula changes it.
 
+**A height query never reads files and never blocks.** `TerrainHeightQuery`
+holds no byte source. It answers from resident tiles or records one
+`TerrainPayloadRequest` per layer and tile, which stays pending after it is
+taken until `Insert` or `MarkFailed` resolves it. Tests check the byte-source
+counters before and after queries. It is not thread-safe: its owner queries,
+inserts and takes requests on one thread.
+
+**A query answers for one release only.** It is created bound to one
+`TerrainReleaseInfo` and keeps it for life: a request bound to another release
+or a placement of another asset fails with `WrongRelease`, and another
+release's tiles are refused, so a Play-pinned query keeps returning its own
+release after `current` moves. Every result carries that identity.
+
+**Status says whether waiting helps.** The answer comes from the finest
+resident layer that bakes the point's owning tile, through `EvaluateSurface`.
+`MeetsRequirement` is no coarser than asked. `CoarserWhileLoading` and
+`Loading` resolve once the requested payload arrives. `CoarserAtSourceLimit`
+means the release bakes nothing finer there, so waiting never meets the
+requirement. A missing fine tile never falls back to an older or other
+release, and a payload that failed to load fails the query (`LoadFailed`)
+rather than quietly answering from a coarser layer.
+
+**No stand-in heights, and the error is known or explicitly unknown.** Only
+the three height statuses carry `localHeight` and `worldPoint`; the others keep
+NaN and no point. `maxError` bounds the distance to the release's finest baked
+surface: the storage tolerance on that surface itself, the bake's recorded
+`maxDeviation` plus the tolerance on a coarser layer, and empty when nobody
+measured the coarser layer. It is never an error against the recipe.
+
+**Query layers nest exactly.** Layers run fine to coarse with the same bounds
+and tile range; each spacing is an integer multiple `k` of the previous one,
+`k` divides that layer's `n`, and every tile edge is compared bit for bit, so a
+point has the same owning tile in every layer. Every map tile must be baked by
+some layer; the finest one that bakes it is the tile's source precision.
+
 ## State
 
-*As of 2026-10-01.* Layout, addressing, placement, identities, the canonical
-surface, the mock source, the release format, its in-memory encoder and the
-synchronous range reader work. Nothing in the engine loads terrain; the module
-is linked into `MjolnirEngine` but has no runtime caller yet. Its first
-non-test caller is the offline `terrain_bake` library (#113: recipe,
-fingerprint, "mir.relief" generator), tested by `terrain_tool_tests`.
+*As of 2026-10-02.* Layout, addressing, placement, identities, the canonical
+surface, the release format, its in-memory encoder, the synchronous range
+reader and the resident height query with a synchronous preload work; nothing
+takes the query's payload requests yet (P3). Nothing in the engine loads
+terrain; the module is linked into `MjolnirEngine` but has no runtime caller
+yet. Its first non-test caller is the offline `terrain_bake` library (#113:
+recipe, fingerprint, "mir.relief" generator), tested by `terrain_tool_tests`.
 
 Tests in `modules/terrain/tests/`: `TerrainLayout` (validation, clipped edge
 tiles, shared edge samples, padding), `TileAddressing` (floor on both sides of
 the origin, tile edges and their neighbouring doubles, four-tile corners,
 closed and non-aligned max edges, 0.1 m and 100 m grids, far placements at
 about ±150 km, a float-narrowing counter-example, overflow), `TerrainIdentity`,
-`MockTerrainSource`, `TileHeights`, `TerrainPackFormat` (round trips, one-range
-reads, negative and clipped edge tiles, chunk-size independence, writer
-refusals, a newer minor, release-id minting), `TerrainPackIntegrity` (malformed,
+`TileHeights`, `TerrainPackFormat` (round trips, one-range reads, negative and
+clipped edge tiles, chunk-size independence, writer refusals, a newer minor,
+release-id minting), `TerrainPackIntegrity` (malformed,
 truncated, overlapping, duplicate, overflowing and corrupt indexes and packs),
 `TerrainRelease` (naming, pointer parsing, disk reads, a handle kept across a
 pointer switch, the committed fixture in `tests/fixtures/releases/`),
@@ -251,22 +319,38 @@ pointer switch, the committed fixture in `tests/fixtures/releases/`),
 and about 150 km out: every sample, dense shared-edge probes from all sides and
 their neighbouring doubles, four-tile corners, random points against explicit
 mesh-triangle planes, closed max edges, a partial boundary tile with padding,
-missing and invalid samples).
+missing and invalid samples), `TerrainHeightQuery` (every status; dense,
+shared-edge, four-corner, negative and partial-boundary probes against
+`EvaluateSurface` from memory, disk and the committed fixture with zero reads
+during queries; a 4 m layer with its 8 m decimation; a per-tile source limit;
+payload requests; corrupt and missing packs; a query pinned across a pointer
+switch; world queries near the origin and about ±150 km out; refused layers and
+tiles).
 
 ## Backlog
 
-1. P3 asynchronous range reads, caching and eviction over the same files: read
-   a record's range, then hand the bytes to `DecodeTerrainTile`.
-2. `TerrainInstance` scene data and overlap checks between placements (#118).
+1. P3 asynchronous range reads, caching and eviction over the same files: take
+   the height query's payload requests, read each record's range, hand the
+   bytes to `DecodeTerrainTile` and `Insert` the result; add eviction, retry
+   and cancellation to the query's slots and decide its threading model.
+2. `TerrainInstance` scene data and overlap checks between placements, and a
+   World resource owning a height query per pinned release (#118).
 3. Per-tile source precision (P2), under the nesting rule above; the surface
-   rule stays, the views will carry their spacing.
-4. Delete `MockTerrainSource` and its tests once #117 lands and #111 uses the
-   real query.
-5. Measure the index at full map scale. Format 1 keeps 88 bytes per tile in one
+   rule stays, the views will carry their spacing. The query takes it as a
+   finer layer with `bakedTiles`; coarse levels (P3) as coarser layers with a
+   measured `maxDeviation`, per layer today, per tile if the bake records it.
+4. Measure the index at full map scale. Format 1 keeps 88 bytes per tile in one
    index, about 30 MB for 586 x 586 tiles of a 150 km map; if opening it is too
    slow, a later major can move tile tables into the packs.
 
 ## Changed
+
+*2026-10-02* — **Resident height query (#117).** Was: heights came only from
+`EvaluateSurface` over samples a caller supplied, and a temporary analytic mock
+source (#110) stood in for real data. Now: `TerrainHeightQuery` holds one
+release's tiles and answers with status, spacing, source spacing, release
+identity and a known or unknown error, records missing payloads for a loader,
+and never reads files. The mock source and its tests are deleted.
 
 *2026-10-01* — **Canonical surface (#114).** `TerrainSurface`: fixed-diagonal
 triangles over final samples, shared by query, mesh and collision, with
