@@ -253,8 +253,15 @@ namespace mir
         ImGui::SameLine();
         if (ImGui::Button("Save"))
         {
-            inputMap = mDraftInputMap;
-            mStatusMessage = inputMap.SaveFile(savePath) ? "Saved." : "Save failed - see log.";
+            if (mDraftInputMap.SaveFile(savePath))
+            {
+                inputMap = mDraftInputMap;
+                mStatusMessage = "Saved.";
+            }
+            else
+            {
+                mStatusMessage = "Save failed - see log.";
+            }
         }
 
         if (!mStatusMessage.empty())

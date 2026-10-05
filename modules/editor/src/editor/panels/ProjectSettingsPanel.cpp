@@ -23,8 +23,15 @@ namespace mir
 
         if (ImGui::Button("Save##Rendering"))
         {
-            renderSettings = draftRenderSettings;
-            mRenderingStatusMessage = renderSettings.SaveFile(savePath) ? "Saved." : "Save failed - see log.";
+            if (draftRenderSettings.SaveFile(savePath))
+            {
+                renderSettings = draftRenderSettings;
+                mRenderingStatusMessage = "Saved.";
+            }
+            else
+            {
+                mRenderingStatusMessage = "Save failed - see log.";
+            }
         }
 
         if (!mRenderingStatusMessage.empty())
