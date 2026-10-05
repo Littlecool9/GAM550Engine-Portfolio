@@ -73,13 +73,9 @@ namespace mir
         void InstallCustomTitleBar();
         void UninstallCustomTitleBar();
 
-        // Win32 only: puts the window back on an exact outer rect after
-        // fullscreen. GLFW grows a windowed rect by a native frame, which the
-        // custom title bar's hook has made client area, so each round trip
-        // would otherwise grow the window by that frame. No-op elsewhere.
+
         void PlaceCustomTitleBarWindow(int x, int y, int width, int height);
 
-        //GLFW only reports a size through the callback, which may come later.
         void RefreshFramebufferSize();
 
         GLFWwindow *mHandle = nullptr;
@@ -91,7 +87,7 @@ namespace mir
         std::vector<std::string> mDroppedFiles;
         RawInputSnapshot mRawInput;
 
-        //where ToggleFullscreen returns the window to, in screen coordinates
+    
         int mWindowedX = 0;
         int mWindowedY = 0;
         int mWindowedWidth = 0;
