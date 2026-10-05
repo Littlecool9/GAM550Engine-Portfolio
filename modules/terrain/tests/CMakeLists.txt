@@ -1,10 +1,11 @@
 engine_add_module_tests(terrain
-    MockTerrainSource.tests.cpp
+    TerrainHeightQuery.tests.cpp
     TerrainIdentity.tests.cpp
     TerrainLayout.tests.cpp
     TerrainPackFormat.tests.cpp
     TerrainPackIntegrity.tests.cpp
     TerrainRelease.tests.cpp
+    TerrainSurface.tests.cpp
     TileAddressing.tests.cpp
     TileHeights.tests.cpp
 )
