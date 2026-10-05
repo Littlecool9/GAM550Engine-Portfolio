@@ -66,6 +66,24 @@ namespace mir::vk
             &outBuffer, &outAllocation, outInfo) == VK_SUCCESS;
     }
 
+    bool CreateUploadBuffer(VmaAllocator allocator,
+        std::span<const std::byte> bytes,
+        VkBufferUsageFlags usage,
+        VkBuffer &outBuffer,
+        VmaAllocation &outAllocation)
+    {
+        VmaAllocationInfo info{};
+        if (!CreateBuffer(allocator, bytes.size(), usage,
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+            VMA_ALLOCATION_CREATE_MAPPED_BIT,
+            outBuffer, outAllocation, &info))
+            return false;
+
+        std::memcpy(info.pMappedData, bytes.data(), bytes.size());
+        vmaFlushAllocation(allocator, outAllocation, 0, VK_WHOLE_SIZE);
+        return true;
+    }
+
     VkRect2D ResolveViewRect(const VkRect2D &requested, VkExtent2D swapchainExtent)
     {
         VkRect2D rect = (requested.extent.width > 0 && requested.extent.height > 0)

@@ -49,6 +49,7 @@ namespace mir
         std::byte *const mapped = static_cast<std::byte *>(stagingInfo.pMappedData);
         std::memcpy(mapped, vertices.data(), vertexBytes);
         std::memcpy(mapped + vertexBytes, indices.data(), indexBytes);
+        vmaFlushAllocation(mDevice->Allocator(), stagingAllocation, 0, VK_WHOLE_SIZE);
 
         GpuMesh mesh{};
         mesh.mIndexCount = static_cast<uint32_t>(indices.size());

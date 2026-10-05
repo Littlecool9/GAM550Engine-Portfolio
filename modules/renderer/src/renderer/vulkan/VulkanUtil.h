@@ -11,8 +11,10 @@
 #include <volk.h>
 #include <vk_mem_alloc.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <span>
 
 namespace mir::vk
 {
@@ -23,6 +25,13 @@ namespace mir::vk
         VkBuffer &outBuffer,
         VmaAllocation &outAllocation,
         VmaAllocationInfo *outInfo);
+
+    // buffer for cpu writing
+    bool CreateUploadBuffer(VmaAllocator allocator,
+        std::span<const std::byte> bytes,
+        VkBufferUsageFlags usage,
+        VkBuffer &outBuffer,
+        VmaAllocation &outAllocation);
 
     // An empty requested rect means the whole swapchain.
     VkRect2D ResolveViewRect(const VkRect2D &requested, VkExtent2D swapchainExtent);

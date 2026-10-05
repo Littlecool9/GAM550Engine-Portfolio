@@ -20,7 +20,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstring>
 #include <format>
 #include <utility>
 #include <vector>
@@ -202,19 +201,13 @@ namespace mir
 
         VkBuffer staging = VK_NULL_HANDLE;
         VmaAllocation stagingAllocation = VK_NULL_HANDLE;
-        VmaAllocationInfo stagingInfo{};
 
-        if (!vk::CreateBuffer(mDevice->Allocator(), pixels.size(),
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-            VMA_ALLOCATION_CREATE_MAPPED_BIT,
-            staging, stagingAllocation, &stagingInfo))
+        if (!vk::CreateUploadBuffer(mDevice->Allocator(), pixels,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT, staging, stagingAllocation))
         {
             MIR_LOG_CRITICAL("CreateTexture: staging buffer allocation failed");
             return kNullTexture;
         }
-
-        std::memcpy(stagingInfo.pMappedData, pixels.data(), pixels.size());
 
         GpuTexture texture{};
         texture.mLevels = levelCount;

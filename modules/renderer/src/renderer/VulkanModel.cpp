@@ -10,33 +10,17 @@
 #define NOMINMAX
 #endif
 #include <core/log/Log.h>
-#include <cstring>
 #include <utility>
 #include <vector>
 #include <renderer/VulkanRenderer.h>
 #include "vulkan/VulkanDevice.h"
+#include "vulkan/VulkanUtil.h"
 #include <vk_mem_alloc.h>
 
 namespace mir
 {
     namespace
     {
-        bool UploadBuffer(VmaAllocator allocator, std::span<const std::byte> bytes, VkBufferUsageFlags usage,
-                          VkBuffer &buffer, VmaAllocation &allocation)
-        {
-            VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-            info.size = bytes.size();
-            info.usage = usage;
-            VmaAllocationCreateInfo alloc{};
-            alloc.usage = VMA_MEMORY_USAGE_AUTO;
-            alloc.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-            VmaAllocationInfo mapped{};
-            if (vmaCreateBuffer(allocator, &info, &alloc, &buffer, &allocation, &mapped) != VK_SUCCESS)
-                return false;
-            std::memcpy(mapped.pMappedData, bytes.data(), bytes.size());
-            vmaFlushAllocation(allocator, allocation, 0, VK_WHOLE_SIZE);
-            return true;
-        }
         // Set 2 is allocated per draw and the pool is reset each frame, so
         // this is a ceiling on model draws in one frame, not a total.
         constexpr uint32_t kMaxModelDrawsPerFrame = 4096;
@@ -88,8 +72,8 @@ namespace mir
             return false;
         }
         ModelFrameBuffer buffer{};
-        if (!UploadBuffer(mDevice->Allocator(), std::as_bytes(std::span(data)), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.buffer,
-                          buffer.allocation))
+        if (!vk::CreateUploadBuffer(mDevice->Allocator(), std::as_bytes(std::span(data)),
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, buffer.buffer, buffer.allocation))
         {
             MIR_LOG_ERROR("model frame buffer allocation failed");
             return false;
