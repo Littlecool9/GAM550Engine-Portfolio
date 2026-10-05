@@ -47,11 +47,6 @@ namespace mir
             return v != 0 && (v & (v - 1)) == 0;
         }
 
-        bool SameBounds(const TerrainLocalBounds &a, const TerrainLocalBounds &b)
-        {
-            return a.minX == b.minX && a.minZ == b.minZ && a.maxX == b.maxX && a.maxZ == b.maxZ;
-        }
-
         std::string DescribeBounds(const TerrainLocalBounds &b)
         {
             return std::format("[{}, {}]..[{}, {}]", b.minX, b.minZ, b.maxX, b.maxZ);
@@ -228,7 +223,7 @@ namespace mir
                 return Error(Code::Malformed, "tile {}: height range [{}, {}] is invalid", tile, r.minHeight,
                              r.maxHeight);
             const TerrainLocalBounds extent = *layout.ValidExtent(r.tile);
-            if (!SameBounds(r.validExtent, extent))
+            if (r.validExtent != extent)
                 return Error(Code::Malformed, "tile {}: valid extent {} differs from the layout's {}", tile,
                              DescribeBounds(r.validExtent), DescribeBounds(extent));
             return {};

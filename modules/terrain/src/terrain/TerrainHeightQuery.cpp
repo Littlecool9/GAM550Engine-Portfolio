@@ -27,11 +27,6 @@ namespace mir
         using detail::Error;
         using detail::Hex;
 
-        bool SameBounds(const TerrainLocalBounds &a, const TerrainLocalBounds &b)
-        {
-            return a.minX == b.minX && a.minZ == b.minZ && a.maxX == b.maxX && a.maxZ == b.maxZ;
-        }
-
         // Tile edges must also agree bit for bit, so every layer has the same owning tile.
         bool Nests(const TerrainLayout &fine, const TerrainLayout &coarse)
         {
@@ -39,7 +34,7 @@ namespace mir
                 fine.IntervalsPerTile() % coarse.IntervalsPerTile() != 0)
                 return false;
             const int32_t k = fine.IntervalsPerTile() / coarse.IntervalsPerTile();
-            if (coarse.SampleSpacing() != fine.SampleSpacing() * k || !SameBounds(fine.Bounds(), coarse.Bounds()))
+            if (coarse.SampleSpacing() != fine.SampleSpacing() * k || fine.Bounds() != coarse.Bounds())
                 return false;
 
             const TileRange tiles = fine.Tiles();

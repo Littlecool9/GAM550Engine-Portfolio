@@ -26,6 +26,8 @@ namespace mir
         double minZ = 0.0;
         double maxX = 0.0;
         double maxZ = 0.0;
+
+        constexpr bool operator==(const TerrainLocalBounds &) const = default;
     };
 
     struct GlobalSampleIndex
