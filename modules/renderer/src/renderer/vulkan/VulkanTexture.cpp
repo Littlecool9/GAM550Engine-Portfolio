@@ -10,6 +10,7 @@
 #define NOMINMAX
 #endif
 #include <renderer/VulkanRenderer.h>
+#include "VulkanDevice.h"
 #include "VulkanUtil.h"
 
 #include <core/log/Log.h>
@@ -19,7 +20,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstring>
 #include <format>
 #include <utility>
 #include <vector>
@@ -132,7 +132,7 @@ namespace mir
             .borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK };
 
         VkSampler sampler = VK_NULL_HANDLE;
-        if (vkCreateSampler(mDevice, &info, nullptr, &sampler) != VK_SUCCESS)
+        if (vkCreateSampler(mDevice->Handle(), &info, nullptr, &sampler) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("vkCreateSampler failed");
             return VK_NULL_HANDLE;
@@ -145,7 +145,7 @@ namespace mir
     void VulkanRenderer::DestroySamplers()
     {
         for (const auto &[key, sampler] : mSamplers)
-            vkDestroySampler(mDevice, sampler, nullptr);
+            vkDestroySampler(mDevice->Handle(), sampler, nullptr);
         mSamplers.clear();
     }
 
@@ -168,8 +168,8 @@ namespace mir
             return false;
         }
 
-        NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mDefaultWhiteTexture.mIndex].mImage), "Default white texture");
-        NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mDefaultNormalTexture.mIndex].mImage), "Default normal texture");
+        mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mDefaultWhiteTexture.mIndex].mImage), "Default white texture");
+        mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mDefaultNormalTexture.mIndex].mImage), "Default normal texture");
 
         return true;
     }
@@ -185,7 +185,7 @@ namespace mir
         }
 
         VkPhysicalDeviceProperties properties{};
-        vkGetPhysicalDeviceProperties(mPhysicalDevice, &properties);
+        vkGetPhysicalDeviceProperties(mDevice->Physical(), &properties);
         if (desc.width > properties.limits.maxImageDimension2D ||
             desc.height > properties.limits.maxImageDimension2D)
         {
@@ -201,19 +201,13 @@ namespace mir
 
         VkBuffer staging = VK_NULL_HANDLE;
         VmaAllocation stagingAllocation = VK_NULL_HANDLE;
-        VmaAllocationInfo stagingInfo{};
 
-        if (!vk::CreateBuffer(mAllocator, pixels.size(),
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-            VMA_ALLOCATION_CREATE_MAPPED_BIT,
-            staging, stagingAllocation, &stagingInfo))
+        if (!vk::CreateUploadBuffer(mDevice->Allocator(), pixels,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT, staging, stagingAllocation))
         {
             MIR_LOG_CRITICAL("CreateTexture: staging buffer allocation failed");
             return kNullTexture;
         }
-
-        std::memcpy(stagingInfo.pMappedData, pixels.data(), pixels.size());
 
         GpuTexture texture{};
         texture.mLevels = levelCount;
@@ -235,24 +229,24 @@ namespace mir
 
         const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
 
-        if (vmaCreateImage(mAllocator, &imageInfo, &allocInfo,
+        if (vmaCreateImage(mDevice->Allocator(), &imageInfo, &allocInfo,
             &texture.mImage, &texture.mAllocation, nullptr) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateTexture: vmaCreateImage failed");
-            vmaDestroyBuffer(mAllocator, staging, stagingAllocation);
+            vmaDestroyBuffer(mDevice->Allocator(), staging, stagingAllocation);
             return kNullTexture;
         }
 
         VkCommandPool uploadPool = VK_NULL_HANDLE;
         const VkCommandPoolCreateInfo poolInfo{
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-            .queueFamilyIndex = mGfxQueueFamIdx };
+            .queueFamilyIndex = mDevice->QueueFamily() };
 
-        if (vkCreateCommandPool(mDevice, &poolInfo, nullptr, &uploadPool) != VK_SUCCESS)
+        if (vkCreateCommandPool(mDevice->Handle(), &poolInfo, nullptr, &uploadPool) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateTexture: upload command pool creation failed");
-            vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
-            vmaDestroyBuffer(mAllocator, staging, stagingAllocation);
+            vmaDestroyImage(mDevice->Allocator(), texture.mImage, texture.mAllocation);
+            vmaDestroyBuffer(mDevice->Allocator(), staging, stagingAllocation);
             return kNullTexture;
         }
 
@@ -262,7 +256,7 @@ namespace mir
             .commandPool = uploadPool,
             .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1 };
-        vkAllocateCommandBuffers(mDevice, &cmdAllocInfo, &uploadCmd);
+        vkAllocateCommandBuffers(mDevice->Handle(), &cmdAllocInfo, &uploadCmd);
 
         const VkCommandBufferBeginInfo beginInfo{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -290,11 +284,11 @@ namespace mir
             .commandBufferCount = 1,
             .pCommandBuffers = &uploadCmd };
 
-        vkQueueSubmit(mGfxQueue, 1, &submitInfo, VK_NULL_HANDLE);
-        vkQueueWaitIdle(mGfxQueue);
+        vkQueueSubmit(mDevice->Queue(), 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(mDevice->Queue());
 
-        vkDestroyCommandPool(mDevice, uploadPool, nullptr);
-        vmaDestroyBuffer(mAllocator, staging, stagingAllocation);
+        vkDestroyCommandPool(mDevice->Handle(), uploadPool, nullptr);
+        vmaDestroyBuffer(mDevice->Allocator(), staging, stagingAllocation);
 
         const VkImageViewCreateInfo viewInfo{
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -308,17 +302,17 @@ namespace mir
                 .baseArrayLayer = 0,
                 .layerCount = 1 } };
 
-        if (vkCreateImageView(mDevice, &viewInfo, nullptr, &texture.mView) != VK_SUCCESS)
+        if (vkCreateImageView(mDevice->Handle(), &viewInfo, nullptr, &texture.mView) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateTexture: vkCreateImageView failed");
-            vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
+            vmaDestroyImage(mDevice->Allocator(), texture.mImage, texture.mAllocation);
             return kNullTexture;
         }
 
         const uint32_t index = static_cast<uint32_t>(mTextures.size());
         mTextures.push_back(texture);
 
-        NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(texture.mImage),
+        mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(texture.mImage),
             std::format("Texture {}", index).c_str());
 
         MIR_LOG_INFO("Texture {} uploaded: {}x{}, {} level(s), {} bytes",
@@ -345,9 +339,9 @@ namespace mir
         for (GpuTexture &texture : mTextures)
         {
             if (texture.mView != VK_NULL_HANDLE)
-                vkDestroyImageView(mDevice, texture.mView, nullptr);
+                vkDestroyImageView(mDevice->Handle(), texture.mView, nullptr);
             if (texture.mImage != VK_NULL_HANDLE)
-                vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
+                vmaDestroyImage(mDevice->Allocator(), texture.mImage, texture.mAllocation);
         }
         mTextures.clear();
         mDefaultWhiteTexture = kNullTexture;

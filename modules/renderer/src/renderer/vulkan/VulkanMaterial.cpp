@@ -7,6 +7,7 @@
  *
  */
 #include <renderer/VulkanRenderer.h>
+#include "VulkanDevice.h"
 #include "VulkanUtil.h"
 #include "VulkanPushConstants.h"
 
@@ -48,7 +49,7 @@ namespace mir
             .bindingCount = static_cast<uint32_t>(setBindings.size()),
             .pBindings = setBindings.data() };
 
-        if (vkCreateDescriptorSetLayout(mDevice, &setLayoutInfo, nullptr, &mMaterialSetLayout) != VK_SUCCESS)
+        if (vkCreateDescriptorSetLayout(mDevice->Handle(), &setLayoutInfo, nullptr, &mMaterialSetLayout) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("vkCreateDescriptorSetLayout failed");
             return false;
@@ -68,7 +69,7 @@ namespace mir
             .poolSizeCount = 1,
             .pPoolSizes = &poolSize };
 
-        if (vkCreateDescriptorPool(mDevice, &poolInfo, nullptr, &mMaterialDescriptorPool) != VK_SUCCESS)
+        if (vkCreateDescriptorPool(mDevice->Handle(), &poolInfo, nullptr, &mMaterialDescriptorPool) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("vkCreateDescriptorPool failed");
             return false;
@@ -91,7 +92,7 @@ namespace mir
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &pushConstantRange };
 
-        if (vkCreatePipelineLayout(mDevice, &layoutInfo, nullptr, &mPipelineLayout) != VK_SUCCESS)
+        if (vkCreatePipelineLayout(mDevice->Handle(), &layoutInfo, nullptr, &mPipelineLayout) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("vkCreatePipelineLayout failed");
             return false;
@@ -102,15 +103,15 @@ namespace mir
 
     bool VulkanRenderer::CreateSkyPipeline()
     {
-        VkShaderModule vertModule = vk::CreateShaderModule(mDevice, ShaderPath("sky.vertexMain.spv"));
-        VkShaderModule fragModule = vk::CreateShaderModule(mDevice, ShaderPath("sky.fragmentMain.spv"));
+        VkShaderModule vertModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("sky.vertexMain.spv"));
+        VkShaderModule fragModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("sky.fragmentMain.spv"));
 
         if (vertModule == VK_NULL_HANDLE || fragModule == VK_NULL_HANDLE)
         {
             if (vertModule != VK_NULL_HANDLE)
-                vkDestroyShaderModule(mDevice, vertModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), vertModule, nullptr);
             if (fragModule != VK_NULL_HANDLE)
-                vkDestroyShaderModule(mDevice, fragModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), fragModule, nullptr);
             return false;
         }
 
@@ -119,11 +120,11 @@ namespace mir
             .setLayoutCount = 1,
             .pSetLayouts = &mCameraSetLayout };
 
-        if (vkCreatePipelineLayout(mDevice, &layoutInfo, nullptr, &mSkyPipelineLayout) != VK_SUCCESS)
+        if (vkCreatePipelineLayout(mDevice->Handle(), &layoutInfo, nullptr, &mSkyPipelineLayout) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateSkyPipeline: vkCreatePipelineLayout failed");
-            vkDestroyShaderModule(mDevice, vertModule, nullptr);
-            vkDestroyShaderModule(mDevice, fragModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), vertModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), fragModule, nullptr);
             return false;
         }
 
@@ -219,10 +220,10 @@ namespace mir
             .subpass = 0 };
 
         const VkResult result = vkCreateGraphicsPipelines(
-            mDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &mSkyPipeline);
+            mDevice->Handle(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &mSkyPipeline);
 
-        vkDestroyShaderModule(mDevice, vertModule, nullptr);
-        vkDestroyShaderModule(mDevice, fragModule, nullptr);
+        vkDestroyShaderModule(mDevice->Handle(), vertModule, nullptr);
+        vkDestroyShaderModule(mDevice->Handle(), fragModule, nullptr);
 
         if (result != VK_SUCCESS)
         {
@@ -235,15 +236,15 @@ namespace mir
 
     VkPipeline VulkanRenderer::BuildPipeline(const MaterialDesc &desc)
     {
-        VkShaderModule vertModule = vk::CreateShaderModule(mDevice, ShaderPath(desc.shaderName + ".vertexMain.spv"));
-        VkShaderModule fragModule = vk::CreateShaderModule(mDevice, ShaderPath(desc.shaderName + ".fragmentMain.spv"));
+        VkShaderModule vertModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath(desc.shaderName + ".vertexMain.spv"));
+        VkShaderModule fragModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath(desc.shaderName + ".fragmentMain.spv"));
 
         if (vertModule == VK_NULL_HANDLE || fragModule == VK_NULL_HANDLE)
         {
             if (vertModule != VK_NULL_HANDLE)
-                vkDestroyShaderModule(mDevice, vertModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), vertModule, nullptr);
             if (fragModule != VK_NULL_HANDLE)
-                vkDestroyShaderModule(mDevice, fragModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), fragModule, nullptr);
             return VK_NULL_HANDLE;
         }
 
@@ -366,10 +367,10 @@ namespace mir
 
         VkPipeline pipeline = VK_NULL_HANDLE;
         const VkResult result = vkCreateGraphicsPipelines(
-            mDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
+            mDevice->Handle(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
 
-        vkDestroyShaderModule(mDevice, vertModule, nullptr);
-        vkDestroyShaderModule(mDevice, fragModule, nullptr);
+        vkDestroyShaderModule(mDevice->Handle(), vertModule, nullptr);
+        vkDestroyShaderModule(mDevice->Handle(), fragModule, nullptr);
 
         if (result != VK_SUCCESS)
         {
@@ -397,7 +398,7 @@ namespace mir
         if (baseColor == nullptr || normal == nullptr)
         {
             MIR_LOG_CRITICAL("CreateMaterial: default textures unavailable");
-            vkDestroyPipeline(mDevice, pipeline, nullptr);
+            vkDestroyPipeline(mDevice->Handle(), pipeline, nullptr);
             return kNullMaterial;
         }
 
@@ -406,7 +407,7 @@ namespace mir
         const VkSampler sampler = AcquireSampler(desc.sampler);
         if (sampler == VK_NULL_HANDLE)
         {
-            vkDestroyPipeline(mDevice, pipeline, nullptr);
+            vkDestroyPipeline(mDevice->Handle(), pipeline, nullptr);
             return kNullMaterial;
         }
 
@@ -417,10 +418,10 @@ namespace mir
             .descriptorSetCount = 1,
             .pSetLayouts = &mMaterialSetLayout };
 
-        if (vkAllocateDescriptorSets(mDevice, &setAllocInfo, &descriptorSet) != VK_SUCCESS)
+        if (vkAllocateDescriptorSets(mDevice->Handle(), &setAllocInfo, &descriptorSet) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateMaterial: descriptor set allocation failed");
-            vkDestroyPipeline(mDevice, pipeline, nullptr);
+            vkDestroyPipeline(mDevice->Handle(), pipeline, nullptr);
             return kNullMaterial;
         }
 
@@ -447,7 +448,7 @@ namespace mir
              .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
              .pImageInfo = &normalInfo } } };
 
-        vkUpdateDescriptorSets(mDevice, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        vkUpdateDescriptorSets(mDevice->Handle(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
         const bool unlit = desc.shaderName == "unlit";
         // The model shader reads these out of set 2; see BindModelDescriptors.
@@ -491,13 +492,13 @@ namespace mir
         }
 
         // in-flight frames may still be drawing with this pipeline/set
-        vkDeviceWaitIdle(mDevice);
+        vkDeviceWaitIdle(mDevice->Handle());
 
         GpuMaterial &material = mMaterials[handle.mIndex];
         if (material.mDescriptorSet != VK_NULL_HANDLE)
-            vkFreeDescriptorSets(mDevice, mMaterialDescriptorPool, 1, &material.mDescriptorSet);
+            vkFreeDescriptorSets(mDevice->Handle(), mMaterialDescriptorPool, 1, &material.mDescriptorSet);
         if (material.mPipeline != VK_NULL_HANDLE)
-            vkDestroyPipeline(mDevice, material.mPipeline, nullptr);
+            vkDestroyPipeline(mDevice->Handle(), material.mPipeline, nullptr);
 
         const uint32_t nextGeneration = material.mGeneration + 1;
         material = GpuMaterial{};
@@ -512,9 +513,9 @@ namespace mir
         for (GpuMaterial &material : mMaterials)
         {
             if (material.mDescriptorSet != VK_NULL_HANDLE)
-                vkFreeDescriptorSets(mDevice, mMaterialDescriptorPool, 1, &material.mDescriptorSet);
+                vkFreeDescriptorSets(mDevice->Handle(), mMaterialDescriptorPool, 1, &material.mDescriptorSet);
             if (material.mPipeline != VK_NULL_HANDLE)
-                vkDestroyPipeline(mDevice, material.mPipeline, nullptr);
+                vkDestroyPipeline(mDevice->Handle(), material.mPipeline, nullptr);
         }
         mMaterials.clear();
         mFreeMaterialIndices.clear();

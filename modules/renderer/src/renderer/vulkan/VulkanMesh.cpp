@@ -7,6 +7,7 @@
  *
  */
 #include <renderer/VulkanRenderer.h>
+#include "VulkanDevice.h"
 #include "VulkanUtil.h"
 
 #include <core/log/Log.h>
@@ -35,7 +36,7 @@ namespace mir
         VmaAllocation stagingAllocation = VK_NULL_HANDLE;
         VmaAllocationInfo stagingInfo{};
 
-        if (!vk::CreateBuffer(mAllocator, vertexBytes + indexBytes,
+        if (!vk::CreateBuffer(mDevice->Allocator(), vertexBytes + indexBytes,
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
             VMA_ALLOCATION_CREATE_MAPPED_BIT,
@@ -48,22 +49,23 @@ namespace mir
         std::byte *const mapped = static_cast<std::byte *>(stagingInfo.pMappedData);
         std::memcpy(mapped, vertices.data(), vertexBytes);
         std::memcpy(mapped + vertexBytes, indices.data(), indexBytes);
+        vmaFlushAllocation(mDevice->Allocator(), stagingAllocation, 0, VK_WHOLE_SIZE);
 
         GpuMesh mesh{};
         mesh.mIndexCount = static_cast<uint32_t>(indices.size());
         mesh.mGeneration = 1;
 
         VkBufferUsageFlags extraUsage = 0;
-        if (mRayTracingSupported)
+        if (mDevice->RayTracingSupported())
             extraUsage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 
     // No host-access flags on either: that is what puts them in VRAM.
         const bool buffersCreated =
-            vk::CreateBuffer(mAllocator, vertexBytes,
+            vk::CreateBuffer(mDevice->Allocator(), vertexBytes,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | extraUsage,
                 0, mesh.mVertexBuffer, mesh.mVertexAllocation, nullptr) &&
-            vk::CreateBuffer(mAllocator, indexBytes,
+            vk::CreateBuffer(mDevice->Allocator(), indexBytes,
                 VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | extraUsage,
                 0, mesh.mIndexBuffer, mesh.mIndexAllocation, nullptr);
 
@@ -72,24 +74,24 @@ namespace mir
             MIR_LOG_CRITICAL("CreateMesh: device buffer allocation failed");
 
             if (mesh.mVertexBuffer != VK_NULL_HANDLE)
-                vmaDestroyBuffer(mAllocator, mesh.mVertexBuffer, mesh.mVertexAllocation);
+                vmaDestroyBuffer(mDevice->Allocator(), mesh.mVertexBuffer, mesh.mVertexAllocation);
             if (mesh.mIndexBuffer != VK_NULL_HANDLE)
-                vmaDestroyBuffer(mAllocator, mesh.mIndexBuffer, mesh.mIndexAllocation);
-            vmaDestroyBuffer(mAllocator, staging, stagingAllocation);
+                vmaDestroyBuffer(mDevice->Allocator(), mesh.mIndexBuffer, mesh.mIndexAllocation);
+            vmaDestroyBuffer(mDevice->Allocator(), staging, stagingAllocation);
             return kNullMesh;
         }
 
         VkCommandPool uploadPool = VK_NULL_HANDLE;
         const VkCommandPoolCreateInfo poolInfo{
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-            .queueFamilyIndex = mGfxQueueFamIdx };
+            .queueFamilyIndex = mDevice->QueueFamily() };
 
-        if (vkCreateCommandPool(mDevice, &poolInfo, nullptr, &uploadPool) != VK_SUCCESS)
+        if (vkCreateCommandPool(mDevice->Handle(), &poolInfo, nullptr, &uploadPool) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateMesh: upload command pool creation failed");
-            vmaDestroyBuffer(mAllocator, mesh.mVertexBuffer, mesh.mVertexAllocation);
-            vmaDestroyBuffer(mAllocator, mesh.mIndexBuffer, mesh.mIndexAllocation);
-            vmaDestroyBuffer(mAllocator, staging, stagingAllocation);
+            vmaDestroyBuffer(mDevice->Allocator(), mesh.mVertexBuffer, mesh.mVertexAllocation);
+            vmaDestroyBuffer(mDevice->Allocator(), mesh.mIndexBuffer, mesh.mIndexAllocation);
+            vmaDestroyBuffer(mDevice->Allocator(), staging, stagingAllocation);
             return kNullMesh;
         }
 
@@ -99,7 +101,7 @@ namespace mir
             .commandPool = uploadPool,
             .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1 };
-        vkAllocateCommandBuffers(mDevice, &cmdAllocInfo, &uploadCmd);
+        vkAllocateCommandBuffers(mDevice->Handle(), &cmdAllocInfo, &uploadCmd);
 
         const VkCommandBufferBeginInfo beginInfo{
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -115,7 +117,7 @@ namespace mir
 
         VkBuffer blasScratch = VK_NULL_HANDLE;
         VmaAllocation blasScratchAllocation = VK_NULL_HANDLE;
-        if (mRayTracingSupported)
+        if (mDevice->RayTracingSupported())
         {
             if (!BuildBLAS(mesh, static_cast<uint32_t>(vertices.size()),
                 static_cast<uint32_t>(indices.size()), uploadCmd, blasScratch, blasScratchAllocation))
@@ -129,14 +131,14 @@ namespace mir
             .commandBufferCount = 1,
             .pCommandBuffers = &uploadCmd };
 
-        vkQueueSubmit(mGfxQueue, 1, &submitInfo, VK_NULL_HANDLE);
+        vkQueueSubmit(mDevice->Queue(), 1, &submitInfo, VK_NULL_HANDLE);
         // wait till buffer is created
-        vkQueueWaitIdle(mGfxQueue);
+        vkQueueWaitIdle(mDevice->Queue());
 
-        vkDestroyCommandPool(mDevice, uploadPool, nullptr);
-        vmaDestroyBuffer(mAllocator, staging, stagingAllocation);
+        vkDestroyCommandPool(mDevice->Handle(), uploadPool, nullptr);
+        vmaDestroyBuffer(mDevice->Allocator(), staging, stagingAllocation);
         if (blasScratch != VK_NULL_HANDLE)
-            vmaDestroyBuffer(mAllocator, blasScratch, blasScratchAllocation);
+            vmaDestroyBuffer(mDevice->Allocator(), blasScratch, blasScratchAllocation);
 
         uint32_t index;
         if (!mFreeMeshIndices.empty())
@@ -153,9 +155,9 @@ namespace mir
             mMeshes.push_back(mesh);
         }
 
-        NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mesh.mVertexBuffer),
+        mDevice->NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mesh.mVertexBuffer),
             std::format("Mesh {} vertices", index).c_str());
-        NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mesh.mIndexBuffer),
+        mDevice->NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mesh.mIndexBuffer),
             std::format("Mesh {} indices", index).c_str());
 
         MIR_LOG_INFO("Mesh {} uploaded: {} vertices, {} indices, {} bytes",
@@ -175,14 +177,14 @@ namespace mir
 
         // in-flight frames (up to kFramesInFlight - 1 old ones) may still be
         // drawing from this buffer - see ReleaseSceneResources.
-        vkDeviceWaitIdle(mDevice);
+        vkDeviceWaitIdle(mDevice->Handle());
 
         GpuMesh &mesh = mMeshes[handle.mIndex];
         DestroyBLAS(mesh);
         if (mesh.mVertexBuffer != VK_NULL_HANDLE)
-            vmaDestroyBuffer(mAllocator, mesh.mVertexBuffer, mesh.mVertexAllocation);
+            vmaDestroyBuffer(mDevice->Allocator(), mesh.mVertexBuffer, mesh.mVertexAllocation);
         if (mesh.mIndexBuffer != VK_NULL_HANDLE)
-            vmaDestroyBuffer(mAllocator, mesh.mIndexBuffer, mesh.mIndexAllocation);
+            vmaDestroyBuffer(mDevice->Allocator(), mesh.mIndexBuffer, mesh.mIndexAllocation);
 
         const uint32_t nextGeneration = mesh.mGeneration + 1;
         mesh = GpuMesh{};
@@ -211,9 +213,9 @@ namespace mir
         {
             DestroyBLAS(mesh);
             if (mesh.mVertexBuffer != VK_NULL_HANDLE)
-                vmaDestroyBuffer(mAllocator, mesh.mVertexBuffer, mesh.mVertexAllocation);
+                vmaDestroyBuffer(mDevice->Allocator(), mesh.mVertexBuffer, mesh.mVertexAllocation);
             if (mesh.mIndexBuffer != VK_NULL_HANDLE)
-                vmaDestroyBuffer(mAllocator, mesh.mIndexBuffer, mesh.mIndexAllocation);
+                vmaDestroyBuffer(mDevice->Allocator(), mesh.mIndexBuffer, mesh.mIndexAllocation);
         }
         mMeshes.clear();
         mFreeMeshIndices.clear();

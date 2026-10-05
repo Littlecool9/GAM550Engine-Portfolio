@@ -48,7 +48,7 @@ target_sources(engine_renderer PRIVATE
     src/renderer/vulkan/VmaImpl.cpp
     src/renderer/vulkan/VulkanCamera.cpp
     src/renderer/vulkan/VulkanCapture.cpp
-    src/renderer/vulkan/VulkanContext.cpp
+    src/renderer/vulkan/VulkanDevice.cpp
     src/renderer/vulkan/VulkanFrame.cpp
     src/renderer/vulkan/VulkanImGui.cpp
     src/renderer/vulkan/VulkanMaterial.cpp
