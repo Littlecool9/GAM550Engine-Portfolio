@@ -1,13 +1,16 @@
 /**
- * @file VulkanSwapchain.cpp
+ * @file Swapchain.cpp
  * @author Sumin Park
  * @brief Swapchain, its image views, depth images and render-complete semaphores.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
-#include <renderer/VulkanRenderer.h>
-#include "VulkanDevice.h"
+#include "Swapchain.h"
+#include "Device.h"
+#include "VulkanUtil.h"
+
+#include <core/platform/Surface.h>
 
 #include <core/log/Log.h>
 
@@ -17,7 +20,7 @@
 #include <format>
 #include <vector>
 
-namespace mir
+namespace mir::vk
 {
     namespace
     {
@@ -74,21 +77,107 @@ namespace mir
         }
     }
 
-    bool VulkanRenderer::CreateSwapchain()
+    bool Swapchain::Initialize(Device &device, const ISurfaceProvider &window)
+    {
+        mDevice = &device;
+        return Create(window);
+    }
+
+    void Swapchain::Shutdown()
+    {
+        if (mDevice != nullptr)
+            Destroy();
+    }
+
+    bool Swapchain::Recreate(const ISurfaceProvider &window)
+    {
+        Destroy();
+        if (!Create(window))
+            return false;
+
+        mOutOfDate = false;
+        return true;
+    }
+
+    bool Swapchain::NeedsRecreate(const ISurfaceProvider &window) const
+    {
+        return mOutOfDate || window.Width() != mExtent.width || window.Height() != mExtent.height;
+    }
+
+    bool Swapchain::Acquire(VkSemaphore signal, uint32_t &outImageIndex)
+    {
+        const VkResult result = vkAcquireNextImageKHR(
+            mDevice->Handle(), mSwapchain, UINT64_MAX, signal, VK_NULL_HANDLE, &outImageIndex);
+
+        if (result == VK_ERROR_OUT_OF_DATE_KHR)
+        {
+            mOutOfDate = true;
+            return false;
+        }
+
+        // Signalled and usable. Finish the frame, recreate next one.
+        if (result == VK_SUBOPTIMAL_KHR)
+        {
+            mOutOfDate = true;
+        }
+        else if (result != VK_SUCCESS)
+        {
+            MIR_LOG_ERROR("Acquire: vkAcquireNextImageKHR failed: {}", static_cast<int>(result));
+            return false;
+        }
+
+        return true;
+    }
+
+    void Swapchain::Present(uint32_t imageIndex)
+    {
+        const VkPresentInfoKHR presentInfo{
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &mRenderComplete[imageIndex],
+            .swapchainCount = 1,
+            .pSwapchains = &mSwapchain,
+            .pImageIndices = &imageIndex };
+
+        const VkResult result = vkQueuePresentKHR(mDevice->Queue(), &presentInfo);
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+            mOutOfDate = true;
+        else if (result != VK_SUCCESS)
+            MIR_LOG_ERROR("Present: vkQueuePresentKHR failed: {}", static_cast<int>(result));
+    }
+
+    void Swapchain::RecordPresentTransition(VkCommandBuffer cmd, uint32_t imageIndex, VkImageLayout from) const
+    {
+        VkPipelineStageFlags2 srcStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        VkAccessFlags2 srcAccess = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        if (from == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)
+        {
+            srcStage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            srcAccess = VK_ACCESS_2_TRANSFER_READ_BIT;
+        }
+        else if (from == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+        {
+            srcStage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+            srcAccess = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        }
+
+        ImageBarrier(cmd, mImages[imageIndex], VK_IMAGE_ASPECT_COLOR_BIT,
+            from, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, srcStage, srcAccess, VK_PIPELINE_STAGE_2_NONE, 0);
+    }
+
+    bool Swapchain::Create(const ISurfaceProvider &window)
     {
         VkSurfaceCapabilitiesKHR caps{};
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mDevice->Physical(), mDevice->Surface(), &caps);
 
         const VkSurfaceFormatKHR surfaceFormat = ChooseSurfaceFormat(mDevice->Physical(), mDevice->Surface());
         const VkPresentModeKHR presentMode = ChoosePresentMode(mDevice->Physical(), mDevice->Surface());
-        const VkExtent2D extent = ChooseExtent(caps, *mWindow);
+        const VkExtent2D extent = ChooseExtent(caps, window);
         mCanCapture = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
 
         uint32_t imageCount = caps.minImageCount + 1;
         if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount)
             imageCount = caps.maxImageCount;
-
-        VkSwapchainKHR oldSwapchain = mSwapchain;
 
         const VkSwapchainCreateInfoKHR info{
             .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
@@ -106,47 +195,52 @@ namespace mir
             .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
             .presentMode = presentMode,
             // Allow the driver to skip shading pixels hidden by other windows.
-            .clipped = VK_TRUE,
-            // reuse old resources
-            .oldSwapchain = oldSwapchain };
+            .clipped = VK_TRUE };
 
         if (vkCreateSwapchainKHR(mDevice->Handle(), &info, nullptr, &mSwapchain) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkCreateSwapchainKHR failed");
+            MIR_LOG_CRITICAL("Create: vkCreateSwapchainKHR failed");
             mSwapchain = VK_NULL_HANDLE;
             return false;
         }
 
-        // Retired, not owned by the new swapchain: destroy it ourselves.
-        if (oldSwapchain != VK_NULL_HANDLE)
-            vkDestroySwapchainKHR(mDevice->Handle(), oldSwapchain, nullptr);
-
-        mSwapchainFormat = surfaceFormat.format;
-        mSwapchainExtent = extent;
+        mFormat = surfaceFormat.format;
+        mExtent = extent;
 
         // The swapchain creates and owns these. We never allocate or free them.
         uint32_t actualCount = 0;
         vkGetSwapchainImagesKHR(mDevice->Handle(), mSwapchain, &actualCount, nullptr);
-        mSwapchainImages.resize(actualCount);
-        vkGetSwapchainImagesKHR(mDevice->Handle(), mSwapchain, &actualCount, mSwapchainImages.data());
+        mImages.resize(actualCount);
+        vkGetSwapchainImagesKHR(mDevice->Handle(), mSwapchain, &actualCount, mImages.data());
 
         MIR_LOG_INFO("Swapchain: {}x{} | {} image(s), requested {} | present mode {}",
             extent.width, extent.height, actualCount, imageCount,
             presentMode == VK_PRESENT_MODE_MAILBOX_KHR ? "MAILBOX" : "FIFO");
 
-        return CreateImageViews() && CreateDepthResources() && CreateRtOutputImages();
-    }
-    bool VulkanRenderer::CreateImageViews()
-    {
-        mSwapchainViews.resize(mSwapchainImages.size(), VK_NULL_HANDLE);
+        if (!CreateImageViews() || !CreateDepthResources() || !CreateRenderCompleteSemaphores())
+            return false;
 
-        for (size_t i = 0; i < mSwapchainImages.size(); ++i)
+        mDevice->NameObject(VK_OBJECT_TYPE_SWAPCHAIN_KHR, reinterpret_cast<uint64_t>(mSwapchain), "Swapchain");
+        for (size_t i = 0; i < mImages.size(); ++i)
+        {
+            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mImages[i]),
+                std::format("Swapchain image {}", i).c_str());
+        }
+
+        return true;
+    }
+
+    bool Swapchain::CreateImageViews()
+    {
+        mViews.resize(mImages.size(), VK_NULL_HANDLE);
+
+        for (size_t i = 0; i < mImages.size(); ++i)
         {
             const VkImageViewCreateInfo info{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                .image = mSwapchainImages[i],
+                .image = mImages[i],
                 .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                .format = mSwapchainFormat,
+                .format = mFormat,
                 .subresourceRange{
                     .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                     .baseMipLevel = 0,
@@ -154,22 +248,22 @@ namespace mir
                     .baseArrayLayer = 0,
                     .layerCount = 1 } };
 
-            if (vkCreateImageView(mDevice->Handle(), &info, nullptr, &mSwapchainViews[i]) != VK_SUCCESS)
+            if (vkCreateImageView(mDevice->Handle(), &info, nullptr, &mViews[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("vkCreateImageView failed for swapchain image {}", i);
+                MIR_LOG_CRITICAL("CreateImageViews: vkCreateImageView failed for swapchain image {}", i);
                 return false;
             }
         }
 
         return true;
     }
-    bool VulkanRenderer::CreateDepthResources()
+    bool Swapchain::CreateDepthResources()
     {
         VkFormatProperties formatProps{};
         vkGetPhysicalDeviceFormatProperties(mDevice->Physical(), kDepthFormat, &formatProps);
         if ((formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) == 0)
         {
-            MIR_LOG_CRITICAL("VK_FORMAT_D32_SFLOAT unsupported as an optimal-tiling depth attachment");
+            MIR_LOG_CRITICAL("CreateDepthResources: VK_FORMAT_D32_SFLOAT unsupported as an optimal-tiling depth attachment");
             return false;
         }
 
@@ -179,7 +273,7 @@ namespace mir
                 .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
                 .imageType = VK_IMAGE_TYPE_2D,
                 .format = kDepthFormat,
-                .extent{ mSwapchainExtent.width, mSwapchainExtent.height, 1 },
+                .extent{ mExtent.width, mExtent.height, 1 },
                 .mipLevels = 1,
                 .arrayLayers = 1,
                 .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -193,7 +287,7 @@ namespace mir
             if (vmaCreateImage(mDevice->Allocator(), &imageInfo, &allocInfo,
                 &mDepthImages[i], &mDepthAllocations[i], nullptr) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("vmaCreateImage failed for depth buffer {}", i);
+                MIR_LOG_CRITICAL("CreateDepthResources: vmaCreateImage failed for depth buffer {}", i);
                 return false;
             }
 
@@ -211,7 +305,7 @@ namespace mir
 
             if (vkCreateImageView(mDevice->Handle(), &viewInfo, nullptr, &mDepthViews[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("vkCreateImageView failed for depth buffer {}", i);
+                MIR_LOG_CRITICAL("CreateDepthResources: vkCreateImageView failed for depth buffer {}", i);
                 return false;
             }
 
@@ -222,7 +316,7 @@ namespace mir
         return true;
     }
 
-    void VulkanRenderer::DestroyDepthResources()
+    void Swapchain::DestroyDepthResources()
     {
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
@@ -240,19 +334,19 @@ namespace mir
         }
     }
 
-    void VulkanRenderer::DestroySwapchain()
+    void Swapchain::Destroy()
     {
+        DestroyRenderCompleteSemaphores();
         // swapchain and depth go hand in hand
-        DestroyRtOutputImages();
         DestroyDepthResources();
 
-        for (VkImageView view : mSwapchainViews)
+        for (VkImageView view : mViews)
         {
             if (view != VK_NULL_HANDLE)
                 vkDestroyImageView(mDevice->Handle(), view, nullptr);
         }
-        mSwapchainViews.clear();
-        mSwapchainImages.clear();
+        mViews.clear();
+        mImages.clear();
 
         if (mSwapchain != VK_NULL_HANDLE)
         {
@@ -261,43 +355,25 @@ namespace mir
         }
     }
 
-    bool VulkanRenderer::RecreateSwapchain()
-    {
-        vkDeviceWaitIdle(mDevice->Handle());
-        DestroyRenderCompleteSemaphores();
-        DestroySwapchain();
-
-        if (!CreateSwapchain())
-            return false;
-        if (!CreateRenderCompleteSemaphores())
-            return false;
-
-        if (mDevice->RayTracingSupported())
-            WriteRtDescriptorSets();
-
-        mNeedRecreate = false;
-        return true;
-    }
-
-    bool VulkanRenderer::CreateRenderCompleteSemaphores()
+    bool Swapchain::CreateRenderCompleteSemaphores()
     {
         const VkSemaphoreCreateInfo info{
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
 
-        mRenderComplete.resize(mSwapchainImages.size(), VK_NULL_HANDLE);
+        mRenderComplete.resize(mImages.size(), VK_NULL_HANDLE);
 
         for (VkSemaphore &sem : mRenderComplete)
         {
             if (vkCreateSemaphore(mDevice->Handle(), &info, nullptr, &sem) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("render-complete semaphore creation failed");
+                MIR_LOG_CRITICAL("CreateRenderCompleteSemaphores: render-complete semaphore creation failed");
                 return false;
             }
         }
         return true;
     }
 
-    void VulkanRenderer::DestroyRenderCompleteSemaphores()
+    void Swapchain::DestroyRenderCompleteSemaphores()
     {
         for (VkSemaphore sem : mRenderComplete)
         {

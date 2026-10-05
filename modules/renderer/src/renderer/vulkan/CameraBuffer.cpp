@@ -1,7 +1,7 @@
 /**
- * @file VulkanCamera.cpp
+ * @file CameraBuffer.cpp
  * @author Sumin Park
- * @brief per-view camera UBO and light list.
+ * @brief Set 1: per-view camera UBO and light list.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -9,8 +9,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <renderer/VulkanRenderer.h>
-#include "VulkanDevice.h"
+#include "CameraBuffer.h"
+#include "Device.h"
 #include "VulkanUtil.h"
 
 #include <core/log/Log.h>
@@ -18,7 +18,6 @@
 
 #include <vk_mem_alloc.h>
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <array>
@@ -26,7 +25,7 @@
 #include <format>
 #include <optional>
 
-namespace mir
+namespace mir::vk
 {
     namespace
     {
@@ -58,11 +57,11 @@ namespace mir
         };
     }
 
-    bool VulkanRenderer::CreateCameraResources()
+    bool CameraBuffer::Initialize(Device &device)
     {
-        VkPhysicalDeviceProperties props{};
-        vkGetPhysicalDeviceProperties(mDevice->Physical(), &props);
-        mCameraAlignedSize = AlignUp(sizeof(CameraData), props.limits.minUniformBufferOffsetAlignment);
+        mDevice = &device;
+
+        mCameraAlignedSize = AlignUp(sizeof(CameraData), mDevice->Properties().limits.minUniformBufferOffsetAlignment);
 
         VkShaderStageFlags cameraStages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         VkShaderStageFlags lightListStages = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -88,9 +87,9 @@ namespace mir
             .bindingCount = static_cast<uint32_t>(bindings.size()),
             .pBindings = bindings.data() };
 
-        if (vkCreateDescriptorSetLayout(mDevice->Handle(), &setLayoutInfo, nullptr, &mCameraSetLayout) != VK_SUCCESS)
+        if (vkCreateDescriptorSetLayout(mDevice->Handle(), &setLayoutInfo, nullptr, &mSetLayout) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateCameraResources: vkCreateDescriptorSetLayout failed");
+            MIR_LOG_CRITICAL("Initialize: vkCreateDescriptorSetLayout failed");
             return false;
         }
 
@@ -104,9 +103,9 @@ namespace mir
             .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
             .pPoolSizes = poolSizes.data() };
 
-        if (vkCreateDescriptorPool(mDevice->Handle(), &poolInfo, nullptr, &mCameraDescriptorPool) != VK_SUCCESS)
+        if (vkCreateDescriptorPool(mDevice->Handle(), &poolInfo, nullptr, &mPool) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("CreateCameraResources: vkCreateDescriptorPool failed");
+            MIR_LOG_CRITICAL("Initialize: vkCreateDescriptorPool failed");
             return false;
         }
 
@@ -116,38 +115,38 @@ namespace mir
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
             VmaAllocationInfo allocInfo{};
-            if (!vk::CreateBuffer(mDevice->Allocator(), bufferSize,
+            if (!CreateBuffer(mDevice->Allocator(), bufferSize,
                 VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
                 mCameraBuffers[i], mCameraAllocations[i], &allocInfo))
             {
-                MIR_LOG_CRITICAL("CreateCameraResources: camera buffer allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("Initialize: camera buffer allocation failed for frame {}", i);
                 return false;
             }
             mCameraMapped[i] = static_cast<std::byte *>(allocInfo.pMappedData);
 
             VmaAllocationInfo lightAllocInfo{};
-            if (!vk::CreateBuffer(mDevice->Allocator(), lightBufferSize,
+            if (!CreateBuffer(mDevice->Allocator(), lightBufferSize,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
                 mLightBuffers[i], mLightAllocations[i], &lightAllocInfo))
             {
-                MIR_LOG_CRITICAL("CreateCameraResources: light buffer allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("Initialize: light buffer allocation failed for frame {}", i);
                 return false;
             }
             mLightMapped[i] = static_cast<std::byte *>(lightAllocInfo.pMappedData);
 
             const VkDescriptorSetAllocateInfo setAllocInfo{
                 .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                .descriptorPool = mCameraDescriptorPool,
+                .descriptorPool = mPool,
                 .descriptorSetCount = 1,
-                .pSetLayouts = &mCameraSetLayout };
+                .pSetLayouts = &mSetLayout };
 
-            if (vkAllocateDescriptorSets(mDevice->Handle(), &setAllocInfo, &mCameraDescriptorSets[i]) != VK_SUCCESS)
+            if (vkAllocateDescriptorSets(mDevice->Handle(), &setAllocInfo, &mSets[i]) != VK_SUCCESS)
             {
-                MIR_LOG_CRITICAL("CreateCameraResources: descriptor set allocation failed for frame {}", i);
+                MIR_LOG_CRITICAL("Initialize: descriptor set allocation failed for frame {}", i);
                 return false;
             }
 
@@ -164,13 +163,13 @@ namespace mir
 
             const std::array<VkWriteDescriptorSet, 2> writes{ {
                 { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                 .dstSet = mCameraDescriptorSets[i],
+                 .dstSet = mSets[i],
                  .dstBinding = 0,
                  .descriptorCount = 1,
                  .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
                  .pBufferInfo = &bufferInfo },
                 { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                 .dstSet = mCameraDescriptorSets[i],
+                 .dstSet = mSets[i],
                  .dstBinding = 1,
                  .descriptorCount = 1,
                  .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -187,8 +186,11 @@ namespace mir
         return true;
     }
 
-    void VulkanRenderer::DestroyCameraResources()
+    void CameraBuffer::Shutdown()
     {
+        if (mDevice == nullptr)
+            return;
+
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
             if (mCameraBuffers[i] != VK_NULL_HANDLE)
@@ -209,20 +211,21 @@ namespace mir
         }
 
         // Freeing the pool frees its descriptor sets too.
-        if (mCameraDescriptorPool != VK_NULL_HANDLE)
+        if (mPool != VK_NULL_HANDLE)
         {
-            vkDestroyDescriptorPool(mDevice->Handle(), mCameraDescriptorPool, nullptr);
-            mCameraDescriptorPool = VK_NULL_HANDLE;
+            vkDestroyDescriptorPool(mDevice->Handle(), mPool, nullptr);
+            mPool = VK_NULL_HANDLE;
         }
 
-        if (mCameraSetLayout != VK_NULL_HANDLE)
+        if (mSetLayout != VK_NULL_HANDLE)
         {
-            vkDestroyDescriptorSetLayout(mDevice->Handle(), mCameraSetLayout, nullptr);
-            mCameraSetLayout = VK_NULL_HANDLE;
+            vkDestroyDescriptorSetLayout(mDevice->Handle(), mSetLayout, nullptr);
+            mSetLayout = VK_NULL_HANDLE;
         }
     }
 
-    void VulkanRenderer::WriteCameraData(const RenderView &view, uint32_t viewIndex)
+    uint32_t CameraBuffer::WriteView(uint32_t frame, const RenderView &view, uint32_t viewIndex,
+        const ViewShadowInfo &shadow)
     {
         // The atmosphere needs the camera's altitude over its planet, where
         // float's 1/64 m at the map edge is invisible; no geometry reads it.
@@ -230,30 +233,7 @@ namespace mir
             TryCameraRelativeFloat(view.cameraPosition, WorldPosition{}).value_or(glm::vec3(0.0f));
 
         const uint32_t firstLight = viewIndex * kMaxLights;
-        const uint32_t lightCount = WriteViewLights(view, viewIndex);
-
-        glm::mat4 sunShadowViewProjForView{ 1.0f };
-        if (mHasSunShadow)
-        {
-            const glm::vec3 anchorFromView =
-                TryCameraRelativeFloat(mSunShadowAnchor, view.cameraPosition).value_or(glm::vec3(0.0f));
-            sunShadowViewProjForView = mSunShadowViewProj * glm::translate(glm::mat4(1.0f), -anchorFromView);
-        }
-
-        const uint32_t spotShadowBase = viewIndex * kMaxSpotShadows;
-        glm::mat4 *const spotMatrixDst =
-            reinterpret_cast<glm::mat4 *>(mSpotShadowMatrixMapped[mFrameIndex]) + spotShadowBase;
-        for (uint32_t slot = 0; slot < kMaxSpotShadows; ++slot)
-        {
-            const SpotShadowCaster &caster = mSpotShadowCasters[slot];
-            if (!caster.active)
-                continue;
-            const glm::vec3 anchorFromView =
-                TryCameraRelativeFloat(caster.anchor, view.cameraPosition).value_or(glm::vec3(0.0f));
-            spotMatrixDst[slot] = caster.viewProj * glm::translate(glm::mat4(1.0f), -anchorFromView);
-        }
-        vmaFlushAllocation(mDevice->Allocator(), mSpotShadowMatrixAllocations[mFrameIndex],
-            sizeof(glm::mat4) * spotShadowBase, sizeof(glm::mat4) * kMaxSpotShadows);
+        const uint32_t lightCount = WriteViewLights(frame, view, viewIndex);
 
         const CameraData data{
             .viewProj = view.viewProj,
@@ -270,33 +250,44 @@ namespace mir
                 mAtmosphere.mRayleighScaleHeightKm * 1e3f, mAtmosphere.mMieScaleHeightKm * 1e3f),
             .atmosphereMisc = glm::vec4(mAtmosphere.mMieG, mAtmosphere.mSunIntensity, 0.0f, 0.0f),
             .lightingMeta = glm::vec4(static_cast<float>(lightCount), static_cast<float>(firstLight),
-                mHasSunShadow ? 1.0f : 0.0f, static_cast<float>(spotShadowBase)),
-            .sunShadowViewProj = sunShadowViewProjForView };
+                shadow.hasSunShadow ? 1.0f : 0.0f, static_cast<float>(shadow.spotShadowBase)),
+            .sunShadowViewProj = shadow.sunShadowViewProj };
         const VkDeviceSize offset = static_cast<VkDeviceSize>(viewIndex) * mCameraAlignedSize;
 
-        std::byte *const dst = mCameraMapped[mFrameIndex] + offset;
+        std::byte *const dst = mCameraMapped[frame] + offset;
         std::memcpy(dst, &data, sizeof(CameraData));
 
         // No-op if the memory type is already host-coherent; required
         // otherwise, since nothing else guarantees this write is flushed
         // before the render commands using it are submitted.
-        vmaFlushAllocation(mDevice->Allocator(), mCameraAllocations[mFrameIndex], offset, sizeof(CameraData));
+        vmaFlushAllocation(mDevice->Allocator(), mCameraAllocations[frame], offset, sizeof(CameraData));
+        return static_cast<uint32_t>(offset);
     }
 
-    void VulkanRenderer::SetLights(std::span<const LightItem> lights)
+    void CameraBuffer::SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color)
+    {
+        mLightDirection = glm::normalize(direction);
+        mLightColor = color;
+    }
+
+    void CameraBuffer::SetFog(const glm::vec3 &color, float density)
+    {
+        mFogColor = color;
+        mFogDensity = density;
+    }
+
+    void CameraBuffer::SetLights(std::span<const LightItem> lights)
     {
         const uint32_t count = std::min(static_cast<uint32_t>(lights.size()), kMaxLights);
 
         if (count != mLights.size())
             MIR_LOG_INFO("Point/Spot/Area lights active: {}", count);
-        // Only staged: the buffer may still be in use by this frame slot's last
-        // submission until DrawFrame/TraceFrame have waited for it.
         mLights.assign(lights.begin(), lights.begin() + count);
     }
 
-    uint32_t VulkanRenderer::WriteViewLights(const RenderView &view, uint32_t viewIndex)
+    uint32_t CameraBuffer::WriteViewLights(uint32_t frame, const RenderView &view, uint32_t viewIndex)
     {
-        GpuLight *const dst = reinterpret_cast<GpuLight *>(mLightMapped[mFrameIndex]) + viewIndex * kMaxLights;
+        GpuLight *const dst = reinterpret_cast<GpuLight *>(mLightMapped[frame]) + viewIndex * kMaxLights;
 
         // A light too far from this camera for float is skipped, like a draw item.
         uint32_t count = 0;
@@ -314,7 +305,7 @@ namespace mir
         if (count > 0)
         {
             const VkDeviceSize offset = sizeof(GpuLight) * viewIndex * kMaxLights;
-            vmaFlushAllocation(mDevice->Allocator(), mLightAllocations[mFrameIndex], offset, sizeof(GpuLight) * count);
+            vmaFlushAllocation(mDevice->Allocator(), mLightAllocations[frame], offset, sizeof(GpuLight) * count);
         }
         return count;
     }

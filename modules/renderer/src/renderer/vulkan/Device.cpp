@@ -1,12 +1,12 @@
 /**
- * @file VulkanDevice.cpp
+ * @file Device.cpp
  * @author Sumin Park
  * @brief Vulkan instance, debug messenger, surface, physical and logical device, allocator.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
-#include "VulkanDevice.h"
+#include "Device.h"
 #include "VulkanSurface.h"
 
 #include <renderer/VulkanRenderer.h>
@@ -190,11 +190,11 @@ namespace mir::vk
         }
     }
 
-    bool VulkanDevice::Initialize(const RendererDesc &desc)
+    bool Device::Initialize(const RendererDesc &desc)
     {
         if (volkInitialize() != VK_SUCCESS)
         {
-            MIR_LOG_ERROR("volk initialized failed");
+            MIR_LOG_ERROR("Initialize: volk initialized failed");
             return false;
         }
 
@@ -224,7 +224,7 @@ namespace mir::vk
         return true;
     }
 
-    void VulkanDevice::Shutdown()
+    void Device::Shutdown()
     {
         if (mAllocator != VK_NULL_HANDLE)
         {
@@ -267,7 +267,7 @@ namespace mir::vk
         volkFinalize();
     }
 
-    bool VulkanDevice::CreateInstance(const RendererDesc &desc)
+    bool Device::CreateInstance(const RendererDesc &desc)
     {
         // to fill data, read twice : once for count, once to fill
         uint32_t layerCount = 0;
@@ -288,7 +288,7 @@ namespace mir::vk
         const char *platformExt = vk::PlatformSurfaceExtension(backend);
         if (platformExt == nullptr)
         {
-            MIR_LOG_CRITICAL("No Vulkan surface extension for window backend {}",
+            MIR_LOG_CRITICAL("CreateInstance: No Vulkan surface extension for window backend {}",
                 static_cast<int>(backend));
             return false;
         }
@@ -300,7 +300,7 @@ namespace mir::vk
         {
             if (!HasExtension(availableExts, name))
             {
-                MIR_LOG_CRITICAL("Required instance extension missing: {}", name);
+                MIR_LOG_CRITICAL("CreateInstance: Required instance extension missing: {}", name);
                 return false;
             }
         }
@@ -319,7 +319,7 @@ namespace mir::vk
             }
             else
             {
-                MIR_LOG_WARN("Validation unavailable (layer: {}, debug_utils: {}); "
+                MIR_LOG_WARN("CreateInstance: Validation unavailable (layer: {}, debug_utils: {}); "
                     "install the Vulkan SDK to enable it",
                     hasLayer, hasDebugUtils);
             }
@@ -354,42 +354,42 @@ namespace mir::vk
 
         if (vkCreateInstance(&createInfo, nullptr, &mInstance) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkCreateInstance failed");
+            MIR_LOG_CRITICAL("CreateInstance: vkCreateInstance failed");
             return false;
         }
 
         return true;
     }
-    bool VulkanDevice::CreateDebugMessenger()
+    bool Device::CreateDebugMessenger()
     {
         const VkDebugUtilsMessengerCreateInfoEXT info = MakeMessengerCreateInfo();
 
         if (vkCreateDebugUtilsMessengerEXT(mInstance, &info, nullptr, &mDebugMessenger) != VK_SUCCESS)
         {
-            MIR_LOG_ERROR("vkCreateDebugUtilsMessengerEXT failed");
+            MIR_LOG_ERROR("CreateDebugMessenger: vkCreateDebugUtilsMessengerEXT failed");
             return false;
         }
         return true;
     }
-    bool VulkanDevice::CreateSurface(const RendererDesc &desc)
+    bool Device::CreateSurface(const RendererDesc &desc)
     {
         mSurface = vk::CreateSurface(mInstance, desc.window->NativeWindow());
 
         if (mSurface == VK_NULL_HANDLE)
         {
-            MIR_LOG_CRITICAL("Vulkan surface creation failed");
+            MIR_LOG_CRITICAL("CreateSurface: Vulkan surface creation failed");
             return false;
         }
         return true;
     }
 
-    bool VulkanDevice::FindPhysicalDevice()
+    bool Device::FindPhysicalDevice()
     {
         uint32_t count = 0;
         vkEnumeratePhysicalDevices(mInstance, &count, nullptr);
         if (count == 0)
         {
-            MIR_LOG_CRITICAL("No Vulkan-capable GPU found");
+            MIR_LOG_CRITICAL("FindPhysicalDevice: No Vulkan-capable GPU found");
             return false;
         }
 
@@ -447,12 +447,12 @@ namespace mir::vk
 
         if (mPhysical == VK_NULL_HANDLE)
         {
-            MIR_LOG_CRITICAL("No suitable GPU among {} candidate(s)", count);
+            MIR_LOG_CRITICAL("FindPhysicalDevice: No suitable GPU among {} candidate(s)", count);
             return false;
         }
 
-        VkPhysicalDeviceProperties props{};
-        vkGetPhysicalDeviceProperties(mPhysical, &props);
+        vkGetPhysicalDeviceProperties(mPhysical, &mProperties);
+        const VkPhysicalDeviceProperties &props = mProperties;
         MIR_LOG_INFO("GPU: {} | {} | Vulkan {}.{}.{} | graphics+present family {}",
             props.deviceName,
             props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? "discrete" : "integrated",
@@ -465,13 +465,13 @@ namespace mir::vk
         if (mRayTracingSupported)
             MIR_LOG_INFO("Ray tracing: {} supports VK_KHR_acceleration_structure + VK_KHR_ray_tracing_pipeline", props.deviceName);
         else
-            MIR_LOG_WARN("Ray tracing unavailable on {}: missing the acceleration-structure/ray-tracing-pipeline "
+            MIR_LOG_WARN("FindPhysicalDevice: Ray tracing unavailable on {}: missing the acceleration-structure/ray-tracing-pipeline "
                 "extensions or feature bits - raster only", props.deviceName);
 
         return true;
     }
 
-    bool VulkanDevice::CreateLogicalDevice()
+    bool Device::CreateLogicalDevice()
     {
         // required even for single queue, needed in infostruct
         const float queuePriority = 1.0f;
@@ -537,7 +537,7 @@ namespace mir::vk
 
         if (vkCreateDevice(mPhysical, &deviceInfo, nullptr, &mDevice) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vkCreateDevice Failed");
+            MIR_LOG_CRITICAL("CreateLogicalDevice: vkCreateDevice Failed");
             return false;
         }
 
@@ -546,7 +546,7 @@ namespace mir::vk
 
         return true;
     }
-    bool VulkanDevice::CreateAllocator()
+    bool Device::CreateAllocator()
     {
         const VmaVulkanFunctions functions{
             .vkGetInstanceProcAddr = vkGetInstanceProcAddr,
@@ -562,13 +562,13 @@ namespace mir::vk
 
         if (vmaCreateAllocator(&allocatorInfo, &mAllocator) != VK_SUCCESS)
         {
-            MIR_LOG_CRITICAL("vmaCreateAllocator failed");
+            MIR_LOG_CRITICAL("CreateAllocator: vmaCreateAllocator failed");
             return false;
         }
         return true;
     }
 
-    void VulkanDevice::NameObject(VkObjectType type, uint64_t handle, const char *name) const
+    void Device::NameObject(VkObjectType type, uint64_t handle, const char *name) const
     {
         // only when debugging
         if (!mValidationEnabled || handle == 0)
@@ -581,5 +581,23 @@ namespace mir::vk
             .pObjectName = name };
 
         vkSetDebugUtilsObjectNameEXT(mDevice, &info);
+    }
+
+    void Device::BeginLabel(VkCommandBuffer cmd, const char *name, const float(&color)[4]) const
+    {
+        if (!mValidationEnabled)
+            return;
+
+        const VkDebugUtilsLabelEXT label{
+            .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
+            .pLabelName = name,
+            .color{ color[0], color[1], color[2], color[3] } };
+        vkCmdBeginDebugUtilsLabelEXT(cmd, &label);
+    }
+
+    void Device::EndLabel(VkCommandBuffer cmd) const
+    {
+        if (mValidationEnabled)
+            vkCmdEndDebugUtilsLabelEXT(cmd);
     }
 }

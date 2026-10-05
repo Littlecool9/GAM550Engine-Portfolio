@@ -23,7 +23,7 @@ namespace mir::vk
     {
         if (handle.backend != WindowBackend::Win32)
         {
-            MIR_LOG_CRITICAL("backend is not Win32");
+            MIR_LOG_CRITICAL("CreateSurface: backend is not Win32");
             return VK_NULL_HANDLE;
         }
 

@@ -123,6 +123,8 @@ namespace mir
                 {.window = mWindow.get(), .appName = desc.mAppName, .enableValidation = desc.mEnableValidation}))
         {
             MIR_LOG_ERROR("Renderer initialization failed");
+            // Frees whatever Initialize created before it failed; the window must outlive the surface.
+            mRenderer.Shutdown();
             mWindow.reset();
             return fail();
         }

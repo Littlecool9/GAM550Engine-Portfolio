@@ -25,22 +25,29 @@
 #include <glm/vec4.hpp>
 
 #include <array>
-#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
-#include <unordered_map>
 #include <vector>
-
-VK_DEFINE_HANDLE(VmaAllocator)
-VK_DEFINE_HANDLE(VmaAllocation)
 
 struct ImDrawData;
 
 namespace mir::vk
 {
-    class VulkanDevice;
+    class Device;
+    class Swapchain;
+    class FrameSync;
+    struct FrameContext;
+    class ResourceStore;
+    class MaterialStore;
+    class CameraBuffer;
+    class ShadowMaps;
+    class ModelDescriptors;
+    class RayTracer;
+    class FrameCapture;
+    class ImGuiOverlay;
 }
 
 namespace mir
@@ -71,7 +78,7 @@ namespace mir
 
         // Morph/skin data for a model draw, read through set 2; empty for
         // everything else. Slot 2 is reserved for the material parameters the
-        // renderer writes in - see BindModelDescriptors.
+        // renderer writes in - see vk::ModelDescriptors::Bind.
         std::span<const glm::vec4> deformation;
 
         // Drawn after the opaque items, back to front. BuildViewDrawItems sorts.
@@ -121,9 +128,6 @@ namespace mir
         std::span<const DrawItem> items;
     };
 
-    // One camera's worth of draw items, clipped to a screen-space rect.
-    // Render space has world axes and this camera at the origin: viewProj holds
-    // only its rotation, and every item's model is relative to it.
     struct RenderView
     {
         VkRect2D rect{};
@@ -131,9 +135,8 @@ namespace mir
         glm::mat4 viewProj{ 1.0f };
         WorldPosition cameraPosition;
 
-        // The planes viewProj was built with; farZ 0 = no far plane. Ray
-        // tracing has no depth buffer, so it clips its rays to these.
         float nearZ = 0.1f;
+        // farZ 0 = no far plane
         float farZ = 0.0f;
     };
 
@@ -149,7 +152,7 @@ namespace mir
         void ShutdownImGuiVulkanBackend();
 
         // abstraction from imgui
-        void SetImGuiDrawData(ImDrawData *drawData) { mImguiDrawData = drawData; }
+        void SetImGuiDrawData(ImDrawData *drawData);
         MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
 
         bool DestroyMesh(MeshHandle handle);
@@ -160,7 +163,7 @@ namespace mir
 
         bool DestroyMaterial(MaterialHandle handle);
 
-        void CaptureNextFrame(const std::filesystem::path &path) { mCapturePath = path; }
+        void CaptureNextFrame(const std::filesystem::path &path);
 
         void ReleaseSceneResources();
 
@@ -170,7 +173,7 @@ namespace mir
             std::span<const MaterialHandle> materials,
             std::span<const TextureHandle> textures);
 
-        VkExtent2D SwapchainExtent() const { return mSwapchainExtent; }
+        VkExtent2D SwapchainExtent() const;
 
         void DrawFrame(std::span<const RenderView> views);
 
@@ -189,21 +192,13 @@ namespace mir
 
         void SetClearColor(const glm::vec4 &color) { mClearColor = color; }
 
-        void SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color)
-        {
-            mLightDirection = glm::normalize(direction);
-            mLightColor = color;
-        }
+        void SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color);
 
-        void SetAmbientColor(const glm::vec3 &color) { mAmbientColor = color; }
+        void SetAmbientColor(const glm::vec3 &color);
 
-        void SetFog(const glm::vec3 &color, float density)
-        {
-            mFogColor = color;
-            mFogDensity = density;
-        }
+        void SetFog(const glm::vec3 &color, float density);
 
-        void SetAtmosphere(const Sky &sky) { mAtmosphere = sky; }
+        void SetAtmosphere(const Sky &sky);
 
         void SetSkyVisible(bool visible) { mSkyVisible = visible; }
 
@@ -221,304 +216,42 @@ namespace mir
         void Shutdown();
 
     private:
-        struct GpuMesh;
-        struct GpuMaterial;
-        struct GpuTexture;
-
-        bool CreateSwapchain();
-        bool CreateImageViews();
-        bool CreateDepthResources();
-        void DestroyDepthResources();
-        void DestroySwapchain();
         bool RecreateSwapchain();
-        bool CreateFrameResources();
-        bool CreateRenderCompleteSemaphores();
-        void DestroyRenderCompleteSemaphores();
-        bool CreatePipelineLayout();
-        // One VkSampler per distinct SamplerDesc, shared by every material that
-        // asks for it; VK_NULL_HANDLE on failure.
-        VkSampler AcquireSampler(const SamplerDesc &desc);
-        void DestroySamplers();
-        bool CreateDefaultTextures();
-        bool CreateCameraResources();
-        void DestroyCameraResources();
-        bool CreateShadowResources();
-        void DestroyShadowResources();
-        void RecordShadowPasses(VkCommandBuffer cmd);
-        bool CreateModelDescriptors();
-        bool BindModelDescriptors(VkCommandBuffer cmd, const GpuMaterial &material, const DrawItem &item);
-        void ResetModelFrame(uint32_t frame);
-        void DestroyModelResources(bool shutdown);
-        bool RecordCapture(VkCommandBuffer cmd, uint32_t imageIndex);
-        void FinishCapture();
-        VkPipeline BuildPipeline(const MaterialDesc &desc);
-        bool CreateSkyPipeline();
-        void DestroyMeshes();
-        void DestroyMaterials();
-        void DestroyTextures();
+        // Shared prelude of DrawFrame and TraceFrame; nullopt skips the frame.
+        std::optional<vk::FrameContext> BeginFrame();
+        // No wait: the caller idles the device first. False for a null or stale handle.
+        bool DestroyMeshAndBlas(MeshHandle handle);
 
-        bool CreateAccelerationStructureObject(VkDeviceSize size, VkAccelerationStructureTypeKHR type,
-            VkBuffer &outBuffer, VmaAllocation &outAllocation, VkAccelerationStructureKHR &outAS);
-        bool CreateRtOutputImages();
-        void DestroyRtOutputImages();
-        bool CreateRtScene();
-        void DestroyRtScene();
-        bool CreateRtPipeline();
-        void WriteRtDescriptorSets();
-        bool BuildBLAS(GpuMesh &mesh, uint32_t vertexCount, uint32_t indexCount, VkCommandBuffer cmd,
-            VkBuffer &outScratchBuffer, VmaAllocation &outScratchAllocation);
-        void DestroyBLAS(GpuMesh &mesh);
-        void RecordTlasBuild(VkCommandBuffer cmd, uint32_t frameIndex, std::span<const DrawItem> items);
         void RecordRtFrame(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
 
-        const GpuMesh *FindMesh(MeshHandle handle) const;
-        const GpuMaterial *FindMaterial(MaterialHandle handle) const;
-        const GpuTexture *FindTexture(TextureHandle handle) const;
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
         void RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex);
-        void WriteCameraData(const RenderView &view, uint32_t viewIndex);
-        uint32_t WriteViewLights(const RenderView &view, uint32_t viewIndex);
+        // Writes set 1 and set 3's per-view data; returns the camera's dynamic offset.
+        uint32_t WriteCameraData(const RenderView &view, uint32_t viewIndex);
 
     private:
-        constexpr static uint32_t kFramesInFlight = 2;
-
-        constexpr static VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
-
         glm::vec4 mClearColor{ 0.02f, 0.02f, 0.02f, 1.0f };
 
-        glm::vec3 mLightDirection{ glm::normalize(glm::vec3(0.4f, 0.7f, 0.5f)) };
-        glm::vec3 mLightColor{ 0.85f, 0.85f, 0.85f };
-        glm::vec3 mAmbientColor{ 0.25f, 0.25f, 0.25f };
-
-        glm::vec3 mFogColor{ 0.02f, 0.02f, 0.02f };
-        float mFogDensity = 0.0f;
-
-        Sky mAtmosphere{};
         bool mSkyVisible = false;
 
         const ISurfaceProvider *mWindow;
 
         // Created in the constructor, Initialize/Shutdown bound its Vulkan objects.
-        std::unique_ptr<vk::VulkanDevice> mDevice;
+        std::unique_ptr<vk::Device> mDevice;
+        std::unique_ptr<vk::Swapchain> mSwapchain;
+        std::unique_ptr<vk::FrameSync> mFrameSync;
+        std::unique_ptr<vk::ResourceStore> mResources;
+        std::unique_ptr<vk::MaterialStore> mMaterialStore;
 
-        VkSwapchainKHR mSwapchain = VK_NULL_HANDLE;
-        VkFormat mSwapchainFormat = VK_FORMAT_UNDEFINED;
-        VkExtent2D mSwapchainExtent{};
+        std::unique_ptr<vk::CameraBuffer> mCameraBuffer;
+        std::unique_ptr<vk::ShadowMaps> mShadowMaps;
+        std::unique_ptr<vk::ModelDescriptors> mModelDescriptors;
+        // Initialized only on a device with ray tracing; its Shutdown is a no-op otherwise.
+        std::unique_ptr<vk::RayTracer> mRayTracer;
 
-        std::vector<VkImage> mSwapchainImages;
-        std::vector<VkImageView> mSwapchainViews;
+        std::unique_ptr<vk::FrameCapture> mCapture;
 
-        VkImage mDepthImages[kFramesInFlight]{};
-        VmaAllocation mDepthAllocations[kFramesInFlight]{};
-        VkImageView mDepthViews[kFramesInFlight]{};
+        std::unique_ptr<vk::ImGuiOverlay> mImGuiOverlay;
 
-        VkCommandPool mCmdPools[kFramesInFlight]{};
-        VkCommandBuffer mCmdBuffers[kFramesInFlight]{};
-        VkSemaphore mImageAcquired[kFramesInFlight]{};
-
-        std::vector<VkSemaphore> mRenderComplete;
-        VkSemaphore mTimeline = VK_NULL_HANDLE;
-
-        // waitvalue = signalValue - kFramesInFlight
-        // dont start at 0 or 1 or else underflows
-        uint64_t mNextSignalValue = kFramesInFlight + 1;
-
-        VkPipelineLayout mPipelineLayout = VK_NULL_HANDLE;
-
-        // set 0: binding 0 = base color, binding 1 = normal map.
-        VkDescriptorSetLayout mMaterialSetLayout = VK_NULL_HANDLE;
-        VkDescriptorPool mMaterialDescriptorPool = VK_NULL_HANDLE;
-
-        // Samplers, keyed by a packed SamplerDesc. The renderer owns them all;
-        // a GpuMaterial only borrows one.
-        std::unordered_map<uint64_t, VkSampler> mSamplers;
-
-        // set 1: binding 0 = per-view viewProj, as a dynamic uniform buffer.
-        constexpr static uint32_t kMaxViewsPerFrame = 16;
-
-        VkDescriptorSetLayout mCameraSetLayout = VK_NULL_HANDLE;
-        VkDescriptorPool mCameraDescriptorPool = VK_NULL_HANDLE;
-        VkDescriptorSet mCameraDescriptorSets[kFramesInFlight]{};
-
-        VkBuffer mCameraBuffers[kFramesInFlight]{};
-        VmaAllocation mCameraAllocations[kFramesInFlight]{};
-        std::byte *mCameraMapped[kFramesInFlight]{};
-        VkDeviceSize mCameraAlignedSize = 0;
-
-        // Per view; each view writes its own kMaxLights slice, narrowed against its camera.
-        constexpr static uint32_t kMaxLights = 64;
-        VkBuffer mLightBuffers[kFramesInFlight]{};
-        VmaAllocation mLightAllocations[kFramesInFlight]{};
-        std::byte *mLightMapped[kFramesInFlight]{};
-        std::vector<LightItem> mLights;
-
-        constexpr static uint32_t kSunShadowResolution = 2048;
-
-        VkImage mSunShadowImages[kFramesInFlight]{};
-        VmaAllocation mSunShadowAllocations[kFramesInFlight]{};
-        VkImageView mSunShadowViews[kFramesInFlight]{};
-        VkSampler mShadowSampler = VK_NULL_HANDLE;
-
-        VkDescriptorSetLayout mShadowSetLayout = VK_NULL_HANDLE;
-        VkDescriptorPool mShadowDescriptorPool = VK_NULL_HANDLE;
-        VkDescriptorSet mShadowDescriptorSets[kFramesInFlight]{};
-
-        VkPipelineLayout mShadowDepthPipelineLayout = VK_NULL_HANDLE;
-        VkPipeline mShadowDepthPipeline = VK_NULL_HANDLE;
-
-        bool mHasSunShadow = false;
-        glm::mat4 mSunShadowViewProj{ 1.0f };
-        WorldPosition mSunShadowAnchor;
-        std::span<const DrawItem> mSunShadowItems;
-
-        constexpr static uint32_t kSpotShadowResolution = 1024;
-
-        VkImage mSpotShadowImages[kFramesInFlight]{};
-        VmaAllocation mSpotShadowAllocations[kFramesInFlight]{};
-        VkImageView mSpotShadowArrayViews[kFramesInFlight]{}; // sampling: 2D_ARRAY over all slots
-        VkImageView mSpotShadowLayerViews[kFramesInFlight][kMaxSpotShadows]{}; // rendering: one slot each
-
-        VkBuffer mSpotShadowMatrixBuffers[kFramesInFlight]{};
-        VmaAllocation mSpotShadowMatrixAllocations[kFramesInFlight]{};
-        std::byte *mSpotShadowMatrixMapped[kFramesInFlight]{};
-
-        struct SpotShadowCaster
-        {
-            bool active = false;
-            glm::mat4 viewProj{ 1.0f }; // relative to `anchor`, not any view's camera
-            WorldPosition anchor;       // the light's own position
-            std::span<const DrawItem> items;
-        };
-        std::array<SpotShadowCaster, kMaxSpotShadows> mSpotShadowCasters{};
-
-        constexpr static uint32_t kPointShadowResolution = 512;
-
-        VkImage mPointShadowDepthImages[kFramesInFlight]{};
-        VmaAllocation mPointShadowDepthAllocations[kFramesInFlight]{};
-        VkImageView mPointShadowDepthLayerViews[kFramesInFlight][kMaxPointShadows * 6]{};
-
-        VkImage mPointShadowColorImages[kFramesInFlight]{};
-        VmaAllocation mPointShadowColorAllocations[kFramesInFlight]{};
-        VkImageView mPointShadowColorLayerViews[kFramesInFlight][kMaxPointShadows * 6]{};
-        VkImageView mPointShadowCubeArrayViews[kFramesInFlight]{}; // sampling: CUBE_ARRAY
-
-        VkPipeline mPointShadowPipeline = VK_NULL_HANDLE; // shadowDistance.slang
-
-        struct PointShadowCaster
-        {
-            bool active = false;
-            WorldPosition position; // the light itself: every face's "camera" sits here
-            float range = 0.0f;     // for the shading pass to normalize sampled distance by
-            std::array<PointShadowFace, 6> faces{};
-        };
-        std::array<PointShadowCaster, kMaxPointShadows> mPointShadowCasters{};
-
-        VkDescriptorSetLayout mModelSetLayout = VK_NULL_HANDLE;
-        VkDescriptorPool mModelPools[kFramesInFlight]{};
-
-        struct ModelFrameBuffer { VkBuffer buffer; VmaAllocation allocation; };
-        std::vector<ModelFrameBuffer> mModelBuffers[kFramesInFlight];
-
-        std::filesystem::path mCapturePath;
-        VkBuffer mCaptureBuffer = VK_NULL_HANDLE;
-        VmaAllocation mCaptureAllocation = VK_NULL_HANDLE;
-        bool mCanCapture = false;
-
-        VkPipelineLayout mSkyPipelineLayout = VK_NULL_HANDLE;
-        VkPipeline mSkyPipeline = VK_NULL_HANDLE;
-
-        VkDescriptorSetLayout mRtSetLayout = VK_NULL_HANDLE;
-        VkDescriptorPool mRtDescriptorPool = VK_NULL_HANDLE;
-        VkDescriptorSet mRtDescriptorSets[kFramesInFlight]{};
-        VkPipelineLayout mRtPipelineLayout = VK_NULL_HANDLE;
-        VkPipeline mRtPipeline = VK_NULL_HANDLE;
-
-        VkBuffer mSbtBuffer = VK_NULL_HANDLE;
-        VmaAllocation mSbtAllocation = VK_NULL_HANDLE;
-        VkStridedDeviceAddressRegionKHR mSbtRaygenRegion{};
-        VkStridedDeviceAddressRegionKHR mSbtMissRegion{};
-        VkStridedDeviceAddressRegionKHR mSbtHitRegion{};
-        VkStridedDeviceAddressRegionKHR mSbtCallableRegion{};
-
-        constexpr static uint32_t kMaxRtInstances = 256;
-        bool mWarnedRtInstanceCap = false;
-
-        VkImage mRtOutputImages[kFramesInFlight]{};
-        VmaAllocation mRtOutputAllocations[kFramesInFlight]{};
-        VkImageView mRtOutputViews[kFramesInFlight]{};
-
-        VkAccelerationStructureKHR mTlas[kFramesInFlight]{};
-        VkBuffer mTlasBuffers[kFramesInFlight]{};
-        VmaAllocation mTlasAllocations[kFramesInFlight]{};
-
-        VkBuffer mTlasScratchBuffers[kFramesInFlight]{};
-        VmaAllocation mTlasScratchAllocations[kFramesInFlight]{};
-        VkDeviceAddress mTlasScratchAddresses[kFramesInFlight]{};
-
-        VkBuffer mInstanceBuffers[kFramesInFlight]{};
-        VmaAllocation mInstanceAllocations[kFramesInFlight]{};
-        std::byte *mInstanceMapped[kFramesInFlight]{};
-
-        VkBuffer mRtInstanceInfoBuffers[kFramesInFlight]{};
-        VmaAllocation mRtInstanceInfoAllocations[kFramesInFlight]{};
-        std::byte *mRtInstanceInfoMapped[kFramesInFlight]{};
-
-        // One buffer pair per mesh
-        struct GpuMesh
-        {
-            VkBuffer mVertexBuffer = VK_NULL_HANDLE;
-            VmaAllocation mVertexAllocation = VK_NULL_HANDLE;
-            VkBuffer mIndexBuffer = VK_NULL_HANDLE;
-            VmaAllocation mIndexAllocation = VK_NULL_HANDLE;
-            uint32_t mIndexCount = 0;
-            uint32_t mGeneration = 0; //< 0 = slot never filled
-
-            VkAccelerationStructureKHR mBlas = VK_NULL_HANDLE;
-            VkBuffer mBlasBuffer = VK_NULL_HANDLE;
-            VmaAllocation mBlasAllocation = VK_NULL_HANDLE;
-            VkDeviceAddress mBlasAddress = 0;
-        };
-
-        std::vector<GpuMesh> mMeshes;
-
-        std::vector<uint32_t> mFreeMeshIndices;
-
-        struct GpuMaterial
-        {
-            VkPipeline mPipeline = VK_NULL_HANDLE;
-            VkDescriptorSet mDescriptorSet = VK_NULL_HANDLE;
-            // alphaMode, alphaCutoff, doubleSided, unused. Handed to the model
-            // shader through set 2, since the push constant range is full.
-            glm::vec4 mParameters{};
-            bool mModelShader = false;
-            uint32_t mGeneration = 0;
-            bool mUnlit = false;
-        };
-
-        std::vector<GpuMaterial> mMaterials;
-        std::vector<uint32_t> mFreeMaterialIndices;
-
-        MaterialHandle mDefaultMaterial;
-
-        // One image per texture.
-        struct GpuTexture
-        {
-            VkImage mImage = VK_NULL_HANDLE;
-            VmaAllocation mAllocation = VK_NULL_HANDLE;
-            VkImageView mView = VK_NULL_HANDLE;
-            uint32_t mLevels = 1;
-            uint32_t mGeneration = 0; //< 0 = slot never filled
-        };
-
-        std::vector<GpuTexture> mTextures;
-
-        TextureHandle mDefaultWhiteTexture;
-        TextureHandle mDefaultNormalTexture;
-
-        uint32_t mFrameIndex = 0;
-        bool mNeedRecreate = false;
-
-        bool mImGuiBackendInitialized = false;
-        ImDrawData *mImguiDrawData = nullptr;
     };
 }

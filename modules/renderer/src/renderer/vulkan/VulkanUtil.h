@@ -14,10 +14,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <span>
 
 namespace mir::vk
 {
+    class Device;
+
     bool CreateBuffer(VmaAllocator allocator,
         VkDeviceSize size,
         VkBufferUsageFlags usage,
@@ -44,4 +47,7 @@ namespace mir::vk
 
     // VK_NULL_HANDLE on failure, already logged.
     VkShaderModule CreateShaderModule(VkDevice device, const std::filesystem::path &path);
+
+    // Records into a throwaway command buffer, submits it and waits for the queue to go idle.
+    bool SubmitAndWait(const Device &device, const std::function<void(VkCommandBuffer)> &record);
 }

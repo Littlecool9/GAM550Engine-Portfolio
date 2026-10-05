@@ -1,5 +1,5 @@
 /**
- * @file VulkanDevice.h
+ * @file Device.h
  * @author Sumin Park
  * @brief Vulkan instance, debug messenger, surface, physical and logical device, queue, allocator.
  *
@@ -21,7 +21,7 @@ namespace mir
 
 namespace mir::vk
 {
-    class VulkanDevice
+    class Device
     {
     public:
         constexpr static uint32_t kApiVersion{ VK_API_VERSION_1_4 };
@@ -41,6 +41,8 @@ namespace mir::vk
         uint32_t QueueFamily() const { return mQueueFamily; }
         VmaAllocator Allocator() const { return mAllocator; }
 
+        const VkPhysicalDeviceProperties &Properties() const { return mProperties; }
+
         bool RayTracingSupported() const { return mRayTracingSupported; }
         const VkPhysicalDeviceRayTracingPipelinePropertiesKHR &RtProperties() const { return mRtProperties; }
 
@@ -48,6 +50,8 @@ namespace mir::vk
 
         // No-op without validation, so release builds skip the call.
         void NameObject(VkObjectType type, uint64_t handle, const char *name) const;
+        void BeginLabel(VkCommandBuffer cmd, const char *name, const float(&color)[4]) const;
+        void EndLabel(VkCommandBuffer cmd) const;
 
     private:
         bool CreateInstance(const RendererDesc &desc);
@@ -62,6 +66,7 @@ namespace mir::vk
         VkSurfaceKHR mSurface = VK_NULL_HANDLE;
 
         VkPhysicalDevice mPhysical = VK_NULL_HANDLE;
+        VkPhysicalDeviceProperties mProperties{};
         VkDevice mDevice = VK_NULL_HANDLE;
 
         // queue for render + present
