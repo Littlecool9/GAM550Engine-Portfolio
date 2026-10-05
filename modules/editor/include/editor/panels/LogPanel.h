@@ -21,5 +21,7 @@ namespace mir
         char mSearchBuf[128] = {};
         LogLevel mMinLevel = LogLevel::Trace;
         bool mAutoScroll = true;
+        int mSelectionAnchor = -1;
+        int mSelectionEnd = -1;
     };
 }
