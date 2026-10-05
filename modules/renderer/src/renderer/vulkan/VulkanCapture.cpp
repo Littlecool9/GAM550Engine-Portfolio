@@ -10,6 +10,7 @@
 #define NOMINMAX
 #endif
 #include <renderer/VulkanRenderer.h>
+#include "VulkanDevice.h"
 
 #include <core/log/Log.h>
 
@@ -39,7 +40,7 @@ namespace mir
         VmaAllocationCreateInfo allocation{};
         allocation.usage = VMA_MEMORY_USAGE_AUTO;
         allocation.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        if (vmaCreateBuffer(mAllocator, &info, &allocation, &mCaptureBuffer, &mCaptureAllocation, nullptr) !=
+        if (vmaCreateBuffer(mDevice->Allocator(), &info, &allocation, &mCaptureBuffer, &mCaptureAllocation, nullptr) !=
             VK_SUCCESS)
         {
             MIR_LOG_ERROR("capture allocation failed");
@@ -81,10 +82,10 @@ namespace mir
     }
     void VulkanRenderer::FinishCapture()
     {
-        vkQueueWaitIdle(mGfxQueue);
-        vmaInvalidateAllocation(mAllocator, mCaptureAllocation, 0, VK_WHOLE_SIZE);
+        vkQueueWaitIdle(mDevice->Queue());
+        vmaInvalidateAllocation(mDevice->Allocator(), mCaptureAllocation, 0, VK_WHOLE_SIZE);
         VmaAllocationInfo info{};
-        vmaGetAllocationInfo(mAllocator, mCaptureAllocation, &info);
+        vmaGetAllocationInfo(mDevice->Allocator(), mCaptureAllocation, &info);
         const auto size = size_t(mSwapchainExtent.width) * mSwapchainExtent.height * 4;
         const auto *begin = static_cast<const uint8_t *>(info.pMappedData);
         std::vector<uint8_t> pixels(begin, begin + size);
@@ -96,7 +97,7 @@ namespace mir
             MIR_LOG_ERROR("cannot write frame capture: {}", mCapturePath.string());
         else
             MIR_LOG_INFO("Captured frame: {}", mCapturePath.string());
-        vmaDestroyBuffer(mAllocator, mCaptureBuffer, mCaptureAllocation);
+        vmaDestroyBuffer(mDevice->Allocator(), mCaptureBuffer, mCaptureAllocation);
         mCaptureBuffer = VK_NULL_HANDLE;
         mCaptureAllocation = VK_NULL_HANDLE;
         mCapturePath.clear();

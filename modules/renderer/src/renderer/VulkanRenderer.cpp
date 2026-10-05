@@ -7,6 +7,7 @@
  *
  */
 #include "renderer/VulkanRenderer.h"
+#include "vulkan/VulkanDevice.h"
 
 #include <core/log/Log.h>
 
@@ -17,6 +18,12 @@
 
 namespace mir
 {
+    // Out of line: unique_ptr<VulkanDevice> needs the complete type to build and destroy.
+    VulkanRenderer::VulkanRenderer() : mDevice(std::make_unique<vk::VulkanDevice>()) {}
+    VulkanRenderer::~VulkanRenderer() = default;
+
+    bool VulkanRenderer::RayTracingSupported() const { return mDevice->RayTracingSupported(); }
+
     bool VulkanRenderer::Initialize(const RendererDesc &desc)
     {
         if (desc.window == nullptr)
@@ -27,30 +34,7 @@ namespace mir
 
         mWindow = desc.window;
 
-        if (volkInitialize() != VK_SUCCESS)
-        {
-            MIR_LOG_ERROR("volk initialized failed");
-            return false;
-        }
-
-        if (!CreateVulkanInstance(desc))
-            return false;
-
-        volkLoadInstance(mVulkanInstance);
-
-        if (mValidationEnabled && !CreateDebugMessenger())
-            return false;
-
-        if (!CreateSurface())
-            return false;
-
-        if (!FindPhysicalDevice())
-            return false;
-
-        if (!CreateLogicalDevice())
-            return false;
-
-        if (!CreateAllocator())
+        if (!mDevice->Initialize(desc))
             return false;
 
         if (!CreateSwapchain())
@@ -74,7 +58,7 @@ namespace mir
         if (!CreateSkyPipeline())
             return false;
 
-        if (mRayTracingSupported)
+        if (mDevice->RayTracingSupported())
         {
             if (!CreateRtScene())
                 return false;
@@ -87,15 +71,13 @@ namespace mir
         if (mDefaultMaterial.IsNull())
             return false;
 
-        NameObject(VK_OBJECT_TYPE_DEVICE, reinterpret_cast<uint64_t>(mDevice), "MjolnirEngine device");
-        NameObject(VK_OBJECT_TYPE_QUEUE, reinterpret_cast<uint64_t>(mGfxQueue), "Graphics+present queue");
-        NameObject(VK_OBJECT_TYPE_SWAPCHAIN_KHR, reinterpret_cast<uint64_t>(mSwapchain), "Swapchain");
-        NameObject(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(mMaterials[mDefaultMaterial.mIndex].mPipeline), "Default material pipeline");
-        NameObject(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(mSkyPipeline), "Sky pipeline");
+        mDevice->NameObject(VK_OBJECT_TYPE_SWAPCHAIN_KHR, reinterpret_cast<uint64_t>(mSwapchain), "Swapchain");
+        mDevice->NameObject(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(mMaterials[mDefaultMaterial.mIndex].mPipeline), "Default material pipeline");
+        mDevice->NameObject(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(mSkyPipeline), "Sky pipeline");
 
         for (size_t i = 0; i < mSwapchainImages.size(); ++i)
         {
-            NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mSwapchainImages[i]),
+            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mSwapchainImages[i]),
                 std::format("Swapchain image {}", i).c_str());
         }
 
@@ -104,32 +86,32 @@ namespace mir
 
     void VulkanRenderer::Shutdown()
     {
-        if (mDevice != VK_NULL_HANDLE)
+        if (mDevice->Handle() != VK_NULL_HANDLE)
         {
-            vkDeviceWaitIdle(mDevice);
+            vkDeviceWaitIdle(mDevice->Handle());
 
             if (mTimeline != VK_NULL_HANDLE)
             {
-                vkDestroySemaphore(mDevice, mTimeline, nullptr);
+                vkDestroySemaphore(mDevice->Handle(), mTimeline, nullptr);
                 mTimeline = VK_NULL_HANDLE;
             }
 
             for (uint32_t i = 0; i < kFramesInFlight; ++i)
             {
                 if (mImageAcquired[i] != VK_NULL_HANDLE)
-                    vkDestroySemaphore(mDevice, mImageAcquired[i], nullptr);
+                    vkDestroySemaphore(mDevice->Handle(), mImageAcquired[i], nullptr);
                 // Destroying the pool frees its command buffers too.
                 if (mCmdPools[i] != VK_NULL_HANDLE)
-                    vkDestroyCommandPool(mDevice, mCmdPools[i], nullptr);
+                    vkDestroyCommandPool(mDevice->Handle(), mCmdPools[i], nullptr);
             }
 
-            // before mAllocator
+            // before the device allocator
             DestroyMeshes();
             // before mMaterialDescriptorPool: frees each material's set
             DestroyMaterials();
             DestroyModelResources(true);
             DestroyTextures();
-            // before mAllocator: frees the camera UBO buffers
+            // before the device allocator: frees the camera UBO buffers
             DestroyCameraResources();
             DestroyShadowResources();
 
@@ -137,31 +119,31 @@ namespace mir
 
             if (mMaterialDescriptorPool != VK_NULL_HANDLE)
             {
-                vkDestroyDescriptorPool(mDevice, mMaterialDescriptorPool, nullptr);
+                vkDestroyDescriptorPool(mDevice->Handle(), mMaterialDescriptorPool, nullptr);
                 mMaterialDescriptorPool = VK_NULL_HANDLE;
             }
 
             if (mMaterialSetLayout != VK_NULL_HANDLE)
             {
-                vkDestroyDescriptorSetLayout(mDevice, mMaterialSetLayout, nullptr);
+                vkDestroyDescriptorSetLayout(mDevice->Handle(), mMaterialSetLayout, nullptr);
                 mMaterialSetLayout = VK_NULL_HANDLE;
             }
 
             if (mPipelineLayout != VK_NULL_HANDLE)
             {
-                vkDestroyPipelineLayout(mDevice, mPipelineLayout, nullptr);
+                vkDestroyPipelineLayout(mDevice->Handle(), mPipelineLayout, nullptr);
                 mPipelineLayout = VK_NULL_HANDLE;
             }
 
             if (mSkyPipeline != VK_NULL_HANDLE)
             {
-                vkDestroyPipeline(mDevice, mSkyPipeline, nullptr);
+                vkDestroyPipeline(mDevice->Handle(), mSkyPipeline, nullptr);
                 mSkyPipeline = VK_NULL_HANDLE;
             }
 
             if (mSkyPipelineLayout != VK_NULL_HANDLE)
             {
-                vkDestroyPipelineLayout(mDevice, mSkyPipelineLayout, nullptr);
+                vkDestroyPipelineLayout(mDevice->Handle(), mSkyPipelineLayout, nullptr);
                 mSkyPipelineLayout = VK_NULL_HANDLE;
             }
 
@@ -169,32 +151,32 @@ namespace mir
 
             if (mSbtBuffer != VK_NULL_HANDLE)
             {
-                vmaDestroyBuffer(mAllocator, mSbtBuffer, mSbtAllocation);
+                vmaDestroyBuffer(mDevice->Allocator(), mSbtBuffer, mSbtAllocation);
                 mSbtBuffer = VK_NULL_HANDLE;
                 mSbtAllocation = VK_NULL_HANDLE;
             }
 
             if (mRtPipeline != VK_NULL_HANDLE)
             {
-                vkDestroyPipeline(mDevice, mRtPipeline, nullptr);
+                vkDestroyPipeline(mDevice->Handle(), mRtPipeline, nullptr);
                 mRtPipeline = VK_NULL_HANDLE;
             }
 
             if (mRtPipelineLayout != VK_NULL_HANDLE)
             {
-                vkDestroyPipelineLayout(mDevice, mRtPipelineLayout, nullptr);
+                vkDestroyPipelineLayout(mDevice->Handle(), mRtPipelineLayout, nullptr);
                 mRtPipelineLayout = VK_NULL_HANDLE;
             }
 
             if (mRtDescriptorPool != VK_NULL_HANDLE)
             {
-                vkDestroyDescriptorPool(mDevice, mRtDescriptorPool, nullptr);
+                vkDestroyDescriptorPool(mDevice->Handle(), mRtDescriptorPool, nullptr);
                 mRtDescriptorPool = VK_NULL_HANDLE;
             }
 
             if (mRtSetLayout != VK_NULL_HANDLE)
             {
-                vkDestroyDescriptorSetLayout(mDevice, mRtSetLayout, nullptr);
+                vkDestroyDescriptorSetLayout(mDevice->Handle(), mRtSetLayout, nullptr);
                 mRtSetLayout = VK_NULL_HANDLE;
             }
 
@@ -202,54 +184,17 @@ namespace mir
             DestroySwapchain();
         }
 
-        if (mAllocator != VK_NULL_HANDLE)
-        {
-            // The permanent leak detector. Every later milestone that allocates
-            // must still land here at 0 bytes.
-            VmaTotalStatistics stats{};
-            vmaCalculateStatistics(mAllocator, &stats);
-            MIR_LOG_INFO("[vma] live bytes at shutdown: {} in {} allocation(s)",
-                stats.total.statistics.allocationBytes,
-                stats.total.statistics.allocationCount);
-
-            vmaDestroyAllocator(mAllocator);
-            mAllocator = VK_NULL_HANDLE;
-        }
-
-        if (mDevice != VK_NULL_HANDLE)
-        {
-            vkDestroyDevice(mDevice, nullptr);
-            mDevice = VK_NULL_HANDLE;
-        }
-
-        if (mDebugMessenger != VK_NULL_HANDLE)
-        {
-            vkDestroyDebugUtilsMessengerEXT(mVulkanInstance, mDebugMessenger, nullptr);
-            mDebugMessenger = VK_NULL_HANDLE;
-        }
-
-        if (mSurface != VK_NULL_HANDLE)
-        {
-            vkDestroySurfaceKHR(mVulkanInstance, mSurface, nullptr);
-            mSurface = VK_NULL_HANDLE;
-        }
-
-        if (mVulkanInstance != VK_NULL_HANDLE)
-        {
-            vkDestroyInstance(mVulkanInstance, nullptr);
-            mVulkanInstance = VK_NULL_HANDLE;
-        }
-
-        volkFinalize();
+        // Last: everything above was created from the device.
+        mDevice->Shutdown();
     }
 
     void VulkanRenderer::ReleaseSceneResources()
     {
-        if (mDevice == VK_NULL_HANDLE)
+        if (mDevice->Handle() == VK_NULL_HANDLE)
             return;
 
         // in-flight frames may still use them
-        vkDeviceWaitIdle(mDevice);
+        vkDeviceWaitIdle(mDevice->Handle());
 
         const std::size_t meshCount = mMeshes.size();
         DestroyMeshes();
@@ -262,9 +207,9 @@ namespace mir
         {
             GpuTexture &texture = mTextures[i];
             if (texture.mView != VK_NULL_HANDLE)
-                vkDestroyImageView(mDevice, texture.mView, nullptr);
+                vkDestroyImageView(mDevice->Handle(), texture.mView, nullptr);
             if (texture.mImage != VK_NULL_HANDLE)
-                vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
+                vmaDestroyImage(mDevice->Allocator(), texture.mImage, texture.mAllocation);
             ++releasedTextures;
         }
         mTextures.resize(keptTextures);
@@ -285,9 +230,9 @@ namespace mir
             if (i == mDefaultMaterial.mIndex)
                 continue;
             if (mMaterials[i].mDescriptorSet != VK_NULL_HANDLE)
-                vkFreeDescriptorSets(mDevice, mMaterialDescriptorPool, 1, &mMaterials[i].mDescriptorSet);
+                vkFreeDescriptorSets(mDevice->Handle(), mMaterialDescriptorPool, 1, &mMaterials[i].mDescriptorSet);
             if (mMaterials[i].mPipeline != VK_NULL_HANDLE)
-                vkDestroyPipeline(mDevice, mMaterials[i].mPipeline, nullptr);
+                vkDestroyPipeline(mDevice->Handle(), mMaterials[i].mPipeline, nullptr);
             ++released;
         }
 
@@ -303,10 +248,10 @@ namespace mir
         std::span<const MaterialHandle> materials,
         std::span<const TextureHandle> textures)
     {
-        if (mDevice == VK_NULL_HANDLE)
+        if (mDevice->Handle() == VK_NULL_HANDLE)
             return;
 
-        vkDeviceWaitIdle(mDevice);
+        vkDeviceWaitIdle(mDevice->Handle());
 
         for (const MeshHandle handle : meshes)
         {
@@ -316,9 +261,9 @@ namespace mir
             if (mesh.mGeneration != handle.mGeneration)
                 continue;
             if (mesh.mVertexBuffer != VK_NULL_HANDLE)
-                vmaDestroyBuffer(mAllocator, mesh.mVertexBuffer, mesh.mVertexAllocation);
+                vmaDestroyBuffer(mDevice->Allocator(), mesh.mVertexBuffer, mesh.mVertexAllocation);
             if (mesh.mIndexBuffer != VK_NULL_HANDLE)
-                vmaDestroyBuffer(mAllocator, mesh.mIndexBuffer, mesh.mIndexAllocation);
+                vmaDestroyBuffer(mDevice->Allocator(), mesh.mIndexBuffer, mesh.mIndexAllocation);
             mesh = {};
             // Bumped so a handle to the old contents stops resolving.
             mesh.mGeneration = handle.mGeneration + 1;
@@ -334,9 +279,9 @@ namespace mir
                 continue;
             // The sampler belongs to the renderer's cache, not to the material.
             if (material.mDescriptorSet != VK_NULL_HANDLE)
-                vkFreeDescriptorSets(mDevice, mMaterialDescriptorPool, 1, &material.mDescriptorSet);
+                vkFreeDescriptorSets(mDevice->Handle(), mMaterialDescriptorPool, 1, &material.mDescriptorSet);
             if (material.mPipeline != VK_NULL_HANDLE)
-                vkDestroyPipeline(mDevice, material.mPipeline, nullptr);
+                vkDestroyPipeline(mDevice->Handle(), material.mPipeline, nullptr);
             material = {};
             material.mGeneration = handle.mGeneration + 1;
             mFreeMaterialIndices.push_back(handle.mIndex);
@@ -351,9 +296,9 @@ namespace mir
             if (texture.mGeneration != handle.mGeneration)
                 continue;
             if (texture.mView != VK_NULL_HANDLE)
-                vkDestroyImageView(mDevice, texture.mView, nullptr);
+                vkDestroyImageView(mDevice->Handle(), texture.mView, nullptr);
             if (texture.mImage != VK_NULL_HANDLE)
-                vmaDestroyImage(mAllocator, texture.mImage, texture.mAllocation);
+                vmaDestroyImage(mDevice->Allocator(), texture.mImage, texture.mAllocation);
             texture = {};
             texture.mGeneration = handle.mGeneration + 1;
         }

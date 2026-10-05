@@ -10,6 +10,7 @@
 #define NOMINMAX
 #endif
 #include <renderer/VulkanRenderer.h>
+#include "VulkanDevice.h"
 #include "VulkanUtil.h"
 #include "VulkanPushConstants.h"
 
@@ -28,14 +29,14 @@ namespace mir
         const VkCommandPoolCreateInfo poolInfo{
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .flags = 0,
-            .queueFamilyIndex = mGfxQueueFamIdx };
+            .queueFamilyIndex = mDevice->QueueFamily() };
 
         const VkSemaphoreCreateInfo semInfo{
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
 
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
-            if (vkCreateCommandPool(mDevice, &poolInfo, nullptr, &mCmdPools[i]) != VK_SUCCESS)
+            if (vkCreateCommandPool(mDevice->Handle(), &poolInfo, nullptr, &mCmdPools[i]) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("vkCreateCommandPool failed for frame {}", i);
                 return false;
@@ -47,13 +48,13 @@ namespace mir
                 .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
                 .commandBufferCount = 1 };
 
-            if (vkAllocateCommandBuffers(mDevice, &allocInfo, &mCmdBuffers[i]) != VK_SUCCESS)
+            if (vkAllocateCommandBuffers(mDevice->Handle(), &allocInfo, &mCmdBuffers[i]) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("vkAllocateCommandBuffers failed for frame {}", i);
                 return false;
             }
 
-            if (vkCreateSemaphore(mDevice, &semInfo, nullptr, &mImageAcquired[i]) != VK_SUCCESS)
+            if (vkCreateSemaphore(mDevice->Handle(), &semInfo, nullptr, &mImageAcquired[i]) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("image-acquired semaphore failed for frame {}", i);
                 return false;
@@ -70,7 +71,7 @@ namespace mir
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
             .pNext = &typeInfo };
 
-        if (vkCreateSemaphore(mDevice, &timelineInfo, nullptr, &mTimeline) != VK_SUCCESS)
+        if (vkCreateSemaphore(mDevice->Handle(), &timelineInfo, nullptr, &mTimeline) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("timeline semaphore creation failed");
             return false;
@@ -208,7 +209,7 @@ namespace mir
 
         vkCmdBeginRendering(cmd, &renderingInfo);
 
-        if (mValidationEnabled)
+        if (mDevice->ValidationEnabled())
         {
             const VkDebugUtilsLabelEXT label{
                 .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
@@ -230,7 +231,7 @@ namespace mir
         if (mImguiDrawData != nullptr)
             ImGui_ImplVulkan_RenderDrawData(mImguiDrawData, cmd);
 
-        if (mValidationEnabled)
+        if (mDevice->ValidationEnabled())
             vkCmdEndDebugUtilsLabelEXT(cmd);
 
         vkCmdEndRendering(cmd);
@@ -268,15 +269,15 @@ namespace mir
             .pValues = &waitValue };
 
         // wait for next image to comeback from framesin flight
-        vkWaitSemaphores(mDevice, &waitInfo, UINT64_MAX);
+        vkWaitSemaphores(mDevice->Handle(), &waitInfo, UINT64_MAX);
         ResetModelFrame(mFrameIndex);
 
         // Whole-pool reset, not per-buffer.
-        vkResetCommandPool(mDevice, mCmdPools[mFrameIndex], 0);
+        vkResetCommandPool(mDevice->Handle(), mCmdPools[mFrameIndex], 0);
 
         uint32_t imageIndex = 0;
         const VkResult acquireResult = vkAcquireNextImageKHR(
-            mDevice, mSwapchain, UINT64_MAX,
+            mDevice->Handle(), mSwapchain, UINT64_MAX,
             mImageAcquired[mFrameIndex], VK_NULL_HANDLE, &imageIndex);
 
         // The semaphore was not signalled, so this frame cannot proceed.
@@ -338,7 +339,7 @@ namespace mir
             .signalSemaphoreInfoCount = 2,
             .pSignalSemaphoreInfos = signalSems };
 
-        if (vkQueueSubmit2(mGfxQueue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS)
+        if (vkQueueSubmit2(mDevice->Queue(), 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS)
         {
             MIR_LOG_ERROR("vkQueueSubmit2 failed");
             return;
@@ -352,7 +353,7 @@ namespace mir
             .pSwapchains = &mSwapchain,
             .pImageIndices = &imageIndex };
 
-        const VkResult presentResult = vkQueuePresentKHR(mGfxQueue, &presentInfo);
+        const VkResult presentResult = vkQueuePresentKHR(mDevice->Queue(), &presentInfo);
         if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR)
             mNeedRecreate = true;
         else if (presentResult != VK_SUCCESS)

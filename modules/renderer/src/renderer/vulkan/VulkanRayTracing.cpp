@@ -7,6 +7,7 @@
  *
  */
 #include <renderer/VulkanRenderer.h>
+#include "VulkanDevice.h"
 #include "VulkanUtil.h"
 #include "VulkanPushConstants.h"
 
@@ -76,7 +77,7 @@ namespace mir
 
     bool VulkanRenderer::CreateRtOutputImages()
     {
-        if (!mRayTracingSupported)
+        if (!mDevice->RayTracingSupported())
             return true;
 
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
@@ -96,7 +97,7 @@ namespace mir
 
             const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
 
-            if (vmaCreateImage(mAllocator, &imageInfo, &allocInfo,
+            if (vmaCreateImage(mDevice->Allocator(), &imageInfo, &allocInfo,
                 &mRtOutputImages[i], &mRtOutputAllocations[i], nullptr) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("vmaCreateImage failed for RT output image {}", i);
@@ -115,13 +116,13 @@ namespace mir
                     .baseArrayLayer = 0,
                     .layerCount = 1 } };
 
-            if (vkCreateImageView(mDevice, &viewInfo, nullptr, &mRtOutputViews[i]) != VK_SUCCESS)
+            if (vkCreateImageView(mDevice->Handle(), &viewInfo, nullptr, &mRtOutputViews[i]) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("vkCreateImageView failed for RT output image {}", i);
                 return false;
             }
 
-            NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mRtOutputImages[i]),
+            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mRtOutputImages[i]),
                 std::format("RT output image {}", i).c_str());
         }
 
@@ -134,12 +135,12 @@ namespace mir
         {
             if (mRtOutputViews[i] != VK_NULL_HANDLE)
             {
-                vkDestroyImageView(mDevice, mRtOutputViews[i], nullptr);
+                vkDestroyImageView(mDevice->Handle(), mRtOutputViews[i], nullptr);
                 mRtOutputViews[i] = VK_NULL_HANDLE;
             }
             if (mRtOutputImages[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyImage(mAllocator, mRtOutputImages[i], mRtOutputAllocations[i]);
+                vmaDestroyImage(mDevice->Allocator(), mRtOutputImages[i], mRtOutputAllocations[i]);
                 mRtOutputImages[i] = VK_NULL_HANDLE;
                 mRtOutputAllocations[i] = VK_NULL_HANDLE;
             }
@@ -148,22 +149,22 @@ namespace mir
 
     bool VulkanRenderer::CreateRtPipeline()
     {
-        VkShaderModule raygenModule = vk::CreateShaderModule(mDevice, ShaderPath("raytrace.rayGenMain.spv"));
-        VkShaderModule missModule = vk::CreateShaderModule(mDevice, ShaderPath("raytrace.missMain.spv"));
-        VkShaderModule shadowMissModule = vk::CreateShaderModule(mDevice, ShaderPath("raytrace.shadowMissMain.spv"));
-        VkShaderModule hitModule = vk::CreateShaderModule(mDevice, ShaderPath("raytrace.closestHitMain.spv"));
+        VkShaderModule raygenModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("raytrace.rayGenMain.spv"));
+        VkShaderModule missModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("raytrace.missMain.spv"));
+        VkShaderModule shadowMissModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("raytrace.shadowMissMain.spv"));
+        VkShaderModule hitModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("raytrace.closestHitMain.spv"));
 
         if (raygenModule == VK_NULL_HANDLE || missModule == VK_NULL_HANDLE ||
             shadowMissModule == VK_NULL_HANDLE || hitModule == VK_NULL_HANDLE)
         {
             if (raygenModule != VK_NULL_HANDLE)
-                vkDestroyShaderModule(mDevice, raygenModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
             if (missModule != VK_NULL_HANDLE)
-                vkDestroyShaderModule(mDevice, missModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
             if (shadowMissModule != VK_NULL_HANDLE)
-                vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
             if (hitModule != VK_NULL_HANDLE)
-                vkDestroyShaderModule(mDevice, hitModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), hitModule, nullptr);
             return false;
         }
 
@@ -186,13 +187,13 @@ namespace mir
             .bindingCount = static_cast<uint32_t>(setBindings.size()),
             .pBindings = setBindings.data() };
 
-        if (vkCreateDescriptorSetLayout(mDevice, &setLayoutInfo, nullptr, &mRtSetLayout) != VK_SUCCESS)
+        if (vkCreateDescriptorSetLayout(mDevice->Handle(), &setLayoutInfo, nullptr, &mRtSetLayout) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateRtPipeline: vkCreateDescriptorSetLayout failed");
-            vkDestroyShaderModule(mDevice, raygenModule, nullptr);
-            vkDestroyShaderModule(mDevice, missModule, nullptr);
-            vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
-            vkDestroyShaderModule(mDevice, hitModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), hitModule, nullptr);
             return false;
         }
 
@@ -207,13 +208,13 @@ namespace mir
             .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
             .pPoolSizes = poolSizes.data() };
 
-        if (vkCreateDescriptorPool(mDevice, &poolInfo, nullptr, &mRtDescriptorPool) != VK_SUCCESS)
+        if (vkCreateDescriptorPool(mDevice->Handle(), &poolInfo, nullptr, &mRtDescriptorPool) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateRtPipeline: vkCreateDescriptorPool failed");
-            vkDestroyShaderModule(mDevice, raygenModule, nullptr);
-            vkDestroyShaderModule(mDevice, missModule, nullptr);
-            vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
-            vkDestroyShaderModule(mDevice, hitModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), hitModule, nullptr);
             return false;
         }
 
@@ -225,13 +226,13 @@ namespace mir
                 .descriptorSetCount = 1,
                 .pSetLayouts = &mRtSetLayout };
 
-            if (vkAllocateDescriptorSets(mDevice, &setAllocInfo, &mRtDescriptorSets[i]) != VK_SUCCESS)
+            if (vkAllocateDescriptorSets(mDevice->Handle(), &setAllocInfo, &mRtDescriptorSets[i]) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("CreateRtPipeline: descriptor set allocation failed for frame {}", i);
-                vkDestroyShaderModule(mDevice, raygenModule, nullptr);
-                vkDestroyShaderModule(mDevice, missModule, nullptr);
-                vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
-                vkDestroyShaderModule(mDevice, hitModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), hitModule, nullptr);
                 return false;
             }
         }
@@ -250,13 +251,13 @@ namespace mir
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &pushConstantRange };
 
-        if (vkCreatePipelineLayout(mDevice, &pipelineLayoutInfo, nullptr, &mRtPipelineLayout) != VK_SUCCESS)
+        if (vkCreatePipelineLayout(mDevice->Handle(), &pipelineLayoutInfo, nullptr, &mRtPipelineLayout) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateRtPipeline: vkCreatePipelineLayout failed");
-            vkDestroyShaderModule(mDevice, raygenModule, nullptr);
-            vkDestroyShaderModule(mDevice, missModule, nullptr);
-            vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
-            vkDestroyShaderModule(mDevice, hitModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), hitModule, nullptr);
             return false;
         }
 
@@ -314,12 +315,12 @@ namespace mir
             .layout = mRtPipelineLayout };
 
         const VkResult pipelineResult = vkCreateRayTracingPipelinesKHR(
-            mDevice, VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &mRtPipeline);
+            mDevice->Handle(), VK_NULL_HANDLE, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &mRtPipeline);
 
-        vkDestroyShaderModule(mDevice, raygenModule, nullptr);
-        vkDestroyShaderModule(mDevice, missModule, nullptr);
-        vkDestroyShaderModule(mDevice, shadowMissModule, nullptr);
-        vkDestroyShaderModule(mDevice, hitModule, nullptr);
+        vkDestroyShaderModule(mDevice->Handle(), raygenModule, nullptr);
+        vkDestroyShaderModule(mDevice->Handle(), missModule, nullptr);
+        vkDestroyShaderModule(mDevice->Handle(), shadowMissModule, nullptr);
+        vkDestroyShaderModule(mDevice->Handle(), hitModule, nullptr);
 
         if (pipelineResult != VK_SUCCESS)
         {
@@ -328,13 +329,13 @@ namespace mir
         }
 
         constexpr uint32_t kGroupCount = 4;
-        const uint32_t handleSize = mRtProperties.shaderGroupHandleSize;
-        const uint32_t handleSizeAligned = AlignUp(handleSize, mRtProperties.shaderGroupHandleAlignment);
-        const VkDeviceSize regionSize = AlignUp(handleSizeAligned, mRtProperties.shaderGroupBaseAlignment);
+        const uint32_t handleSize = mDevice->RtProperties().shaderGroupHandleSize;
+        const uint32_t handleSizeAligned = AlignUp(handleSize, mDevice->RtProperties().shaderGroupHandleAlignment);
+        const VkDeviceSize regionSize = AlignUp(handleSizeAligned, mDevice->RtProperties().shaderGroupBaseAlignment);
         const VkDeviceSize sbtSize = regionSize * kGroupCount;
 
         std::vector<std::byte> handles(static_cast<size_t>(handleSize) * kGroupCount);
-        if (vkGetRayTracingShaderGroupHandlesKHR(mDevice, mRtPipeline, 0, kGroupCount,
+        if (vkGetRayTracingShaderGroupHandlesKHR(mDevice->Handle(), mRtPipeline, 0, kGroupCount,
             handles.size(), handles.data()) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateRtPipeline: vkGetRayTracingShaderGroupHandlesKHR failed");
@@ -353,8 +354,8 @@ namespace mir
             .usage = VMA_MEMORY_USAGE_AUTO };
 
         VmaAllocationInfo sbtInfo{};
-        if (vmaCreateBufferWithAlignment(mAllocator, &sbtBufferInfo, &sbtAllocInfo,
-            mRtProperties.shaderGroupBaseAlignment, &mSbtBuffer, &mSbtAllocation, &sbtInfo) != VK_SUCCESS)
+        if (vmaCreateBufferWithAlignment(mDevice->Allocator(), &sbtBufferInfo, &sbtAllocInfo,
+            mDevice->RtProperties().shaderGroupBaseAlignment, &mSbtBuffer, &mSbtAllocation, &sbtInfo) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateRtPipeline: SBT buffer allocation failed");
             return false;
@@ -364,7 +365,7 @@ namespace mir
         for (uint32_t i = 0; i < kGroupCount; ++i)
             std::memcpy(sbtMapped + i * regionSize, handles.data() + i * handleSize, handleSize);
 
-        const VkDeviceAddress sbtBase = GetBufferAddress(mDevice, mSbtBuffer);
+        const VkDeviceAddress sbtBase = GetBufferAddress(mDevice->Handle(), mSbtBuffer);
         mSbtRaygenRegion = { .deviceAddress = sbtBase + 0 * regionSize, .stride = regionSize, .size = regionSize };
         mSbtMissRegion = { .deviceAddress = sbtBase + 1 * regionSize, .stride = regionSize, .size = 2 * regionSize };
         mSbtHitRegion = { .deviceAddress = sbtBase + 3 * regionSize, .stride = regionSize, .size = regionSize };
@@ -411,7 +412,7 @@ namespace mir
                  .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                  .pBufferInfo = &instanceInfoBufferInfo } } };
 
-            vkUpdateDescriptorSets(mDevice, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+            vkUpdateDescriptorSets(mDevice->Handle(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         }
     }
 
@@ -420,7 +421,7 @@ namespace mir
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
             VmaAllocationInfo instanceInfo{};
-            if (!vk::CreateBuffer(mAllocator, sizeof(VkAccelerationStructureInstanceKHR) * kMaxRtInstances,
+            if (!vk::CreateBuffer(mDevice->Allocator(), sizeof(VkAccelerationStructureInstanceKHR) * kMaxRtInstances,
                 VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
@@ -433,7 +434,7 @@ namespace mir
             mInstanceMapped[i] = static_cast<std::byte *>(instanceInfo.pMappedData);
 
             VmaAllocationInfo instanceRtInfo{};
-            if (!vk::CreateBuffer(mAllocator, sizeof(RtInstanceInfo) * kMaxRtInstances,
+            if (!vk::CreateBuffer(mDevice->Allocator(), sizeof(RtInstanceInfo) * kMaxRtInstances,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                 VMA_ALLOCATION_CREATE_MAPPED_BIT,
@@ -461,7 +462,7 @@ namespace mir
                 .geometryCount = 1,
                 .pGeometries = &geometry };
 
-            const AccelBuildSizes sizes = QueryAccelBuildSizes(mDevice, buildInfo, kMaxRtInstances);
+            const AccelBuildSizes sizes = QueryAccelBuildSizes(mDevice->Handle(), buildInfo, kMaxRtInstances);
 
             if (!CreateAccelerationStructureObject(sizes.accelerationStructureSize,
                 VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
@@ -471,16 +472,16 @@ namespace mir
                 return false;
             }
 
-            if (!vk::CreateBuffer(mAllocator, sizes.buildScratchSize,
+            if (!vk::CreateBuffer(mDevice->Allocator(), sizes.buildScratchSize,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                 0, mTlasScratchBuffers[i], mTlasScratchAllocations[i], nullptr))
             {
                 MIR_LOG_CRITICAL("CreateRtScene: TLAS scratch buffer allocation failed for frame {}", i);
                 return false;
             }
-            mTlasScratchAddresses[i] = GetBufferAddress(mDevice, mTlasScratchBuffers[i]);
+            mTlasScratchAddresses[i] = GetBufferAddress(mDevice->Handle(), mTlasScratchBuffers[i]);
 
-            NameObject(VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR, reinterpret_cast<uint64_t>(mTlas[i]),
+            mDevice->NameObject(VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR, reinterpret_cast<uint64_t>(mTlas[i]),
                 std::format("TLAS {}", i).c_str());
         }
 
@@ -493,31 +494,31 @@ namespace mir
         {
             if (mTlas[i] != VK_NULL_HANDLE)
             {
-                vkDestroyAccelerationStructureKHR(mDevice, mTlas[i], nullptr);
+                vkDestroyAccelerationStructureKHR(mDevice->Handle(), mTlas[i], nullptr);
                 mTlas[i] = VK_NULL_HANDLE;
             }
             if (mTlasBuffers[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyBuffer(mAllocator, mTlasBuffers[i], mTlasAllocations[i]);
+                vmaDestroyBuffer(mDevice->Allocator(), mTlasBuffers[i], mTlasAllocations[i]);
                 mTlasBuffers[i] = VK_NULL_HANDLE;
                 mTlasAllocations[i] = VK_NULL_HANDLE;
             }
             if (mTlasScratchBuffers[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyBuffer(mAllocator, mTlasScratchBuffers[i], mTlasScratchAllocations[i]);
+                vmaDestroyBuffer(mDevice->Allocator(), mTlasScratchBuffers[i], mTlasScratchAllocations[i]);
                 mTlasScratchBuffers[i] = VK_NULL_HANDLE;
                 mTlasScratchAllocations[i] = VK_NULL_HANDLE;
             }
             if (mInstanceBuffers[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyBuffer(mAllocator, mInstanceBuffers[i], mInstanceAllocations[i]);
+                vmaDestroyBuffer(mDevice->Allocator(), mInstanceBuffers[i], mInstanceAllocations[i]);
                 mInstanceBuffers[i] = VK_NULL_HANDLE;
                 mInstanceAllocations[i] = VK_NULL_HANDLE;
                 mInstanceMapped[i] = nullptr;
             }
             if (mRtInstanceInfoBuffers[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyBuffer(mAllocator, mRtInstanceInfoBuffers[i], mRtInstanceInfoAllocations[i]);
+                vmaDestroyBuffer(mDevice->Allocator(), mRtInstanceInfoBuffers[i], mRtInstanceInfoAllocations[i]);
                 mRtInstanceInfoBuffers[i] = VK_NULL_HANDLE;
                 mRtInstanceInfoAllocations[i] = VK_NULL_HANDLE;
                 mRtInstanceInfoMapped[i] = nullptr;
@@ -561,8 +562,8 @@ namespace mir
                 material = FindMaterial(mDefaultMaterial);
 
             instanceInfos[instanceCount] = RtInstanceInfo{
-                .vertexAddress = GetBufferAddress(mDevice, mesh->mVertexBuffer),
-                .indexAddress = GetBufferAddress(mDevice, mesh->mIndexBuffer),
+                .vertexAddress = GetBufferAddress(mDevice->Handle(), mesh->mVertexBuffer),
+                .indexAddress = GetBufferAddress(mDevice->Handle(), mesh->mIndexBuffer),
                 .tint = item.tint,
                 .normalCol0 = glm::vec4(item.normalMatrix[0], 0.0f),
                 .normalCol1 = glm::vec4(item.normalMatrix[1], 0.0f),
@@ -574,16 +575,16 @@ namespace mir
 
         const VkDeviceSize instanceBytes = sizeof(VkAccelerationStructureInstanceKHR) * instanceCount;
         if (instanceBytes > 0)
-            vmaFlushAllocation(mAllocator, mInstanceAllocations[frameIndex], 0, instanceBytes);
+            vmaFlushAllocation(mDevice->Allocator(), mInstanceAllocations[frameIndex], 0, instanceBytes);
 
         const VkDeviceSize instanceInfoBytes = sizeof(RtInstanceInfo) * instanceCount;
         if (instanceInfoBytes > 0)
-            vmaFlushAllocation(mAllocator, mRtInstanceInfoAllocations[frameIndex], 0, instanceInfoBytes);
+            vmaFlushAllocation(mDevice->Allocator(), mRtInstanceInfoAllocations[frameIndex], 0, instanceInfoBytes);
 
         const VkAccelerationStructureGeometryInstancesDataKHR instancesData{
             .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR,
             .arrayOfPointers = VK_FALSE,
-            .data{ .deviceAddress = GetBufferAddress(mDevice, mInstanceBuffers[frameIndex]) } };
+            .data{ .deviceAddress = GetBufferAddress(mDevice->Handle(), mInstanceBuffers[frameIndex]) } };
 
         const VkAccelerationStructureGeometryKHR geometry{
             .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR,
@@ -609,7 +610,7 @@ namespace mir
     bool VulkanRenderer::CreateAccelerationStructureObject(VkDeviceSize size, VkAccelerationStructureTypeKHR type,
         VkBuffer &outBuffer, VmaAllocation &outAllocation, VkAccelerationStructureKHR &outAS)
     {
-        if (!vk::CreateBuffer(mAllocator, size,
+        if (!vk::CreateBuffer(mDevice->Allocator(), size,
             VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             0, outBuffer, outAllocation, nullptr))
             return false;
@@ -620,9 +621,9 @@ namespace mir
             .size = size,
             .type = type };
 
-        if (vkCreateAccelerationStructureKHR(mDevice, &createInfo, nullptr, &outAS) != VK_SUCCESS)
+        if (vkCreateAccelerationStructureKHR(mDevice->Handle(), &createInfo, nullptr, &outAS) != VK_SUCCESS)
         {
-            vmaDestroyBuffer(mAllocator, outBuffer, outAllocation);
+            vmaDestroyBuffer(mDevice->Allocator(), outBuffer, outAllocation);
             outBuffer = VK_NULL_HANDLE;
             outAllocation = VK_NULL_HANDLE;
             return false;
@@ -634,12 +635,12 @@ namespace mir
     {
         if (mesh.mBlas != VK_NULL_HANDLE)
         {
-            vkDestroyAccelerationStructureKHR(mDevice, mesh.mBlas, nullptr);
+            vkDestroyAccelerationStructureKHR(mDevice->Handle(), mesh.mBlas, nullptr);
             mesh.mBlas = VK_NULL_HANDLE;
         }
         if (mesh.mBlasBuffer != VK_NULL_HANDLE)
         {
-            vmaDestroyBuffer(mAllocator, mesh.mBlasBuffer, mesh.mBlasAllocation);
+            vmaDestroyBuffer(mDevice->Allocator(), mesh.mBlasBuffer, mesh.mBlasAllocation);
             mesh.mBlasBuffer = VK_NULL_HANDLE;
             mesh.mBlasAllocation = VK_NULL_HANDLE;
         }
@@ -649,8 +650,8 @@ namespace mir
     bool VulkanRenderer::BuildBLAS(GpuMesh &mesh, uint32_t vertexCount, uint32_t indexCount, VkCommandBuffer cmd,
         VkBuffer &outScratchBuffer, VmaAllocation &outScratchAllocation)
     {
-        const VkDeviceAddress vertexAddress = GetBufferAddress(mDevice, mesh.mVertexBuffer);
-        const VkDeviceAddress indexAddress = GetBufferAddress(mDevice, mesh.mIndexBuffer);
+        const VkDeviceAddress vertexAddress = GetBufferAddress(mDevice->Handle(), mesh.mVertexBuffer);
+        const VkDeviceAddress indexAddress = GetBufferAddress(mDevice->Handle(), mesh.mIndexBuffer);
 
         const VkAccelerationStructureGeometryTrianglesDataKHR triangles{
             .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR,
@@ -677,7 +678,7 @@ namespace mir
             .geometryCount = 1,
             .pGeometries = &geometry };
 
-        const AccelBuildSizes sizes = QueryAccelBuildSizes(mDevice, buildInfo, primitiveCount);
+        const AccelBuildSizes sizes = QueryAccelBuildSizes(mDevice->Handle(), buildInfo, primitiveCount);
 
         if (!CreateAccelerationStructureObject(sizes.accelerationStructureSize,
             VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
@@ -687,7 +688,7 @@ namespace mir
             return false;
         }
 
-        if (!vk::CreateBuffer(mAllocator, sizes.buildScratchSize,
+        if (!vk::CreateBuffer(mDevice->Allocator(), sizes.buildScratchSize,
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             0, outScratchBuffer, outScratchAllocation, nullptr))
         {
@@ -697,7 +698,7 @@ namespace mir
         }
 
         buildInfo.dstAccelerationStructure = mesh.mBlas;
-        buildInfo.scratchData.deviceAddress = GetBufferAddress(mDevice, outScratchBuffer);
+        buildInfo.scratchData.deviceAddress = GetBufferAddress(mDevice->Handle(), outScratchBuffer);
 
         const VkAccelerationStructureBuildRangeInfoKHR range{ .primitiveCount = primitiveCount };
         const VkAccelerationStructureBuildRangeInfoKHR *pRange = &range;
@@ -719,7 +720,7 @@ namespace mir
         const VkAccelerationStructureDeviceAddressInfoKHR addressInfo{
             .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
             .accelerationStructure = mesh.mBlas };
-        mesh.mBlasAddress = vkGetAccelerationStructureDeviceAddressKHR(mDevice, &addressInfo);
+        mesh.mBlasAddress = vkGetAccelerationStructureDeviceAddressKHR(mDevice->Handle(), &addressInfo);
 
         return true;
     }
@@ -733,7 +734,7 @@ namespace mir
         WriteCameraData(view, 0);
         const uint32_t cameraOffset = 0;
 
-        if (mValidationEnabled)
+        if (mDevice->ValidationEnabled())
         {
             const VkDebugUtilsLabelEXT label{
                 .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
@@ -856,13 +857,13 @@ namespace mir
                 VK_PIPELINE_STAGE_2_NONE, 0);
         }
 
-        if (mValidationEnabled)
+        if (mDevice->ValidationEnabled())
             vkCmdEndDebugUtilsLabelEXT(cmd);
     }
 
     void VulkanRenderer::TraceFrame(std::span<const RenderView> views)
     {
-        if (!mRayTracingSupported)
+        if (!mDevice->RayTracingSupported())
         {
             MIR_LOG_ERROR("TraceFrame: called without ray tracing support; ignored");
             return;
@@ -889,13 +890,13 @@ namespace mir
             .pSemaphores = &mTimeline,
             .pValues = &waitValue };
 
-        vkWaitSemaphores(mDevice, &waitInfo, UINT64_MAX);
+        vkWaitSemaphores(mDevice->Handle(), &waitInfo, UINT64_MAX);
 
-        vkResetCommandPool(mDevice, mCmdPools[mFrameIndex], 0);
+        vkResetCommandPool(mDevice->Handle(), mCmdPools[mFrameIndex], 0);
 
         uint32_t imageIndex = 0;
         const VkResult acquireResult = vkAcquireNextImageKHR(
-            mDevice, mSwapchain, UINT64_MAX,
+            mDevice->Handle(), mSwapchain, UINT64_MAX,
             mImageAcquired[mFrameIndex], VK_NULL_HANDLE, &imageIndex);
 
         if (acquireResult == VK_ERROR_OUT_OF_DATE_KHR)
@@ -953,7 +954,7 @@ namespace mir
             .signalSemaphoreInfoCount = 2,
             .pSignalSemaphoreInfos = signalSems };
 
-        if (vkQueueSubmit2(mGfxQueue, 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS)
+        if (vkQueueSubmit2(mDevice->Queue(), 1, &submit, VK_NULL_HANDLE) != VK_SUCCESS)
         {
             MIR_LOG_ERROR("vkQueueSubmit2 failed");
             return;
@@ -966,7 +967,7 @@ namespace mir
             .pSwapchains = &mSwapchain,
             .pImageIndices = &imageIndex };
 
-        const VkResult presentResult = vkQueuePresentKHR(mGfxQueue, &presentInfo);
+        const VkResult presentResult = vkQueuePresentKHR(mDevice->Queue(), &presentInfo);
         if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR)
             mNeedRecreate = true;
         else if (presentResult != VK_SUCCESS)

@@ -7,6 +7,7 @@
  *
  */
 #include <renderer/VulkanRenderer.h>
+#include "VulkanDevice.h"
 #include "VulkanUtil.h"
 #include "VulkanPushConstants.h"
 
@@ -37,7 +38,7 @@ namespace mir
             .compareEnable = VK_FALSE,
             .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE };
 
-        if (vkCreateSampler(mDevice, &samplerInfo, nullptr, &mShadowSampler) != VK_SUCCESS)
+        if (vkCreateSampler(mDevice->Handle(), &samplerInfo, nullptr, &mShadowSampler) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateShadowResources: vkCreateSampler failed");
             return false;
@@ -60,7 +61,7 @@ namespace mir
 
             const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
 
-            if (vmaCreateImage(mAllocator, &imageInfo, &allocInfo,
+            if (vmaCreateImage(mDevice->Allocator(), &imageInfo, &allocInfo,
                 &mSunShadowImages[i], &mSunShadowAllocations[i], nullptr) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("CreateShadowResources: vmaCreateImage failed for Sun shadow map {}", i);
@@ -79,13 +80,13 @@ namespace mir
                     .baseArrayLayer = 0,
                     .layerCount = 1 } };
 
-            if (vkCreateImageView(mDevice, &viewInfo, nullptr, &mSunShadowViews[i]) != VK_SUCCESS)
+            if (vkCreateImageView(mDevice->Handle(), &viewInfo, nullptr, &mSunShadowViews[i]) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Sun shadow map {}", i);
                 return false;
             }
 
-            NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mSunShadowImages[i]),
+            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mSunShadowImages[i]),
                 std::format("Sun shadow map {}", i).c_str());
         }
 
@@ -106,7 +107,7 @@ namespace mir
 
             const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
 
-            if (vmaCreateImage(mAllocator, &imageInfo, &allocInfo,
+            if (vmaCreateImage(mDevice->Allocator(), &imageInfo, &allocInfo,
                 &mSpotShadowImages[i], &mSpotShadowAllocations[i], nullptr) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("CreateShadowResources: vmaCreateImage failed for Spot shadow array {}", i);
@@ -123,7 +124,7 @@ namespace mir
                     .levelCount = 1,
                     .layerCount = kMaxSpotShadows } };
 
-            if (vkCreateImageView(mDevice, &arrayViewInfo, nullptr, &mSpotShadowArrayViews[i]) != VK_SUCCESS)
+            if (vkCreateImageView(mDevice->Handle(), &arrayViewInfo, nullptr, &mSpotShadowArrayViews[i]) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Spot shadow array {}", i);
                 return false;
@@ -142,7 +143,7 @@ namespace mir
                         .baseArrayLayer = slot,
                         .layerCount = 1 } };
 
-                if (vkCreateImageView(mDevice, &layerViewInfo, nullptr, &mSpotShadowLayerViews[i][slot]) != VK_SUCCESS)
+                if (vkCreateImageView(mDevice->Handle(), &layerViewInfo, nullptr, &mSpotShadowLayerViews[i][slot]) != VK_SUCCESS)
                 {
                     MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Spot shadow slot {}/{}",
                         i, slot);
@@ -150,12 +151,12 @@ namespace mir
                 }
             }
 
-            NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mSpotShadowImages[i]),
+            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mSpotShadowImages[i]),
                 std::format("Spot shadow array {}", i).c_str());
 
             const VkDeviceSize spotMatrixBufferSize = sizeof(glm::mat4) * kMaxSpotShadows * kMaxViewsPerFrame;
             VmaAllocationInfo spotMatrixAllocInfo{};
-            if (!vk::CreateBuffer(mAllocator, spotMatrixBufferSize,
+            if (!vk::CreateBuffer(mDevice->Allocator(), spotMatrixBufferSize,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
                 mSpotShadowMatrixBuffers[i], mSpotShadowMatrixAllocations[i], &spotMatrixAllocInfo))
@@ -185,7 +186,7 @@ namespace mir
 
             const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
 
-            if (vmaCreateImage(mAllocator, &depthImageInfo, &allocInfo,
+            if (vmaCreateImage(mDevice->Allocator(), &depthImageInfo, &allocInfo,
                 &mPointShadowDepthImages[i], &mPointShadowDepthAllocations[i], nullptr) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("CreateShadowResources: vmaCreateImage failed for Point shadow depth {}", i);
@@ -206,7 +207,7 @@ namespace mir
                 .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
 
-            if (vmaCreateImage(mAllocator, &colorImageInfo, &allocInfo,
+            if (vmaCreateImage(mDevice->Allocator(), &colorImageInfo, &allocInfo,
                 &mPointShadowColorImages[i], &mPointShadowColorAllocations[i], nullptr) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("CreateShadowResources: vmaCreateImage failed for Point shadow distance {}", i);
@@ -226,7 +227,7 @@ namespace mir
                         .baseArrayLayer = layer,
                         .layerCount = 1 } };
 
-                if (vkCreateImageView(mDevice, &depthLayerViewInfo, nullptr,
+                if (vkCreateImageView(mDevice->Handle(), &depthLayerViewInfo, nullptr,
                     &mPointShadowDepthLayerViews[i][layer]) != VK_SUCCESS)
                 {
                     MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Point depth {}/{}",
@@ -245,7 +246,7 @@ namespace mir
                         .baseArrayLayer = layer,
                         .layerCount = 1 } };
 
-                if (vkCreateImageView(mDevice, &colorLayerViewInfo, nullptr,
+                if (vkCreateImageView(mDevice->Handle(), &colorLayerViewInfo, nullptr,
                     &mPointShadowColorLayerViews[i][layer]) != VK_SUCCESS)
                 {
                     MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Point color {}/{}",
@@ -264,13 +265,13 @@ namespace mir
                     .levelCount = 1,
                     .layerCount = kPointLayers } };
 
-            if (vkCreateImageView(mDevice, &cubeArrayViewInfo, nullptr, &mPointShadowCubeArrayViews[i]) != VK_SUCCESS)
+            if (vkCreateImageView(mDevice->Handle(), &cubeArrayViewInfo, nullptr, &mPointShadowCubeArrayViews[i]) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("CreateShadowResources: vkCreateImageView failed for Point cube array {}", i);
                 return false;
             }
 
-            NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mPointShadowColorImages[i]),
+            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mPointShadowColorImages[i]),
                 std::format("Point shadow distance cube array {}", i).c_str());
         }
 
@@ -289,7 +290,7 @@ namespace mir
             .bindingCount = static_cast<uint32_t>(bindings.size()),
             .pBindings = bindings.data() };
 
-        if (vkCreateDescriptorSetLayout(mDevice, &setLayoutInfo, nullptr, &mShadowSetLayout) != VK_SUCCESS)
+        if (vkCreateDescriptorSetLayout(mDevice->Handle(), &setLayoutInfo, nullptr, &mShadowSetLayout) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateShadowResources: vkCreateDescriptorSetLayout failed");
             return false;
@@ -305,7 +306,7 @@ namespace mir
             .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
             .pPoolSizes = poolSizes.data() };
 
-        if (vkCreateDescriptorPool(mDevice, &poolInfo, nullptr, &mShadowDescriptorPool) != VK_SUCCESS)
+        if (vkCreateDescriptorPool(mDevice->Handle(), &poolInfo, nullptr, &mShadowDescriptorPool) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateShadowResources: vkCreateDescriptorPool failed");
             return false;
@@ -319,7 +320,7 @@ namespace mir
                 .descriptorSetCount = 1,
                 .pSetLayouts = &mShadowSetLayout };
 
-            if (vkAllocateDescriptorSets(mDevice, &setAllocInfo, &mShadowDescriptorSets[i]) != VK_SUCCESS)
+            if (vkAllocateDescriptorSets(mDevice->Handle(), &setAllocInfo, &mShadowDescriptorSets[i]) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("CreateShadowResources: descriptor set allocation failed for frame {}", i);
                 return false;
@@ -359,10 +360,10 @@ namespace mir
                  .dstBinding = 3, .descriptorCount = 1,
                  .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &pointImageInfo } } };
 
-            vkUpdateDescriptorSets(mDevice, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+            vkUpdateDescriptorSets(mDevice->Handle(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         }
 
-        VkShaderModule vertModule = vk::CreateShaderModule(mDevice, ShaderPath("shadowDepth.vertexMain.spv"));
+        VkShaderModule vertModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("shadowDepth.vertexMain.spv"));
         if (vertModule == VK_NULL_HANDLE)
             return false;
 
@@ -376,10 +377,10 @@ namespace mir
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &pushConstantRange };
 
-        if (vkCreatePipelineLayout(mDevice, &layoutInfo, nullptr, &mShadowDepthPipelineLayout) != VK_SUCCESS)
+        if (vkCreatePipelineLayout(mDevice->Handle(), &layoutInfo, nullptr, &mShadowDepthPipelineLayout) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("CreateShadowResources: vkCreatePipelineLayout failed");
-            vkDestroyShaderModule(mDevice, vertModule, nullptr);
+            vkDestroyShaderModule(mDevice->Handle(), vertModule, nullptr);
             return false;
         }
 
@@ -469,9 +470,9 @@ namespace mir
             .subpass = 0 };
 
         const VkResult pipelineResult = vkCreateGraphicsPipelines(
-            mDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &mShadowDepthPipeline);
+            mDevice->Handle(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &mShadowDepthPipeline);
 
-        vkDestroyShaderModule(mDevice, vertModule, nullptr);
+        vkDestroyShaderModule(mDevice->Handle(), vertModule, nullptr);
 
         if (pipelineResult != VK_SUCCESS)
         {
@@ -480,14 +481,14 @@ namespace mir
             return false;
         }
 
-        VkShaderModule distanceVertModule = vk::CreateShaderModule(mDevice, ShaderPath("shadowDistance.vertexMain.spv"));
-        VkShaderModule distanceFragModule = vk::CreateShaderModule(mDevice, ShaderPath("shadowDistance.fragmentMain.spv"));
+        VkShaderModule distanceVertModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("shadowDistance.vertexMain.spv"));
+        VkShaderModule distanceFragModule = vk::CreateShaderModule(mDevice->Handle(), ShaderPath("shadowDistance.fragmentMain.spv"));
         if (distanceVertModule == VK_NULL_HANDLE || distanceFragModule == VK_NULL_HANDLE)
         {
             if (distanceVertModule != VK_NULL_HANDLE)
-                vkDestroyShaderModule(mDevice, distanceVertModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), distanceVertModule, nullptr);
             if (distanceFragModule != VK_NULL_HANDLE)
-                vkDestroyShaderModule(mDevice, distanceFragModule, nullptr);
+                vkDestroyShaderModule(mDevice->Handle(), distanceFragModule, nullptr);
             return false;
         }
 
@@ -531,10 +532,10 @@ namespace mir
             .subpass = 0 };
 
         const VkResult distancePipelineResult = vkCreateGraphicsPipelines(
-            mDevice, VK_NULL_HANDLE, 1, &distancePipelineInfo, nullptr, &mPointShadowPipeline);
+            mDevice->Handle(), VK_NULL_HANDLE, 1, &distancePipelineInfo, nullptr, &mPointShadowPipeline);
 
-        vkDestroyShaderModule(mDevice, distanceVertModule, nullptr);
-        vkDestroyShaderModule(mDevice, distanceFragModule, nullptr);
+        vkDestroyShaderModule(mDevice->Handle(), distanceVertModule, nullptr);
+        vkDestroyShaderModule(mDevice->Handle(), distanceFragModule, nullptr);
 
         if (distancePipelineResult != VK_SUCCESS)
         {
@@ -550,51 +551,51 @@ namespace mir
     {
         if (mShadowDepthPipeline != VK_NULL_HANDLE)
         {
-            vkDestroyPipeline(mDevice, mShadowDepthPipeline, nullptr);
+            vkDestroyPipeline(mDevice->Handle(), mShadowDepthPipeline, nullptr);
             mShadowDepthPipeline = VK_NULL_HANDLE;
         }
         if (mPointShadowPipeline != VK_NULL_HANDLE)
         {
-            vkDestroyPipeline(mDevice, mPointShadowPipeline, nullptr);
+            vkDestroyPipeline(mDevice->Handle(), mPointShadowPipeline, nullptr);
             mPointShadowPipeline = VK_NULL_HANDLE;
         }
         if (mShadowDepthPipelineLayout != VK_NULL_HANDLE)
         {
-            vkDestroyPipelineLayout(mDevice, mShadowDepthPipelineLayout, nullptr);
+            vkDestroyPipelineLayout(mDevice->Handle(), mShadowDepthPipelineLayout, nullptr);
             mShadowDepthPipelineLayout = VK_NULL_HANDLE;
         }
         if (mShadowDescriptorPool != VK_NULL_HANDLE)
         {
-            vkDestroyDescriptorPool(mDevice, mShadowDescriptorPool, nullptr);
+            vkDestroyDescriptorPool(mDevice->Handle(), mShadowDescriptorPool, nullptr);
             mShadowDescriptorPool = VK_NULL_HANDLE;
         }
         if (mShadowSetLayout != VK_NULL_HANDLE)
         {
-            vkDestroyDescriptorSetLayout(mDevice, mShadowSetLayout, nullptr);
+            vkDestroyDescriptorSetLayout(mDevice->Handle(), mShadowSetLayout, nullptr);
             mShadowSetLayout = VK_NULL_HANDLE;
         }
         if (mShadowSampler != VK_NULL_HANDLE)
         {
-            vkDestroySampler(mDevice, mShadowSampler, nullptr);
+            vkDestroySampler(mDevice->Handle(), mShadowSampler, nullptr);
             mShadowSampler = VK_NULL_HANDLE;
         }
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
             if (mSunShadowViews[i] != VK_NULL_HANDLE)
             {
-                vkDestroyImageView(mDevice, mSunShadowViews[i], nullptr);
+                vkDestroyImageView(mDevice->Handle(), mSunShadowViews[i], nullptr);
                 mSunShadowViews[i] = VK_NULL_HANDLE;
             }
             if (mSunShadowImages[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyImage(mAllocator, mSunShadowImages[i], mSunShadowAllocations[i]);
+                vmaDestroyImage(mDevice->Allocator(), mSunShadowImages[i], mSunShadowAllocations[i]);
                 mSunShadowImages[i] = VK_NULL_HANDLE;
                 mSunShadowAllocations[i] = VK_NULL_HANDLE;
             }
 
             if (mSpotShadowMatrixBuffers[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyBuffer(mAllocator, mSpotShadowMatrixBuffers[i], mSpotShadowMatrixAllocations[i]);
+                vmaDestroyBuffer(mDevice->Allocator(), mSpotShadowMatrixBuffers[i], mSpotShadowMatrixAllocations[i]);
                 mSpotShadowMatrixBuffers[i] = VK_NULL_HANDLE;
                 mSpotShadowMatrixAllocations[i] = VK_NULL_HANDLE;
                 mSpotShadowMatrixMapped[i] = nullptr;
@@ -602,51 +603,51 @@ namespace mir
 
             if (mSpotShadowArrayViews[i] != VK_NULL_HANDLE)
             {
-                vkDestroyImageView(mDevice, mSpotShadowArrayViews[i], nullptr);
+                vkDestroyImageView(mDevice->Handle(), mSpotShadowArrayViews[i], nullptr);
                 mSpotShadowArrayViews[i] = VK_NULL_HANDLE;
             }
             for (uint32_t slot = 0; slot < kMaxSpotShadows; ++slot)
             {
                 if (mSpotShadowLayerViews[i][slot] != VK_NULL_HANDLE)
                 {
-                    vkDestroyImageView(mDevice, mSpotShadowLayerViews[i][slot], nullptr);
+                    vkDestroyImageView(mDevice->Handle(), mSpotShadowLayerViews[i][slot], nullptr);
                     mSpotShadowLayerViews[i][slot] = VK_NULL_HANDLE;
                 }
             }
             if (mSpotShadowImages[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyImage(mAllocator, mSpotShadowImages[i], mSpotShadowAllocations[i]);
+                vmaDestroyImage(mDevice->Allocator(), mSpotShadowImages[i], mSpotShadowAllocations[i]);
                 mSpotShadowImages[i] = VK_NULL_HANDLE;
                 mSpotShadowAllocations[i] = VK_NULL_HANDLE;
             }
 
             if (mPointShadowCubeArrayViews[i] != VK_NULL_HANDLE)
             {
-                vkDestroyImageView(mDevice, mPointShadowCubeArrayViews[i], nullptr);
+                vkDestroyImageView(mDevice->Handle(), mPointShadowCubeArrayViews[i], nullptr);
                 mPointShadowCubeArrayViews[i] = VK_NULL_HANDLE;
             }
             for (uint32_t layer = 0; layer < kMaxPointShadows * 6; ++layer)
             {
                 if (mPointShadowDepthLayerViews[i][layer] != VK_NULL_HANDLE)
                 {
-                    vkDestroyImageView(mDevice, mPointShadowDepthLayerViews[i][layer], nullptr);
+                    vkDestroyImageView(mDevice->Handle(), mPointShadowDepthLayerViews[i][layer], nullptr);
                     mPointShadowDepthLayerViews[i][layer] = VK_NULL_HANDLE;
                 }
                 if (mPointShadowColorLayerViews[i][layer] != VK_NULL_HANDLE)
                 {
-                    vkDestroyImageView(mDevice, mPointShadowColorLayerViews[i][layer], nullptr);
+                    vkDestroyImageView(mDevice->Handle(), mPointShadowColorLayerViews[i][layer], nullptr);
                     mPointShadowColorLayerViews[i][layer] = VK_NULL_HANDLE;
                 }
             }
             if (mPointShadowDepthImages[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyImage(mAllocator, mPointShadowDepthImages[i], mPointShadowDepthAllocations[i]);
+                vmaDestroyImage(mDevice->Allocator(), mPointShadowDepthImages[i], mPointShadowDepthAllocations[i]);
                 mPointShadowDepthImages[i] = VK_NULL_HANDLE;
                 mPointShadowDepthAllocations[i] = VK_NULL_HANDLE;
             }
             if (mPointShadowColorImages[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyImage(mAllocator, mPointShadowColorImages[i], mPointShadowColorAllocations[i]);
+                vmaDestroyImage(mDevice->Allocator(), mPointShadowColorImages[i], mPointShadowColorAllocations[i]);
                 mPointShadowColorImages[i] = VK_NULL_HANDLE;
                 mPointShadowColorAllocations[i] = VK_NULL_HANDLE;
             }

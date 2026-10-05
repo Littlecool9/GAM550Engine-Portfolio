@@ -7,6 +7,7 @@
  *
  */
 #include <renderer/VulkanRenderer.h>
+#include "VulkanDevice.h"
 
 #include <core/log/Log.h>
 
@@ -76,10 +77,10 @@ namespace mir
     bool VulkanRenderer::CreateSwapchain()
     {
         VkSurfaceCapabilitiesKHR caps{};
-        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mPhysicalDevice, mSurface, &caps);
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(mDevice->Physical(), mDevice->Surface(), &caps);
 
-        const VkSurfaceFormatKHR surfaceFormat = ChooseSurfaceFormat(mPhysicalDevice, mSurface);
-        const VkPresentModeKHR presentMode = ChoosePresentMode(mPhysicalDevice, mSurface);
+        const VkSurfaceFormatKHR surfaceFormat = ChooseSurfaceFormat(mDevice->Physical(), mDevice->Surface());
+        const VkPresentModeKHR presentMode = ChoosePresentMode(mDevice->Physical(), mDevice->Surface());
         const VkExtent2D extent = ChooseExtent(caps, *mWindow);
         mCanCapture = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
 
@@ -91,7 +92,7 @@ namespace mir
 
         const VkSwapchainCreateInfoKHR info{
             .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-            .surface = mSurface,
+            .surface = mDevice->Surface(),
             .minImageCount = imageCount,
             .imageFormat = surfaceFormat.format,
             .imageColorSpace = surfaceFormat.colorSpace,
@@ -109,7 +110,7 @@ namespace mir
             // reuse old resources
             .oldSwapchain = oldSwapchain };
 
-        if (vkCreateSwapchainKHR(mDevice, &info, nullptr, &mSwapchain) != VK_SUCCESS)
+        if (vkCreateSwapchainKHR(mDevice->Handle(), &info, nullptr, &mSwapchain) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("vkCreateSwapchainKHR failed");
             mSwapchain = VK_NULL_HANDLE;
@@ -118,16 +119,16 @@ namespace mir
 
         // Retired, not owned by the new swapchain: destroy it ourselves.
         if (oldSwapchain != VK_NULL_HANDLE)
-            vkDestroySwapchainKHR(mDevice, oldSwapchain, nullptr);
+            vkDestroySwapchainKHR(mDevice->Handle(), oldSwapchain, nullptr);
 
         mSwapchainFormat = surfaceFormat.format;
         mSwapchainExtent = extent;
 
         // The swapchain creates and owns these. We never allocate or free them.
         uint32_t actualCount = 0;
-        vkGetSwapchainImagesKHR(mDevice, mSwapchain, &actualCount, nullptr);
+        vkGetSwapchainImagesKHR(mDevice->Handle(), mSwapchain, &actualCount, nullptr);
         mSwapchainImages.resize(actualCount);
-        vkGetSwapchainImagesKHR(mDevice, mSwapchain, &actualCount, mSwapchainImages.data());
+        vkGetSwapchainImagesKHR(mDevice->Handle(), mSwapchain, &actualCount, mSwapchainImages.data());
 
         MIR_LOG_INFO("Swapchain: {}x{} | {} image(s), requested {} | present mode {}",
             extent.width, extent.height, actualCount, imageCount,
@@ -153,7 +154,7 @@ namespace mir
                     .baseArrayLayer = 0,
                     .layerCount = 1 } };
 
-            if (vkCreateImageView(mDevice, &info, nullptr, &mSwapchainViews[i]) != VK_SUCCESS)
+            if (vkCreateImageView(mDevice->Handle(), &info, nullptr, &mSwapchainViews[i]) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("vkCreateImageView failed for swapchain image {}", i);
                 return false;
@@ -165,7 +166,7 @@ namespace mir
     bool VulkanRenderer::CreateDepthResources()
     {
         VkFormatProperties formatProps{};
-        vkGetPhysicalDeviceFormatProperties(mPhysicalDevice, kDepthFormat, &formatProps);
+        vkGetPhysicalDeviceFormatProperties(mDevice->Physical(), kDepthFormat, &formatProps);
         if ((formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) == 0)
         {
             MIR_LOG_CRITICAL("VK_FORMAT_D32_SFLOAT unsupported as an optimal-tiling depth attachment");
@@ -189,7 +190,7 @@ namespace mir
 
             const VmaAllocationCreateInfo allocInfo{ .usage = VMA_MEMORY_USAGE_AUTO };
 
-            if (vmaCreateImage(mAllocator, &imageInfo, &allocInfo,
+            if (vmaCreateImage(mDevice->Allocator(), &imageInfo, &allocInfo,
                 &mDepthImages[i], &mDepthAllocations[i], nullptr) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("vmaCreateImage failed for depth buffer {}", i);
@@ -208,13 +209,13 @@ namespace mir
                     .baseArrayLayer = 0,
                     .layerCount = 1 } };
 
-            if (vkCreateImageView(mDevice, &viewInfo, nullptr, &mDepthViews[i]) != VK_SUCCESS)
+            if (vkCreateImageView(mDevice->Handle(), &viewInfo, nullptr, &mDepthViews[i]) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("vkCreateImageView failed for depth buffer {}", i);
                 return false;
             }
 
-            NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mDepthImages[i]),
+            mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mDepthImages[i]),
                 std::format("Depth buffer {}", i).c_str());
         }
 
@@ -227,12 +228,12 @@ namespace mir
         {
             if (mDepthViews[i] != VK_NULL_HANDLE)
             {
-                vkDestroyImageView(mDevice, mDepthViews[i], nullptr);
+                vkDestroyImageView(mDevice->Handle(), mDepthViews[i], nullptr);
                 mDepthViews[i] = VK_NULL_HANDLE;
             }
             if (mDepthImages[i] != VK_NULL_HANDLE)
             {
-                vmaDestroyImage(mAllocator, mDepthImages[i], mDepthAllocations[i]);
+                vmaDestroyImage(mDevice->Allocator(), mDepthImages[i], mDepthAllocations[i]);
                 mDepthImages[i] = VK_NULL_HANDLE;
                 mDepthAllocations[i] = VK_NULL_HANDLE;
             }
@@ -248,21 +249,21 @@ namespace mir
         for (VkImageView view : mSwapchainViews)
         {
             if (view != VK_NULL_HANDLE)
-                vkDestroyImageView(mDevice, view, nullptr);
+                vkDestroyImageView(mDevice->Handle(), view, nullptr);
         }
         mSwapchainViews.clear();
         mSwapchainImages.clear();
 
         if (mSwapchain != VK_NULL_HANDLE)
         {
-            vkDestroySwapchainKHR(mDevice, mSwapchain, nullptr);
+            vkDestroySwapchainKHR(mDevice->Handle(), mSwapchain, nullptr);
             mSwapchain = VK_NULL_HANDLE;
         }
     }
 
     bool VulkanRenderer::RecreateSwapchain()
     {
-        vkDeviceWaitIdle(mDevice);
+        vkDeviceWaitIdle(mDevice->Handle());
         DestroyRenderCompleteSemaphores();
         DestroySwapchain();
 
@@ -271,7 +272,7 @@ namespace mir
         if (!CreateRenderCompleteSemaphores())
             return false;
 
-        if (mRayTracingSupported)
+        if (mDevice->RayTracingSupported())
             WriteRtDescriptorSets();
 
         mNeedRecreate = false;
@@ -287,7 +288,7 @@ namespace mir
 
         for (VkSemaphore &sem : mRenderComplete)
         {
-            if (vkCreateSemaphore(mDevice, &info, nullptr, &sem) != VK_SUCCESS)
+            if (vkCreateSemaphore(mDevice->Handle(), &info, nullptr, &sem) != VK_SUCCESS)
             {
                 MIR_LOG_CRITICAL("render-complete semaphore creation failed");
                 return false;
@@ -301,7 +302,7 @@ namespace mir
         for (VkSemaphore sem : mRenderComplete)
         {
             if (sem != VK_NULL_HANDLE)
-                vkDestroySemaphore(mDevice, sem, nullptr);
+                vkDestroySemaphore(mDevice->Handle(), sem, nullptr);
         }
         mRenderComplete.clear();
     }

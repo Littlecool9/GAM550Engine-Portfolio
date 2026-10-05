@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -36,6 +37,11 @@ VK_DEFINE_HANDLE(VmaAllocator)
 VK_DEFINE_HANDLE(VmaAllocation)
 
 struct ImDrawData;
+
+namespace mir::vk
+{
+    class VulkanDevice;
+}
 
 namespace mir
 {
@@ -134,7 +140,9 @@ namespace mir
     class VulkanRenderer
     {
     public:
-        VulkanRenderer() = default;
+        VulkanRenderer();
+        ~VulkanRenderer();
+
         bool Initialize(const RendererDesc &desc);
 
         bool InitImGuiVulkanBackend();
@@ -168,7 +176,7 @@ namespace mir
 
         void TraceFrame(std::span<const RenderView> views);
 
-        bool RayTracingSupported() const { return mRayTracingSupported; }
+        bool RayTracingSupported() const;
 
         constexpr static uint32_t kMaxSpotShadows = 4;
         constexpr static uint32_t kMaxPointShadows = 2;
@@ -217,12 +225,6 @@ namespace mir
         struct GpuMaterial;
         struct GpuTexture;
 
-        bool CreateVulkanInstance(const RendererDesc &desc);
-        bool CreateDebugMessenger();
-        bool CreateSurface();
-        bool FindPhysicalDevice();
-        bool CreateLogicalDevice();
-        bool CreateAllocator();
         bool CreateSwapchain();
         bool CreateImageViews();
         bool CreateDepthResources();
@@ -272,14 +274,12 @@ namespace mir
         const GpuMesh *FindMesh(MeshHandle handle) const;
         const GpuMaterial *FindMaterial(MaterialHandle handle) const;
         const GpuTexture *FindTexture(TextureHandle handle) const;
-        void NameObject(VkObjectType type, uint64_t handle, const char *name);
         void RecordCommands(VkCommandBuffer cmd, uint32_t imageIndex, std::span<const RenderView> views);
         void RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex);
         void WriteCameraData(const RenderView &view, uint32_t viewIndex);
         uint32_t WriteViewLights(const RenderView &view, uint32_t viewIndex);
 
     private:
-        constexpr static uint32_t VulkanVersion{ VK_API_VERSION_1_4 };
         constexpr static uint32_t kFramesInFlight = 2;
 
         constexpr static VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;
@@ -297,14 +297,9 @@ namespace mir
         bool mSkyVisible = false;
 
         const ISurfaceProvider *mWindow;
-        VkInstance mVulkanInstance = VK_NULL_HANDLE;
-        VkDebugUtilsMessengerEXT mDebugMessenger = VK_NULL_HANDLE;
-        VkSurfaceKHR mSurface = VK_NULL_HANDLE;
 
-        VkPhysicalDevice mPhysicalDevice = VK_NULL_HANDLE;
-        VkDevice mDevice = VK_NULL_HANDLE;
-        VkQueue mGfxQueue = VK_NULL_HANDLE;
-        VmaAllocator mAllocator = VK_NULL_HANDLE;
+        // Created in the constructor, Initialize/Shutdown bound its Vulkan objects.
+        std::unique_ptr<vk::VulkanDevice> mDevice;
 
         VkSwapchainKHR mSwapchain = VK_NULL_HANDLE;
         VkFormat mSwapchainFormat = VK_FORMAT_UNDEFINED;
@@ -316,9 +311,6 @@ namespace mir
         VkImage mDepthImages[kFramesInFlight]{};
         VmaAllocation mDepthAllocations[kFramesInFlight]{};
         VkImageView mDepthViews[kFramesInFlight]{};
-
-        // queue for render + present
-        uint32_t mGfxQueueFamIdx = UINT32_MAX;
 
         VkCommandPool mCmdPools[kFramesInFlight]{};
         VkCommandBuffer mCmdBuffers[kFramesInFlight]{};
@@ -435,9 +427,6 @@ namespace mir
         VkPipelineLayout mSkyPipelineLayout = VK_NULL_HANDLE;
         VkPipeline mSkyPipeline = VK_NULL_HANDLE;
 
-        bool mRayTracingSupported = false;
-        VkPhysicalDeviceRayTracingPipelinePropertiesKHR mRtProperties{};
-
         VkDescriptorSetLayout mRtSetLayout = VK_NULL_HANDLE;
         VkDescriptorPool mRtDescriptorPool = VK_NULL_HANDLE;
         VkDescriptorSet mRtDescriptorSets[kFramesInFlight]{};
@@ -528,7 +517,6 @@ namespace mir
 
         uint32_t mFrameIndex = 0;
         bool mNeedRecreate = false;
-        bool mValidationEnabled = false;
 
         bool mImGuiBackendInitialized = false;
         ImDrawData *mImguiDrawData = nullptr;

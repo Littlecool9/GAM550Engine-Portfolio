@@ -7,6 +7,7 @@
  *
  */
 #include <renderer/VulkanRenderer.h>
+#include "VulkanDevice.h"
 
 #include <core/log/Log.h>
 
@@ -33,12 +34,12 @@ namespace mir
             .depthAttachmentFormat = kDepthFormat };
 
         ImGui_ImplVulkan_InitInfo initInfo{};
-        initInfo.ApiVersion = VulkanVersion;
-        initInfo.Instance = mVulkanInstance;
-        initInfo.PhysicalDevice = mPhysicalDevice;
-        initInfo.Device = mDevice;
-        initInfo.QueueFamily = mGfxQueueFamIdx;
-        initInfo.Queue = mGfxQueue;
+        initInfo.ApiVersion = vk::VulkanDevice::kApiVersion;
+        initInfo.Instance = mDevice->Instance();
+        initInfo.PhysicalDevice = mDevice->Physical();
+        initInfo.Device = mDevice->Handle();
+        initInfo.QueueFamily = mDevice->QueueFamily();
+        initInfo.Queue = mDevice->Queue();
         initInfo.DescriptorPoolSize = 64;
         initInfo.MinImageCount = static_cast<uint32_t>(mSwapchainImages.size());
         initInfo.ImageCount = static_cast<uint32_t>(mSwapchainImages.size());
@@ -61,7 +62,7 @@ namespace mir
         if (!mImGuiBackendInitialized)
             return;
 
-        vkDeviceWaitIdle(mDevice);
+        vkDeviceWaitIdle(mDevice->Handle());
         ImGui_ImplVulkan_Shutdown();
         mImGuiBackendInitialized = false;
     }

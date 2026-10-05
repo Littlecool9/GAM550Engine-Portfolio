@@ -1,13 +1,15 @@
 /**
- * @file VulkanContext.cpp
+ * @file VulkanDevice.cpp
  * @author Sumin Park
  * @brief Vulkan instance, debug messenger, surface, physical and logical device, allocator.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
-#include <renderer/VulkanRenderer.h>
+#include "VulkanDevice.h"
 #include "VulkanSurface.h"
+
+#include <renderer/VulkanRenderer.h>
 
 #include <core/log/Log.h>
 #include <core/log/Assert.h>
@@ -17,7 +19,7 @@
 #include <cstring>
 #include <vector>
 
-namespace mir
+namespace mir::vk
 {
     namespace
     {
@@ -188,7 +190,84 @@ namespace mir
         }
     }
 
-    bool VulkanRenderer::CreateVulkanInstance(const RendererDesc &desc)
+    bool VulkanDevice::Initialize(const RendererDesc &desc)
+    {
+        if (volkInitialize() != VK_SUCCESS)
+        {
+            MIR_LOG_ERROR("volk initialized failed");
+            return false;
+        }
+
+        if (!CreateInstance(desc))
+            return false;
+
+        volkLoadInstance(mInstance);
+
+        if (mValidationEnabled && !CreateDebugMessenger())
+            return false;
+
+        if (!CreateSurface(desc))
+            return false;
+
+        if (!FindPhysicalDevice())
+            return false;
+
+        if (!CreateLogicalDevice())
+            return false;
+
+        if (!CreateAllocator())
+            return false;
+
+        NameObject(VK_OBJECT_TYPE_DEVICE, reinterpret_cast<uint64_t>(mDevice), "MjolnirEngine device");
+        NameObject(VK_OBJECT_TYPE_QUEUE, reinterpret_cast<uint64_t>(mQueue), "Graphics+present queue");
+
+        return true;
+    }
+
+    void VulkanDevice::Shutdown()
+    {
+        if (mAllocator != VK_NULL_HANDLE)
+        {
+            // The permanent leak detector. Every later milestone that allocates
+            // must still land here at 0 bytes.
+            VmaTotalStatistics stats{};
+            vmaCalculateStatistics(mAllocator, &stats);
+            MIR_LOG_INFO("[vma] live bytes at shutdown: {} in {} allocation(s)",
+                stats.total.statistics.allocationBytes,
+                stats.total.statistics.allocationCount);
+
+            vmaDestroyAllocator(mAllocator);
+            mAllocator = VK_NULL_HANDLE;
+        }
+
+        if (mDevice != VK_NULL_HANDLE)
+        {
+            vkDestroyDevice(mDevice, nullptr);
+            mDevice = VK_NULL_HANDLE;
+        }
+
+        if (mDebugMessenger != VK_NULL_HANDLE)
+        {
+            vkDestroyDebugUtilsMessengerEXT(mInstance, mDebugMessenger, nullptr);
+            mDebugMessenger = VK_NULL_HANDLE;
+        }
+
+        if (mSurface != VK_NULL_HANDLE)
+        {
+            vkDestroySurfaceKHR(mInstance, mSurface, nullptr);
+            mSurface = VK_NULL_HANDLE;
+        }
+
+        if (mInstance != VK_NULL_HANDLE)
+        {
+            vkDestroyInstance(mInstance, nullptr);
+            mInstance = VK_NULL_HANDLE;
+        }
+
+        volkFinalize();
+    }
+
+    bool VulkanDevice::CreateInstance(const RendererDesc &desc)
     {
         // to fill data, read twice : once for count, once to fill
         uint32_t layerCount = 0;
@@ -204,7 +283,7 @@ namespace mir
         std::vector<const char *> layers;
         std::vector<const char *> extensions;
 
-        const WindowBackend backend = mWindow->NativeWindow().backend;
+        const WindowBackend backend = desc.window->NativeWindow().backend;
 
         const char *platformExt = vk::PlatformSurfaceExtension(backend);
         if (platformExt == nullptr)
@@ -249,7 +328,7 @@ namespace mir
         VkApplicationInfo appInfo{
             .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
             .pApplicationName = desc.appName,
-            .apiVersion = VulkanVersion };
+            .apiVersion = kApiVersion };
 
         // temporary for instance creation.
         VkDebugUtilsMessengerCreateInfoEXT messengerInfo = MakeMessengerCreateInfo();
@@ -273,7 +352,7 @@ namespace mir
             .enabledExtensionCount = static_cast<uint32_t>(extensions.size()),
             .ppEnabledExtensionNames = extensions.data() };
 
-        if (vkCreateInstance(&createInfo, nullptr, &mVulkanInstance) != VK_SUCCESS)
+        if (vkCreateInstance(&createInfo, nullptr, &mInstance) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("vkCreateInstance failed");
             return false;
@@ -281,20 +360,20 @@ namespace mir
 
         return true;
     }
-    bool VulkanRenderer::CreateDebugMessenger()
+    bool VulkanDevice::CreateDebugMessenger()
     {
         const VkDebugUtilsMessengerCreateInfoEXT info = MakeMessengerCreateInfo();
 
-        if (vkCreateDebugUtilsMessengerEXT(mVulkanInstance, &info, nullptr, &mDebugMessenger) != VK_SUCCESS)
+        if (vkCreateDebugUtilsMessengerEXT(mInstance, &info, nullptr, &mDebugMessenger) != VK_SUCCESS)
         {
             MIR_LOG_ERROR("vkCreateDebugUtilsMessengerEXT failed");
             return false;
         }
         return true;
     }
-    bool VulkanRenderer::CreateSurface()
+    bool VulkanDevice::CreateSurface(const RendererDesc &desc)
     {
-        mSurface = vk::CreateSurface(mVulkanInstance, mWindow->NativeWindow());
+        mSurface = vk::CreateSurface(mInstance, desc.window->NativeWindow());
 
         if (mSurface == VK_NULL_HANDLE)
         {
@@ -304,10 +383,10 @@ namespace mir
         return true;
     }
 
-    bool VulkanRenderer::FindPhysicalDevice()
+    bool VulkanDevice::FindPhysicalDevice()
     {
         uint32_t count = 0;
-        vkEnumeratePhysicalDevices(mVulkanInstance, &count, nullptr);
+        vkEnumeratePhysicalDevices(mInstance, &count, nullptr);
         if (count == 0)
         {
             MIR_LOG_CRITICAL("No Vulkan-capable GPU found");
@@ -315,7 +394,7 @@ namespace mir
         }
 
         std::vector<VkPhysicalDevice> devices(count);
-        vkEnumeratePhysicalDevices(mVulkanInstance, &count, devices.data());
+        vkEnumeratePhysicalDevices(mInstance, &count, devices.data());
 
         uint32_t bestScore = 0;
 
@@ -325,7 +404,7 @@ namespace mir
             vkGetPhysicalDeviceProperties(device, &props);
 
             // Every rejection says which device and why
-            if (props.apiVersion < VulkanVersion)
+            if (props.apiVersion < kApiVersion)
             {
                 MIR_LOG_INFO("Rejected {}: Vulkan {}.{}, need 1.4", props.deviceName,
                     VK_API_VERSION_MAJOR(props.apiVersion),
@@ -361,28 +440,28 @@ namespace mir
             if (score > bestScore)
             {
                 bestScore = score;
-                mPhysicalDevice = device;
-                mGfxQueueFamIdx = family;
+                mPhysical = device;
+                mQueueFamily = family;
             }
         }
 
-        if (mPhysicalDevice == VK_NULL_HANDLE)
+        if (mPhysical == VK_NULL_HANDLE)
         {
             MIR_LOG_CRITICAL("No suitable GPU among {} candidate(s)", count);
             return false;
         }
 
         VkPhysicalDeviceProperties props{};
-        vkGetPhysicalDeviceProperties(mPhysicalDevice, &props);
+        vkGetPhysicalDeviceProperties(mPhysical, &props);
         MIR_LOG_INFO("GPU: {} | {} | Vulkan {}.{}.{} | graphics+present family {}",
             props.deviceName,
             props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? "discrete" : "integrated",
             VK_API_VERSION_MAJOR(props.apiVersion),
             VK_API_VERSION_MINOR(props.apiVersion),
             VK_API_VERSION_PATCH(props.apiVersion),
-            mGfxQueueFamIdx);
+            mQueueFamily);
 
-        mRayTracingSupported = HasRayTracingSupport(mPhysicalDevice, mRtProperties);
+        mRayTracingSupported = HasRayTracingSupport(mPhysical, mRtProperties);
         if (mRayTracingSupported)
             MIR_LOG_INFO("Ray tracing: {} supports VK_KHR_acceleration_structure + VK_KHR_ray_tracing_pipeline", props.deviceName);
         else
@@ -392,14 +471,14 @@ namespace mir
         return true;
     }
 
-    bool VulkanRenderer::CreateLogicalDevice()
+    bool VulkanDevice::CreateLogicalDevice()
     {
         // required even for single queue, needed in infostruct
         const float queuePriority = 1.0f;
 
         const VkDeviceQueueCreateInfo queueInfo{
             .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-            .queueFamilyIndex = mGfxQueueFamIdx,
+            .queueFamilyIndex = mQueueFamily,
             .queueCount = 1,
             .pQueuePriorities = &queuePriority };
 
@@ -456,18 +535,18 @@ namespace mir
             .pEnabledFeatures = nullptr // must be nullptr, everything goes through .pNext
         };
 
-        if (vkCreateDevice(mPhysicalDevice, &deviceInfo, nullptr, &mDevice) != VK_SUCCESS)
+        if (vkCreateDevice(mPhysical, &deviceInfo, nullptr, &mDevice) != VK_SUCCESS)
         {
             MIR_LOG_CRITICAL("vkCreateDevice Failed");
             return false;
         }
 
         volkLoadDevice(mDevice);
-        vkGetDeviceQueue(mDevice, mGfxQueueFamIdx, 0, &mGfxQueue);
+        vkGetDeviceQueue(mDevice, mQueueFamily, 0, &mQueue);
 
         return true;
     }
-    bool VulkanRenderer::CreateAllocator()
+    bool VulkanDevice::CreateAllocator()
     {
         const VmaVulkanFunctions functions{
             .vkGetInstanceProcAddr = vkGetInstanceProcAddr,
@@ -475,11 +554,11 @@ namespace mir
 
         const VmaAllocatorCreateInfo allocatorInfo{
             .flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
-            .physicalDevice = mPhysicalDevice,
+            .physicalDevice = mPhysical,
             .device = mDevice,
             .pVulkanFunctions = &functions,
-            .instance = mVulkanInstance,
-            .vulkanApiVersion = VulkanVersion };
+            .instance = mInstance,
+            .vulkanApiVersion = kApiVersion };
 
         if (vmaCreateAllocator(&allocatorInfo, &mAllocator) != VK_SUCCESS)
         {
@@ -489,7 +568,7 @@ namespace mir
         return true;
     }
 
-    void VulkanRenderer::NameObject(VkObjectType type, uint64_t handle, const char *name)
+    void VulkanDevice::NameObject(VkObjectType type, uint64_t handle, const char *name) const
     {
         // only when debugging
         if (!mValidationEnabled || handle == 0)
