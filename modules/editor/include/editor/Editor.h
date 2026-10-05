@@ -14,6 +14,7 @@
 #include <editor/EditorCamera.h>
 #include <editor/panels/AssetImportPanel.h>
 #include <editor/panels/HierarchyPanel.h>
+#include <editor/panels/InputSettingsPanel.h>
 #include <editor/panels/InspectorPanel.h>
 #include <editor/panels/LogPanel.h>
 #include <editor/panels/ProjectSettingsPanel.h>
@@ -123,6 +124,7 @@ namespace mir
         bool mInitialized = false;
         bool mShowStyleEditor = false;
         bool mShowProjectSettings = false;
+        bool mShowInputSettings = false;
         bool mShowAssetImport = false;
         std::string mImGuiIniPath;
         std::filesystem::path mProjectSettingsPath;
@@ -134,6 +136,7 @@ namespace mir
         AssetImportPanel mAssetImportPanel;
         InspectorPanel mInspectorPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
+        InputSettingsPanel mInputSettingsPanel;
         EditorCamera mCamera;
 
         // waiting on the confirm dialog

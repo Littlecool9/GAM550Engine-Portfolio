@@ -836,6 +836,7 @@ namespace mir
                 if (ImGui::BeginMenu("Project"))
                 {
                     ImGui::MenuItem("Project Settings", nullptr, &mShowProjectSettings);
+                    ImGui::MenuItem("Input Settings", nullptr, &mShowInputSettings);
                     ImGui::MenuItem("Asset Import", nullptr, &mShowAssetImport);
                     ImGui::EndMenu();
                 }
@@ -860,14 +861,25 @@ namespace mir
             if (mShowProjectSettings)
             {
                 if (ImGui::Begin("Project Settings", &mShowProjectSettings))
-                    mProjectSettingsPanel.Draw(inputMap, renderSettings, mWindow->RawInput(), mProjectSettingsPath);
-                else
-                    mProjectSettingsPanel.CancelListening();
+                    mProjectSettingsPanel.Draw(renderSettings, mProjectSettingsPath, mShowInputSettings);
                 ImGui::End();
             }
             else
             {
-                mProjectSettingsPanel.CancelListening();
+                mProjectSettingsPanel.OnHidden();
+            }
+
+            if (mShowInputSettings)
+            {
+                if (ImGui::Begin("Input Settings", &mShowInputSettings))
+                    mInputSettingsPanel.Draw(inputMap, mWindow->RawInput(), mProjectSettingsPath);
+                else
+                    mInputSettingsPanel.CancelListening();
+                ImGui::End();
+            }
+            else
+            {
+                mInputSettingsPanel.OnHidden();
             }
 
             const std::span<const std::string> dropped =
