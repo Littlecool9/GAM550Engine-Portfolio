@@ -226,8 +226,6 @@ namespace mir
     void InputSettingsPanel::Draw(InputMap &inputMap, const RawInputSnapshot &raw,
         const std::filesystem::path &savePath)
     {
-        // draft from the live settings once per time the panel opens, so edits
-        // stay local until Save is clicked - see gh-154
         if (!mDraftLoaded)
         {
             mDraftInputMap = inputMap;

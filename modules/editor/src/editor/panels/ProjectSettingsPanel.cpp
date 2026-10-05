@@ -1,9 +1,7 @@
 /**
  * @file ProjectSettingsPanel.cpp
  * @author Rahul Nair
- * @brief The "Project Settings" window - Rendering section, saved to disk,
- *        plus an entry point into the separate Input Settings panel
- *        (gh-155).
+ * @brief The "Project Settings" window - Rendering section, saved to disk.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
