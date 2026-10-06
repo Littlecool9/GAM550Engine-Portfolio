@@ -127,11 +127,11 @@ namespace
             if (report.publish->published)
                 std::printf("TerrainTool: %s ok: published release %s of %s (current was %s); report %s\n",
                             report.command.c_str(), id(report.publish->current).c_str(), report.assetPath.c_str(),
-                            id(report.publish->previous).c_str(), reportPath.generic_string().c_str());
+                            id(report.publish->previous).c_str(), PathUtf8(reportPath).c_str());
             else
                 std::printf("TerrainTool: %s ok: %s is up to date, release %s; report %s\n", report.command.c_str(),
                             report.assetPath.c_str(), id(report.publish->current).c_str(),
-                            reportPath.generic_string().c_str());
+                            PathUtf8(reportPath).c_str());
             return 0;
         }
         if (report.Ok() && written)

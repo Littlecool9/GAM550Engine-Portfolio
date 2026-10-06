@@ -113,8 +113,8 @@ namespace mir::terrainbake
         const fs::path parent = recipePath.has_parent_path() ? recipePath.parent_path() : fs::path(".");
         for (const fs::directory_entry &entry : fs::directory_iterator(parent, ec))
         {
-            const std::string stored = entry.path().filename().string();
-            if (SameIgnoringCase(stored, recipePath.filename().string()))
+            const std::string stored = PathUtf8(entry.path().filename());
+            if (SameIgnoringCase(stored, PathUtf8(recipePath.filename())))
             {
                 if (stored != wanted && SameIgnoringCase(stored, wanted))
                     return std::format("the recipe file is \"{}\" on disk but --source-path names \"{}\"; asset ids "

@@ -126,11 +126,10 @@ namespace mir::terrainbake
 
         bool IsPartialReleaseDir(const fs::directory_entry &entry)
         {
-            const std::string name = entry.path().filename().string();
+            const std::string name = PathUtf8(entry.path().filename());
             std::error_code ec;
             return entry.is_directory(ec) && name.size() == 16 + 8 && name.ends_with(".partial") &&
-                   std::all_of(name.begin(), name.begin() + 16,
-                               [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+                   ParseTerrainIdHex(std::string_view(name).substr(0, 16));
         }
 
         std::optional<TerrainCandidateManifest> ReadManifest(const fs::path &candidate)
@@ -197,8 +196,8 @@ namespace mir::terrainbake
                 if (fs::absolute(heldLock->AssetDir()).lexically_normal() != fs::absolute(assetDir).lexically_normal())
                 {
                     Fail(report, check::kLock, "", std::format("the held lock is for {}, not {}",
-                                                               heldLock->AssetDir().generic_string(),
-                                                               assetDir.generic_string()));
+                                                               PathUtf8(heldLock->AssetDir()),
+                                                               PathUtf8(assetDir)));
                     SkipNotRun(report, kPublishChecks, "no lock");
                     return false;
                 }
@@ -212,7 +211,7 @@ namespace mir::terrainbake
                     SkipNotRun(report, kPublishChecks, "another publisher holds this asset");
                     return false;
                 }
-                report.Ran(check::kLock, (assetDir / kTerrainPublishLockFileName).generic_string());
+                report.Ran(check::kLock, PathUtf8(assetDir / kTerrainPublishLockFileName));
             }
             report.publish->previous = PeekTerrainCurrent(root, *asset);
 
@@ -222,7 +221,7 @@ namespace mir::terrainbake
                 Fail(report, check::kTarget, releaseHex,
                      std::format("{} already exists; a published release is never replaced or changed (bake a new "
                                  "candidate: every bake without --nonce mints a new release id)",
-                                 finalDir.generic_string()));
+                                 PathUtf8(finalDir)));
                 SkipNotRun(report, kPublishChecks, "nothing to publish into");
                 return false;
             }
@@ -237,11 +236,11 @@ namespace mir::terrainbake
                 }
             fs::remove(assetDir / "current.tmp", ec);
             report.Ran(check::kTarget, std::format("{} is free; removed {} stale .partial directories",
-                                                   finalDir.generic_string(), stale));
+                                                   PathUtf8(finalDir), stale));
 
             if (!fs::create_directory(partial, ec))
             {
-                Fail(report, check::kCopy, "", std::format("cannot create {} ({})", partial.generic_string(),
+                Fail(report, check::kCopy, "", std::format("cannot create {} ({})", PathUtf8(partial),
                                                            ec ? ec.message() : "it exists"));
                 SkipNotRun(report, kPublishChecks, "nothing was copied");
                 return false;
@@ -262,7 +261,7 @@ namespace mir::terrainbake
                     Fail(report, check::kCopy, file.name,
                          std::format("{} is not the {} bytes with Fnv1a64 {} that candidate.json records (changed "
                                      "after it validated?)",
-                                     (candidate / file.name).generic_string(), file.bytes, TerrainIdHex(file.checksum)));
+                                     PathUtf8(candidate / file.name), file.bytes, TerrainIdHex(file.checksum)));
                     return abandon("the copy was abandoned and its .partial directory removed");
                 }
                 if (i == 1 && faults.At(TerrainPublishStep::Copy))
@@ -278,14 +277,14 @@ namespace mir::terrainbake
                 if (!WriteBytes(partial / file.name, *bytes) || !FlushToDisk(partial / file.name))
                 {
                     Fail(report, check::kCopy, file.name, std::format("cannot write {} ({})",
-                                                                      (partial / file.name).generic_string(),
+                                                                      PathUtf8(partial / file.name),
                                                                       LastErrorMessage()));
                     return abandon("the copy was abandoned and its .partial directory removed");
                 }
                 copied += bytes->size();
             }
             report.Ran(check::kCopy, std::format("{} files, {} bytes, into {}", manifest->files.size(), copied,
-                                                 partial.generic_string()));
+                                                 PathUtf8(partial)));
 
             if (faults.Interrupt(TerrainPublishStep::Verify))
             {
@@ -324,11 +323,11 @@ namespace mir::terrainbake
             if (!Move(partial, finalDir, false, error))
             {
                 Fail(report, check::kRename, releaseHex, std::format("cannot rename {} to {} ({})",
-                                                                     partial.generic_string(),
-                                                                     finalDir.generic_string(), error));
+                                                                     PathUtf8(partial),
+                                                                     PathUtf8(finalDir), error));
                 return abandon("the .partial directory was removed");
             }
-            report.Ran(check::kRename, finalDir.generic_string());
+            report.Ran(check::kRename, PathUtf8(finalDir));
 
             const fs::path pointer = TerrainCurrentPointerPath(root, *asset);
             const fs::path pending = assetDir / "current.tmp";
@@ -337,11 +336,11 @@ namespace mir::terrainbake
             auto pointerFailed = [&](std::string why) {
                 Fail(report, check::kPointer, std::string(kTerrainCurrentPointerFileName),
                      std::format("{}; release {} is complete at {} but not current, and current still names {}", why,
-                                 releaseHex, finalDir.generic_string(), previousText));
+                                 releaseHex, PathUtf8(finalDir), previousText));
                 return false;
             };
             if (!WriteText(pending, EncodeTerrainCurrentPointer(release)) || !FlushToDisk(pending))
-                return pointerFailed(std::format("cannot write {}", pending.generic_string()));
+                return pointerFailed(std::format("cannot write {}", PathUtf8(pending)));
             if (faults.At(TerrainPublishStep::Pointer))
             {
                 if (faults.Interrupt(TerrainPublishStep::Pointer))
@@ -355,7 +354,7 @@ namespace mir::terrainbake
             if (!Move(pending, pointer, true, error))
             {
                 fs::remove(pending, ec);
-                return pointerFailed(std::format("cannot replace {} ({})", pointer.generic_string(), error));
+                return pointerFailed(std::format("cannot replace {} ({})", PathUtf8(pointer), error));
             }
 
             const std::optional<TerrainReleaseId> readBack = PeekTerrainCurrent(root, *asset);
@@ -418,7 +417,7 @@ namespace mir::terrainbake
         fs::create_directories(assetDir, ec);
         if (ec)
         {
-            error = std::format("cannot create {} ({})", assetDir.generic_string(), ec.message());
+            error = std::format("cannot create {} ({})", PathUtf8(assetDir), ec.message());
             return std::nullopt;
         }
         const fs::path path = assetDir / kTerrainPublishLockFileName;
@@ -446,12 +445,12 @@ namespace mir::terrainbake
 #endif
             if (!busy)
             {
-                error = std::format("cannot open {} ({})", path.generic_string(), reason);
+                error = std::format("cannot open {} ({})", PathUtf8(path), reason);
                 return std::nullopt;
             }
             if (std::chrono::steady_clock::now() >= deadline)
             {
-                error = std::format("another publish of this asset holds {} (waited {} ms)", path.generic_string(),
+                error = std::format("another publish of this asset holds {} (waited {} ms)", PathUtf8(path),
                                     wait.count());
                 return std::nullopt;
             }
@@ -467,21 +466,21 @@ namespace mir::terrainbake
         if (!fs::is_regular_file(path, ec))
         {
             if (problem)
-                *problem = std::format("no current release ({} does not exist)", path.generic_string());
+                *problem = std::format("no current release ({} does not exist)", PathUtf8(path));
             return std::nullopt;
         }
         const std::optional<std::string> text = ReadText(path);
         if (!text)
         {
             if (problem)
-                *problem = std::format("cannot read {}", path.generic_string());
+                *problem = std::format("cannot read {}", PathUtf8(path));
             return std::nullopt;
         }
         const TerrainResult<TerrainReleaseId> id = ParseTerrainCurrentPointer(*text);
         if (!id)
         {
             if (problem)
-                *problem = std::format("{}: {}", path.generic_string(), id.error.message);
+                *problem = std::format("{}: {}", PathUtf8(path), id.error.message);
             return std::nullopt;
         }
         return *id.value;
@@ -527,8 +526,8 @@ namespace mir::terrainbake
                  "the candidate and the releases root must not contain each other");
         if (report.Status(check::kArguments) == CheckStatus::Failed)
             return report;
-        report.Ran(check::kArguments, std::format("candidate {}, releases {}", request.candidateDir.generic_string(),
-                                                  request.releasesRoot.generic_string()));
+        report.Ran(check::kArguments, std::format("candidate {}, releases {}", PathUtf8(request.candidateDir),
+                                                  PathUtf8(request.releasesRoot)));
 
         std::optional<TerrainRecipe> recipe;
         if (request.recipePath.empty())

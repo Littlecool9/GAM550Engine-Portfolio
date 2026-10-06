@@ -189,7 +189,7 @@ namespace mir::terrainbake
             auto id = [](const std::optional<TerrainReleaseId> &v) {
                 return v ? Json(TerrainIdHex(v->value)) : Json(nullptr);
             };
-            j["publish"] = {{"releases", r.publish->releasesRoot.generic_string()},
+            j["publish"] = {{"releases", PathUtf8(r.publish->releasesRoot)},
                             {"previous", id(r.publish->previous)},
                             {"current", id(r.publish->current)},
                             {"published", r.publish->published}};

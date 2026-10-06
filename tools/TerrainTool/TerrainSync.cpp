@@ -51,25 +51,25 @@ namespace mir::terrainbake
                 return true;
             if (!fs::is_directory(dir, ec))
             {
-                error = std::format("{} exists and is not a directory", dir.generic_string());
+                error = std::format("{} exists and is not a directory", PathUtf8(dir));
                 return false;
             }
             for (const fs::directory_entry &entry : fs::directory_iterator(dir, ec))
             {
-                const std::string name = entry.path().filename().string();
+                const std::string name = PathUtf8(entry.path().filename());
                 const bool candidateFile = name == kTerrainIndexFileName || name == kCandidateManifestFileName ||
                                            (name.starts_with("chunk_") && name.ends_with(".tpack"));
                 if (!entry.is_regular_file(ec) || !candidateFile)
                 {
                     error = std::format("{} holds {}, so it is not a TerrainTool candidate; sync only replaces its "
                                         "own candidate (choose another --candidate)",
-                                        dir.generic_string(), name);
+                                        PathUtf8(dir), name);
                     return false;
                 }
             }
             fs::remove_all(dir, ec);
             if (ec)
-                error = std::format("cannot remove the old candidate {} ({})", dir.generic_string(), ec.message());
+                error = std::format("cannot remove the old candidate {} ({})", PathUtf8(dir), ec.message());
             return !ec;
         }
     }
@@ -88,7 +88,7 @@ namespace mir::terrainbake
         std::error_code ec;
         // So a missing release is a reason, not a logged read error.
         if (!fs::is_regular_file(dir / kTerrainIndexFileName, ec))
-            return std::format("current names release {}, but {} has no {}", id, dir.generic_string(),
+            return std::format("current names release {}, but {} has no {}", id, PathUtf8(dir),
                                kTerrainIndexFileName);
         const TerrainResult<TerrainReleaseHandle> release = OpenTerrainRelease(releasesRoot, asset, *current);
         if (!release)
@@ -140,13 +140,13 @@ namespace mir::terrainbake
             Fail(report, check::kArguments, "--candidate",
                  std::format("{} and the releases tree {} must not contain each other: sync deletes its old "
                              "candidate",
-                             request.candidateDir.generic_string(), releases.generic_string()));
+                             PathUtf8(request.candidateDir), PathUtf8(releases)));
         if (!asset || report.Status(check::kArguments) == CheckStatus::Failed)
             return report;
         report.assetPath = asset->logicalPath;
         report.Ran(check::kArguments,
                    std::format("asset {} ({}), releases {}", asset->logicalPath, TerrainIdHex(asset->asset.value),
-                               releases.generic_string()));
+                               PathUtf8(releases)));
 
         RecipeParseResult parsed = LoadTerrainRecipe(request.recipePath);
         for (RecipeIssue &issue : parsed.issues)
@@ -167,7 +167,7 @@ namespace mir::terrainbake
             Fail(report, check::kLock, std::string(kTerrainPublishLockFileName), error);
             return report;
         }
-        report.Ran(check::kLock, (lock->AssetDir() / kTerrainPublishLockFileName).generic_string());
+        report.Ran(check::kLock, PathUtf8(lock->AssetDir() / kTerrainPublishLockFileName));
 
         std::optional<TerrainReleaseId> current;
         std::optional<TerrainReleaseHandle> opened;
