@@ -64,11 +64,11 @@ A tile's final heights live in a `TileHeights`: `(n+1)^2` float32 terrain-local
 meters, row-major with x fastest, shared edge and padding samples included.
 It is the one block the bake, query, mesh and heightfield code pass around.
 
-A bake encodes a complete set of tiles into one *release*: an index file plus
-one pack file per storage chunk (16 x 16 tiles by default). The index records,
-per tile, the pack, byte offset and length, checksum, height range, sample
-spacing and clipped valid extent, so a reader fetches one tile without reading
-its pack. Releases live in `<releasesRoot>/<assetIdHex16>/<releaseIdHex16>/`,
+A bake encodes one source per map tile and optional sparse coarse payloads
+into one format 2 *release*: an index plus one pack per storage chunk (16 x 16
+tiles by default). The index records each tile/layer key, source flag, pack,
+byte offset and length, checksum, height range, spacing and clipped extent,
+so a reader fetches one payload without reading its pack. Releases live in `<releasesRoot>/<assetIdHex16>/<releaseIdHex16>/`,
 and `<releasesRoot>/<assetIdHex16>/current` names the current one.
 
 ```cpp
@@ -245,9 +245,10 @@ loader takes them with `TakePayloadRequests` and hands back `TileHeights` with
 the release is preloaded whole. P3's scheduler takes over that loop.
 
 A query has one or more *layers*, finest first, each a layout of one spacing
-over the same tiles. A P1 release is exactly one layer. Per-tile source
-precision (P2) is a finer layer that bakes only some tiles, and coarser levels
-(P3) are extra layers, so a coarse tile can answer while the fine one loads.
+over the same tiles. Format 2 permits sparse layers and one source spacing
+per tile; optional coarse payloads can answer while a fine payload loads.
+The P1 runtime still synchronously preloads the release. P2 bakes coarse
+levels and measured per-tile deviation bounds; P3 schedules residency.
 
 ### Tile meshes
 
@@ -475,7 +476,7 @@ tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-
 | `TileAddress` | `terrain/TileAddressing.h` | `AddressLocal`, `AddressWorld`: status, tile, within-tile meters, `SampleCell` |
 | `TerrainSourceFingerprint`, `TerrainFormatVersion`, `TerrainReleaseId`, `TerrainReleaseInfo` | `terrain/TerrainIdentity.h` | three identities that never convert into each other |
 | `TileHeights` | `terrain/TileHeights.h` | one tile's `(n+1)^2` float32 samples; `At`, `Set`, `Samples` |
-| `TerrainIndex`, `TerrainTileRecord`, `TerrainPackRecord`, `TerrainResult`, `TerrainPackError` | `terrain/TerrainPackFormat.h` | the format 1.0 byte layout and version numbers; `ParseTerrainIndex`, `DecodeTerrainTile` (bytes from any reader), `TerrainPackFileName` |
+| `TerrainIndex`, `TerrainTileRecord`, `TerrainPackRecord`, `TerrainResult`, `TerrainPackError` | `terrain/TerrainPackFormat.h` | the format 2.0 sparse layer/payload layout and version numbers; `ParseTerrainIndex`, `DecodeTerrainTile` (bytes from any reader), `TerrainPackFileName` |
 | `EncodeTerrainRelease`, `MintTerrainReleaseId` | `terrain/TerrainPackWriter.h` | index and pack bytes from `TileHeights`, in memory; `TerrainHeightsHash`, `MakeTerrainReleaseNonce` |
 | `TerrainByteSource`, `TerrainFileSource`, `TerrainMemorySource` | `terrain/TerrainByteSource.h` | where a release's files come from, with read and byte counters |
 | `TerrainReleaseHandle`, `OpenTerrainRelease`, `OpenCurrentTerrainRelease` | `terrain/TerrainRelease.h` | one opened release; `ReadTile`, `VerifyAllPacks`; release directory and `current` pointer naming |
@@ -557,32 +558,43 @@ minted by `FingerprintRecipe` in `tools/TerrainTool/` (#113): `Fnv1a64` of a
 canonical, sorted text of every recipe field, the generator id and version and
 the recipe schema version, so equal recipes match whatever their JSON spelling.
 
-**The files are little-endian and versioned for extension.** Every field is
-written byte by byte. The index header carries a major format
-(`kTerrainFormatVersion`, 1), a minor, its own size and the record sizes. A
-reader accepts any minor of its major: a newer minor may only append fields to
-the header and records, or add a section before the trailing checksum, and old
-readers skip what they do not know. Anything an old reader cannot safely skip
-bumps the major. The tile payload has its own content version (1: raw float32),
-so a new payload encoding does not touch the container.
+**The files are little-endian and versioned for extension.** Format 2 is the
+only supported release format; format 1 releases must be rebaked. Sync detects
+that mismatch. Minor versions can append fields/sections that this reader
+safely skips. Heights content version 1 remains raw float32.
 
-Byte offsets of format 1.0. All sizes are multiples of 8, and every payload
-offset is a multiple of the index's `payloadAlignment`.
+The stable reference grid in the header equals layer 0. Layers run fine to
+coarse, nest by integer ratios, and have bit-identical tile edges and bounds.
+Fine layers may be sparse. Every map tile has exactly one `source` Height
+record, which must be its finest baked record. Additional coarse Height
+payloads have `source=false` and may carry a measured `maxDeviation`.
 
-| Block | Size | Fields (offset type name) |
+| Block | Bytes | Fields (offset type name) |
 |---|---|---|
-| Index header | 120 | 0 `"MJTI"`, 4 u32 format, 8 u32 minor, 12 u32 headerSize, 16 u32 contentVersion, 20 u32 payloadAlignment, 24 u64 asset, 32 u64 release, 40 u64 sourceFingerprint, 48 f64 spacing, 56 i32 intervalsPerTile, 60 i32 chunkTiles, 64 f64 minX, 72 minZ, 80 maxX, 88 maxZ, 96 u32 packCount, 100 u32 packRecordSize, 104 u32 tileCount, 108 u32 tileRecordSize, 112 u64 heightsHash |
-| Pack record | 32 | 0 i32 chunkX, 4 i32 chunkZ, 8 u32 tileCount, 12 u32 zero, 16 u64 fileSize, 24 u64 file checksum |
-| Tile record | 88 | 0 i32 tileX, 4 i32 tileZ, 8 u32 pack, 12 u32 samplesPerSide, 16 u64 offset, 24 u64 length, 32 u64 payload checksum, 40 f64 spacing, 48 f32 minHeight, 52 f32 maxHeight, 56 f64 valid minX, 64 minZ, 72 maxX, 80 maxZ |
-| Pack header | 48 | 0 `"MJTP"`, 4 u32 format, 8 u32 minor, 12 u32 headerSize, 16 u64 asset, 24 u64 release, 32 i32 chunkX, 36 i32 chunkZ, 40 u32 tileCount, 44 u32 contentVersion |
+| Index header | 128 | 0 `"MJTI"`, 4 u32 major, 8 u32 minor, 12 u32 headerSize, 16 u32 contentVersion, 20 u32 alignment, 24 u64 asset, 32 u64 release, 40 u64 sourceFingerprint, 48 f64 reference spacing, 56 i32 intervals, 60 i32 chunkTiles, 64/72/80/88 f64 bounds, 96/100 u32 pack count/size, 104/108 u32 payload count/size, 112 u64 heightsHash, 120/124 u32 layer count/size |
+| Pack record | 32 | 0/4 i32 chunk, 8 u32 payloadCount, 12 reserved, 16 u64 fileSize, 24 u64 checksum |
+| Payload record | 120 | 0/4 i32 tile, 8 u32 pack, 12 u32 samplesPerSide, 16/24/32 u64 offset/length/checksum, 40 f64 spacing, 48/52 f32 min/max, 56/64/72/80 f64 extent, 88 u32 layer, 92 u32 kind, 96 u32 level, 100 u32 source flag, 104 u32 deviation flag, 108 reserved, 112 f64 deviation |
+| Layer record | 16 | 0 f64 spacing, 8 i32 intervalsPerTile, 12 reserved |
+| Pack header | 48 | 0 `"MJTP"`, 4/8/12 u32 major/minor/headerSize, 16/24 u64 asset/release, 32/36 i32 chunk, 40/44 u32 payloadCount/contentVersion |
 
-The index is the header, `packCount` pack records, `tileCount` tile records,
-optional extension bytes, and a u64 `Fnv1a64` trailer over every byte before
-it. A pack is its header followed by the payloads.
+Tables follow header, packs, payloads, layers, optional extension bytes and an
+8-byte FNV64 trailer. Payload keys sort by `(z,x,kind,level,layer)`. Kind 0 is
+Height; 1/2/3 reserve LodHeight/Normal/Region. This reader refuses unsupported
+content; future minor versions can implement those keys without another
+container major. Every payload is an independent aligned range, including
+records for the same tile. `heightsHash` includes the ordered tile/layer key,
+kind, level, source flag, spacing, sample count, optional error bound and
+checksum, but excludes storage grouping/alignment.
+
+`Layers()` exposes all grids. `Layout()` is only the reference grid; obtain
+source precision from `Index().Find(tile)`. `ReadTile(key)` reads that source;
+`ReadTile(key, layer)` reads an explicit sparse Height payload. Query loading
+constructs those sparse layers and can preload all payloads or a selected
+release layer; querying never performs IO.
 
 **A damaged release never yields samples.** Opening parses and cross-checks the
-whole index: magic, versions, checksum, sizes, a record for every layout tile
-exactly once in (z, x) order, the chunk each tile belongs to, aligned offsets
+whole index: magic, versions, checksum, sizes, one finest source per map tile,
+unique sorted payload keys, nested layer grids, the chunk each tile belongs to, aligned offsets
 that neither overflow nor run past their pack nor overlap, and valid extents
 equal to the layout's. Reading a tile checks its payload checksum and height
 range. Every failure is a `TerrainPackError` naming the file, record, tile and
@@ -749,9 +761,12 @@ collider) until `current` moves to one that loads.
 
 ## State
 
-*As of 2026-10-08.* The accepted P1/P2 size baseline is 256 m tiles and
-4096 m chunks; see [the measurements](#size-baseline-issue-24). Layout,
-addressing, placement, identities, the canonical
+*As of 2026-10-09.* Format 2 supports sparse layers, independent payload
+ranges and unique per-tile source records (#145). Recipes and runtime meshes
+still use one layer until the remaining P2 issues are integrated. See
+[the #145 handoff](../terrain-p2-145.md) for validation and full-map measurements.
+The accepted P1/P2 size baseline is 256 m tiles and 4096 m chunks; see
+[the measurements](#size-baseline-issue-24). Layout, addressing, placement, identities, the canonical
 surface, the tile mesh builder, the collider block, the release format, its
 in-memory encoder, the synchronous range reader and the resident height query
 with a synchronous preload work; nothing takes the query's payload requests yet
@@ -819,13 +834,12 @@ safe-point switch, a broken publish reported once and never re-read).
    and cancellation to the query's slots and decide its threading model.
 2. A script-facing height query over `TerrainWorld::HeightAt`; instances of
    one asset share one release but upload their tile meshes once each.
-3. Per-tile source precision (P2), under the nesting rule above; the surface
-   rule stays, the views will carry their spacing. The query takes it as a
-   finer layer with `bakedTiles`; coarse levels (P3) as coarser layers with a
-   measured `maxDeviation`, per layer today, per tile if the bake records it.
-4. Measure the index at full map scale. Format 1 keeps 88 bytes per tile in one
-   index, about 30 MB for 586 x 586 tiles of a 150 km map; if opening it is too
-   slow, a later major can move tile tables into the packs.
+3. Per-tile source recipe precision (#119), final seam adjustment (#120) and
+   baked coarse levels with per-tile measured bounds (#121). The format and
+   query already carry sparse layers and tile deviation values.
+4. Plan bounded index loading/caching for P3. The #145 benchmark measured
+   41.3 MB / 551 ms for one full layer and 164.9 MB / 2.32 s for four dense
+   layers; these Open times exclude pack reads and disk IO.
 5. Streaming meshes (P3): an edge tile needs its neighbour's samples for its
    edge normals, so residency must load one ring further, or rebuild an edge
    when the neighbour arrives. Runtime building versus prebaked mesh caches is
@@ -852,6 +866,12 @@ defaults, using measurements collected on 2026-10-03 for sample/mesh memory,
 pinned-Jolt padding/boundaries, chunk grouping and file reads. Render Regions,
 physics areas and P3 streaming budgets remain independent. This is a
 documentation decision; the production terrain runtime is unchanged.
+
+*2026-10-06* — **Sparse format 2 releases (#145).** One unique source per tile,
+nested layer grids, independent payload keys/ranges and per-tile deviation
+bounds; v1 readers/writers removed. Candidate manifest and sync use format 2.
+All four build presets pass; full-map index measurements are recorded in
+[the #145 handoff](../terrain-p2-145.md).
 
 *2026-10-03* — **A build without the editor packages terrain (#116).** Was: no
 packaging step, so the `windows-msvc-game-*` builds, which read `games/` next

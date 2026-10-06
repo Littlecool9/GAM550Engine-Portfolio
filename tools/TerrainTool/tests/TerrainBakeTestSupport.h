@@ -220,14 +220,9 @@ namespace mir::terrainbake::test
         const size_t tileTable = kTerrainIndexHeaderSize + idx.packs.size() * kTerrainPackRecordSize;
         StoreU64(index, tileTable + t * kTerrainTileRecordSize + 32, payload);
         StoreU64(index, kTerrainIndexHeaderSize + record.pack * kTerrainPackRecordSize + 24, Fnv1a64(bytes));
-        std::vector<std::byte> hashed(idx.tiles.size() * 16);
-        for (size_t r = 0; r < idx.tiles.size(); ++r)
-        {
-            StoreU32(hashed, r * 16, static_cast<uint32_t>(idx.tiles[r].tile.x));
-            StoreU32(hashed, r * 16 + 4, static_cast<uint32_t>(idx.tiles[r].tile.z));
-            StoreU64(hashed, r * 16 + 8, r == t ? payload : idx.tiles[r].checksum);
-        }
-        StoreU64(index, 112, Fnv1a64(hashed));
+        std::vector<TerrainTileRecord> records = idx.tiles;
+        records[t].checksum = payload;
+        StoreU64(index, 112, TerrainRecordsHeightsHash(records));
         const size_t body = index.size() - kTerrainIndexTrailerSize;
         StoreU64(index, body, Fnv1a64(std::span<const std::byte>(index).first(body)));
 
@@ -282,7 +277,7 @@ namespace mir::terrainbake::test
         std::vector<TileHeights> tiles;
         for (const TerrainTileRecord &record : handle.Index().tiles)
         {
-            TerrainResult<TileHeights> tile = handle.ReadTile({handle.Info().asset, record.tile});
+            TerrainResult<TileHeights> tile = handle.ReadTileRecord(record);
             REQUIRE(tile);
             tiles.push_back(std::move(*tile.value));
         }

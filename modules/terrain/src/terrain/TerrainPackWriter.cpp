@@ -22,6 +22,7 @@
 #include <map>
 #include <random>
 #include <utility>
+#include <tuple>
 
 namespace mir
 {
@@ -41,41 +42,52 @@ namespace mir
             return bytes;
         }
 
-        std::vector<const TileHeights *> SortedByZX(std::span<const TileHeights> tiles)
-        {
-            std::vector<const TileHeights *> sorted;
-            sorted.reserve(tiles.size());
-            for (const TileHeights &tile : tiles)
-                sorted.push_back(&tile);
-            std::sort(sorted.begin(), sorted.end(), [](const TileHeights *a, const TileHeights *b) {
-                return detail::LessZX(a->Tile().x, a->Tile().z, b->Tile().x, b->Tile().z);
-            });
-            return sorted;
-        }
-
         bool IsPowerOfTwo(uint32_t v)
         {
             return v != 0 && (v & (v - 1)) == 0;
         }
     }
 
-    uint64_t TerrainHeightsHash(std::span<const TileHeights> tiles)
+    uint64_t TerrainHeightsHash(std::span<const TerrainLayout> layers, std::span<const TerrainTileWrite> tiles)
     {
         std::vector<TerrainTileRecord> records;
-        records.reserve(tiles.size());
-        for (const TileHeights *tile : SortedByZX(tiles))
+        for (const auto &input : tiles)
         {
-            TerrainTileRecord record;
-            record.tile = tile->Tile();
-            record.checksum = Fnv1a64(EncodePayload(*tile));
-            records.push_back(record);
+            if (!input.heights || input.layer >= layers.size()) return 0;
+            TerrainTileRecord r;
+            r.tile = input.heights->Tile(); r.layer = input.layer; r.source = input.source;
+            r.sampleSpacing = layers[input.layer].SampleSpacing();
+            r.samplesPerSide = input.heights->SamplesPerSide();
+            r.maxDeviation = input.maxDeviation;
+            r.checksum = Fnv1a64(EncodePayload(*input.heights));
+            records.push_back(r);
         }
+        std::sort(records.begin(), records.end(), [](const auto &a, const auto &b) {
+            return std::tuple(a.tile.z, a.tile.x, a.layer) < std::tuple(b.tile.z, b.tile.x, b.layer);
+        });
         return detail::HeightsHashOf(records);
+    }
+
+    uint64_t TerrainHeightsHash(const TerrainLayout &layout, std::span<const TileHeights> tiles)
+    {
+        std::vector<TerrainTileWrite> inputs;
+        for (const auto &tile : tiles) inputs.push_back({&tile});
+        return TerrainHeightsHash(std::span(&layout, 1), inputs);
     }
 
     TerrainResult<TerrainEncodedRelease> EncodeTerrainRelease(const TerrainReleaseInfo &info,
                                                               const TerrainLayout &layout,
                                                               std::span<const TileHeights> tiles,
+                                                              const TerrainPackWriteOptions &options)
+    {
+        std::vector<TerrainTileWrite> inputs;
+        for (const auto &tile : tiles) inputs.push_back({&tile});
+        return EncodeTerrainRelease(info, std::span(&layout, 1), inputs, options);
+    }
+
+    TerrainResult<TerrainEncodedRelease> EncodeTerrainRelease(const TerrainReleaseInfo &info,
+                                                              std::span<const TerrainLayout> layers,
+                                                              std::span<const TerrainTileWrite> tiles,
                                                               const TerrainPackWriteOptions &options)
     {
         using Code = TerrainPackErrorCode;
@@ -90,52 +102,45 @@ namespace mir
         if (!IsPowerOfTwo(options.payloadAlignment) || options.payloadAlignment > kMaxTerrainPayloadAlignment)
             return Fail<R>(Code::InvalidInput, "payload alignment {} is not a power of two up to {}",
                            options.payloadAlignment, kMaxTerrainPayloadAlignment);
+        if (layers.empty() || layers.size() > UINT32_MAX || tiles.size() > UINT32_MAX)
+            return Fail<R>(Code::InvalidInput, "empty or oversized layer/payload tables");
+        const TerrainLayout &layout = layers.front();
         const int32_t n = layout.IntervalsPerTile();
-        if (n > kMaxTerrainTileIntervals)
-            return Fail<R>(Code::InvalidInput, "{} intervals per tile exceeds the format limit {}", n,
-                           kMaxTerrainTileIntervals);
-
-        const TileRange range = layout.Tiles();
-        const uint64_t width = uint64_t(int64_t(range.max.x) - range.min.x + 1);
-        const uint64_t height = uint64_t(int64_t(range.max.z) - range.min.z + 1);
-        if (width > std::numeric_limits<uint32_t>::max() / height)
-            return Fail<R>(Code::InvalidInput, "the layout has {} x {} tiles, more than one index can list", width,
-                           height);
-
-        const std::vector<const TileHeights *> sorted = SortedByZX(tiles);
-        for (size_t i = 0; i < sorted.size(); ++i)
+        for (size_t l = 0; l < layers.size(); ++l)
         {
-            const TileHeights &tile = *sorted[i];
-            const std::string name = Describe(tile.Tile());
-            if (!layout.Contains(tile.Tile()))
-                return Fail<R>(Code::InvalidInput, "tile {} is outside the layout's tiles {} to {}", name,
-                               Describe(range.min), Describe(range.max));
-            if (i > 0 && sorted[i - 1]->Tile() == tile.Tile())
-                return Fail<R>(Code::InvalidInput, "tile {} is given twice", name);
-            if (tile.IntervalsPerTile() != n)
-                return Fail<R>(Code::InvalidInput, "tile {} has {} intervals, the layout {}", name,
-                               tile.IntervalsPerTile(), n);
-            const std::span<const float> samples = tile.Samples();
-            for (size_t s = 0; s < samples.size(); ++s)
-            {
-                if (!std::isfinite(samples[s]))
-                    return Fail<R>(Code::InvalidInput, "tile {}: sample ({}, {}) is not finite", name,
-                                   s % tile.SamplesPerSide(), s / tile.SamplesPerSide());
-            }
+            if (layers[l].IntervalsPerTile() > kMaxTerrainTileIntervals ||
+                (l > 0 && !TerrainLayersNest(layers[l - 1], layers[l])))
+                return Fail<R>(Code::InvalidInput, "layer {} spacing does not nest or exceeds the tile limit", l);
         }
-        // Sorted, unique and inside the layout, so a short list is missing a tile.
-        for (uint64_t t = 0; t < width * height; ++t)
+        std::vector<TerrainTileWrite> sorted(tiles.begin(), tiles.end());
+        for (const auto &input : sorted)
         {
-            const TileCoord expected{static_cast<int32_t>(range.min.x + int64_t(t % width)),
-                                     static_cast<int32_t>(range.min.z + int64_t(t / width))};
-            if (t >= sorted.size() || sorted[t]->Tile() != expected)
-                return Fail<R>(Code::InvalidInput, "tile {} is missing", Describe(expected));
+            if (!input.heights || input.layer >= layers.size())
+                return Fail<R>(Code::InvalidInput, "null tile or unknown layer {}", input.layer);
+            const auto &tile = *input.heights;
+            const auto &layer = layers[input.layer];
+            if (!layer.Contains(tile.Tile()))
+                return Fail<R>(Code::InvalidInput, "tile {} is outside the layout", Describe(tile.Tile()));
+            if (tile.IntervalsPerTile() != layer.IntervalsPerTile())
+                return Fail<R>(Code::InvalidInput, "tile {} has {} intervals, the layer {}", Describe(tile.Tile()),
+                               tile.IntervalsPerTile(), layer.IntervalsPerTile());
+            for (float h : tile.Samples())
+                if (!std::isfinite(h))
+                    return Fail<R>(Code::InvalidInput, "tile {}: sample is not finite", Describe(tile.Tile()));
         }
+        std::sort(sorted.begin(), sorted.end(), [](const auto &a, const auto &b) {
+            return std::tuple(a.heights->Tile().z, a.heights->Tile().x, a.layer) <
+                   std::tuple(b.heights->Tile().z, b.heights->Tile().x, b.layer);
+        });
+        for (size_t t = 1; t < sorted.size(); ++t)
+            if (sorted[t - 1].heights->Tile() == sorted[t].heights->Tile() && sorted[t - 1].layer == sorted[t].layer)
+                return Fail<R>(Code::InvalidInput, "tile {} layer {} is given twice", Describe(sorted[t].heights->Tile()),
+                               sorted[t].layer);
 
         std::map<std::pair<int32_t, int32_t>, std::vector<uint32_t>> chunks;
         for (uint32_t t = 0; t < sorted.size(); ++t)
         {
-            const TerrainChunkCoord chunk = TerrainChunkOf(sorted[t]->Tile(), options.chunkTiles);
+            const TerrainChunkCoord chunk = TerrainChunkOf(sorted[t].heights->Tile(), options.chunkTiles);
             chunks[{chunk.z, chunk.x}].push_back(t);
         }
 
@@ -164,7 +169,7 @@ namespace mir
 
             for (uint32_t t : members)
             {
-                const TileHeights &tile = *sorted[t];
+                const TileHeights &tile = *sorted[t].heights;
                 out.PadTo(options.payloadAlignment);
                 const std::vector<std::byte> payload = EncodePayload(tile);
                 const auto [lo, hi] = std::minmax_element(tile.Samples().begin(), tile.Samples().end());
@@ -176,7 +181,10 @@ namespace mir
                 record.offset = out.Size();
                 record.length = payload.size();
                 record.checksum = Fnv1a64(payload);
-                record.sampleSpacing = layout.SampleSpacing();
+                record.layer = sorted[t].layer;
+                record.source = sorted[t].source;
+                record.maxDeviation = sorted[t].maxDeviation;
+                record.sampleSpacing = layers[record.layer].SampleSpacing();
                 record.minHeight = *lo;
                 record.maxHeight = *hi;
                 record.validExtent = *layout.ValidExtent(tile.Tile());
@@ -211,6 +219,8 @@ namespace mir
         out.U32(static_cast<uint32_t>(records.size()));
         out.U32(kTerrainTileRecordSize);
         out.U64(encoded.heightsHash);
+        out.U32(static_cast<uint32_t>(layers.size()));
+        out.U32(kTerrainLayerRecordSize);
         MIR_ASSERT(out.Size() == kTerrainIndexHeaderSize, "index header layout drifted from the spec");
 
         for (const TerrainPackRecord &pack : packs)
@@ -238,8 +248,24 @@ namespace mir
             out.F64(r.validExtent.minZ);
             out.F64(r.validExtent.maxX);
             out.F64(r.validExtent.maxZ);
+            out.U32(r.layer);
+            out.U32(static_cast<uint32_t>(r.kind));
+            out.U32(r.level);
+            out.U32(r.source ? 1 : 0);
+            out.U32(r.maxDeviation ? 1 : 0);
+            out.U32(0);
+            out.F64(r.maxDeviation.value_or(0.0));
+        }
+        for (const auto &layer : layers)
+        {
+            out.F64(layer.SampleSpacing());
+            out.I32(layer.IntervalsPerTile());
+            out.U32(0);
         }
         out.U64(Fnv1a64(encoded.index));
+        const auto checked = ParseTerrainIndex(encoded.index);
+        if (!checked)
+            return detail::Failure<R>(Code::InvalidInput, checked.error.message);
 
         TerrainResult<TerrainEncodedRelease> result;
         result.value = std::move(encoded);

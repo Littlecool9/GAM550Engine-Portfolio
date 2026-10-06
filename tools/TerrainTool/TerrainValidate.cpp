@@ -26,6 +26,7 @@
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace mir::terrainbake
@@ -68,6 +69,10 @@ namespace mir::terrainbake
                 if (m.release.source != info.source)
                     mismatch("recipe.fingerprint", "candidate.json source fingerprint", hex(m.release.source.value),
                              hex(info.source.value));
+                if (m.layerCount != index.layers.size() || m.payloadCount != index.tiles.size())
+                    mismatch("release.tables", "candidate.json layer/payload counts",
+                             std::format("{}/{}", m.layerCount, m.payloadCount),
+                             std::format("{}/{}", index.layers.size(), index.tiles.size()));
                 if (m.heightsHash != index.heightsHash)
                     mismatch("release.heightsHash", "candidate.json heights hash", hex(m.heightsHash),
                              hex(index.heightsHash));
@@ -241,7 +246,8 @@ namespace mir::terrainbake
             report.Add({std::string(check::kPacks), "", {}, std::nullopt, packs.message});
         report.Ran(check::kPacks, std::format("{} packs: sizes, checksums, headers and payloads", index.packs.size()));
 
-        std::unordered_map<TileCoord, TileHeights> decoded;
+        std::vector<std::unordered_map<TileCoord, TileHeights>> decoded(index.layers.size());
+        size_t decodedCount = 0;
         size_t missing = 0;
         size_t nonFinite = 0;
         for (const TerrainTileRecord &record : index.tiles)
@@ -254,10 +260,11 @@ namespace mir::terrainbake
                 report.Add({std::string(check::kCoverage), pack, {record.tile}, std::nullopt,
                             std::format("tile {} is missing: its pack {} does not exist", Tile(record.tile), pack)});
             }
-            else if (TerrainResult<TileHeights> read = handle.ReadTile({index.release.asset, record.tile}))
+            else if (TerrainResult<TileHeights> read = handle.ReadTileRecord(record))
             {
                 summary.readable = true;
-                decoded.emplace(record.tile, std::move(*read.value));
+                decoded[record.layer].emplace(record.tile, std::move(*read.value));
+                ++decodedCount;
             }
             else if (const std::optional<GlobalSampleIndex> bad = read.error.nonFiniteSample)
             {
@@ -271,15 +278,15 @@ namespace mir::terrainbake
             report.tiles.push_back(summary);
         }
         const size_t total = index.tiles.size();
-        report.Ran(check::kCoverage, std::format("{} of {} layout tiles present, each listed once by the index",
+        report.Ran(check::kCoverage, std::format("{} of {} indexed payloads present, each key listed once",
                                                  total - missing, total));
         // A tile these checks never saw keeps them from passing.
-        const std::string payloads = std::format("{} of {} tiles read back and decode", decoded.size(), total);
+        const std::string payloads = std::format("{} of {} tiles read back and decode", decodedCount, total);
         if (missing > 0)
             report.Skip(check::kPayloads, payloads + "; missing tiles were not checked");
         else
             report.Ran(check::kPayloads, payloads);
-        const size_t checkedFinite = decoded.size() + nonFinite;
+        const size_t checkedFinite = decodedCount + nonFinite;
         const std::string finite =
             std::format("{} of {} tiles checked, {} hold non-finite heights", checkedFinite, total, nonFinite);
         if (checkedFinite < total)
@@ -287,11 +294,20 @@ namespace mir::terrainbake
         else
             report.Ran(check::kFinite, finite);
 
-        const TileSampleLookup lookup = [&](TileCoord tile) -> std::span<const float> {
-            const auto it = decoded.find(tile);
-            return it == decoded.end() ? std::span<const float>() : it->second.Samples();
-        };
-        CheckTileContinuity(layout, lookup, report);
+        for (uint32_t l = 0; l < index.layers.size(); ++l)
+        {
+            const auto &layerTiles = decoded[l];
+            std::unordered_set<TileCoord> baked;
+            for (const auto &r : index.tiles) if (r.layer == l) baked.insert(r.tile);
+            const TileSampleLookup lookup = [&](TileCoord tile) -> std::span<const float> {
+                const auto it = layerTiles.find(tile);
+                return it == layerTiles.end() ? std::span<const float>() : it->second.Samples();
+            };
+            // Sparse layers need only check pairs that were baked at that spacing.
+            CheckTileContinuity(index.layers[l], lookup, report, [&baked](TileCoord tile) {
+                return baked.contains(tile);
+            });
+        }
 
         CheckIdentity(index, manifest, options.recipe, files, report);
     }

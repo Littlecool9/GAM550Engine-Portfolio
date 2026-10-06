@@ -27,31 +27,6 @@ namespace mir
         using detail::Error;
         using detail::Hex;
 
-        // Tile edges must also agree bit for bit, so every layer has the same owning tile.
-        bool Nests(const TerrainLayout &fine, const TerrainLayout &coarse)
-        {
-            if (!(coarse.SampleSpacing() > fine.SampleSpacing()) ||
-                fine.IntervalsPerTile() % coarse.IntervalsPerTile() != 0)
-                return false;
-            const int32_t k = fine.IntervalsPerTile() / coarse.IntervalsPerTile();
-            if (coarse.SampleSpacing() != fine.SampleSpacing() * k || fine.Bounds() != coarse.Bounds())
-                return false;
-
-            const TileRange tiles = fine.Tiles();
-            if (coarse.Tiles().min != tiles.min || coarse.Tiles().max != tiles.max)
-                return false;
-            const auto edge = [](const TerrainLayout &layout, int32_t tile) {
-                return layout.SamplePosition(layout.TileFirstSample(tile));
-            };
-            for (int32_t t = tiles.min.x; t <= tiles.max.x + 1; ++t)
-                if (edge(fine, t) != edge(coarse, t))
-                    return false;
-            for (int32_t t = tiles.min.z; t <= tiles.max.z + 1; ++t)
-                if (edge(fine, t) != edge(coarse, t))
-                    return false;
-            return true;
-        }
-
         TerrainHeightResult Fail(TerrainHeightResult result, TerrainHeightFailure failure)
         {
             result.status = TerrainHeightStatus::Failed;
@@ -93,7 +68,7 @@ namespace mir
         for (size_t l = 0; l < layers.size(); ++l)
         {
             TerrainHeightLayer &layer = layers[l];
-            if (l > 0 && !Nests(states.back().info.layout, layer.layout))
+            if (l > 0 && !TerrainLayersNest(states.back().info.layout, layer.layout))
                 return std::nullopt;
             if (layer.maxDeviation && !(std::isfinite(*layer.maxDeviation) && *layer.maxDeviation >= 0.0))
                 return std::nullopt;
@@ -112,6 +87,9 @@ namespace mir
             {
                 everyTile = true;
             }
+            for (const auto &[tile, bound] : state.info.tileDeviations)
+                if (!state.Bakes(tile) || !std::isfinite(bound) || bound < 0.0)
+                    return std::nullopt;
             states.push_back(std::move(state));
         }
 
@@ -131,7 +109,15 @@ namespace mir
     TerrainHeightQuery TerrainHeightQuery::Create(const TerrainReleaseHandle &release)
     {
         std::vector<LayerState> layers;
-        layers.push_back(LayerState{TerrainHeightLayer{release.Layout(), std::nullopt, std::nullopt}, {}, {}});
+        for (const auto &layout : release.Layers())
+            layers.push_back({TerrainHeightLayer{layout, std::vector<TileCoord>{}, std::nullopt}, {}, {}});
+        for (const auto &r : release.Index().tiles)
+        {
+            if (r.kind != TerrainPayloadKind::Height) continue;
+            layers[r.layer].info.bakedTiles->push_back(r.tile);
+            layers[r.layer].baked.insert(r.tile);
+            if (r.maxDeviation) layers[r.layer].info.tileDeviations.emplace(r.tile, *r.maxDeviation);
+        }
         return TerrainHeightQuery(release.Info(), std::move(layers));
     }
 
@@ -217,6 +203,8 @@ namespace mir
         const double tolerance = SurfaceTolerance(slot.maxAbsHeight);
         if (*answer == *source)
             result.maxError = tolerance;
+        else if (const auto bound = layer.info.tileDeviations.find(tile); bound != layer.info.tileDeviations.end())
+            result.maxError = bound->second + tolerance;
         else if (layer.info.maxDeviation)
             result.maxError = *layer.info.maxDeviation + tolerance;
         return result;
@@ -337,10 +325,15 @@ namespace mir
     }
 
     TerrainPreloadReport PreloadTerrainTiles(TerrainHeightQuery &query, const TerrainReleaseHandle &release,
-                                             std::span<const TileCoord> tiles)
+                                             std::span<const TileCoord> tiles, std::optional<uint32_t> releaseLayer)
     {
         TerrainPreloadReport report;
         const TerrainReleaseInfo &info = release.Info();
+        if (releaseLayer && *releaseLayer >= release.Layers().size())
+        {
+            report.firstError = Error(Code::InvalidInput, "unknown release layer {}", *releaseLayer);
+            return report;
+        }
         if (info != query.Release())
         {
             report.firstError = Error(Code::WrongIdentity, "release {} cannot fill the query of release {}",
@@ -348,41 +341,80 @@ namespace mir
             return report;
         }
 
-        const double spacing = release.Layout().SampleSpacing();
-        std::optional<uint32_t> layer;
-        for (uint32_t l = 0; l < query.LayerCount(); ++l)
-            if (query.Layer(l).layout.SampleSpacing() == spacing)
-                layer = l;
-        if (!layer)
+        std::unordered_set<TileCoord> visited;
+        for (TileCoord tile : tiles)
         {
-            report.firstError =
-                Error(Code::InvalidInput, "the query has no layer of the release's {} m spacing", spacing);
-            return report;
-        }
-
-        for (const TileCoord tile : tiles)
-        {
-            TerrainResult<TileHeights> read = release.ReadTile({info.asset, tile});
-            TerrainPackError error = read.error;
-            if (read)
-                error = query.Insert(info, *layer, std::make_shared<const TileHeights>(std::move(*read.value)));
-            else // MarkFailed refuses only a tile outside the layer, which has no slot to mark.
-                (void)query.MarkFailed(info, *layer, tile, read.error);
-            if (error.code == Code::None)
-                ++report.loaded;
-            else if (++report.failed == 1)
-                report.firstError = std::move(error);
+            if (!visited.insert(tile).second) continue;
+            if (!release.Index().Find(tile))
+            {
+                if (++report.failed == 1)
+                    report.firstError = Error(Code::NotFound, "tile {} is outside the release", Describe(tile));
+                continue;
+            }
+            const uint32_t first = releaseLayer.value_or(0);
+            const uint32_t end = releaseLayer ? first + 1 : static_cast<uint32_t>(release.Layers().size());
+            for (uint32_t r = first; r < end; ++r)
+            {
+                const auto *record = release.Index().Find(tile, r);
+                if (!record)
+                {
+                    if (releaseLayer && ++report.failed == 1)
+                        report.firstError = Error(Code::NotFound, "tile {} has no Height payload in release layer {}",
+                                                  Describe(tile), r);
+                    continue;
+                }
+                std::optional<uint32_t> layer;
+                for (uint32_t l = 0; l < query.LayerCount(); ++l)
+                    if (query.Layer(l).layout.SampleSpacing() == record->sampleSpacing) layer = l;
+                if (!layer)
+                {
+                    report.firstError = Error(Code::InvalidInput, "the query has no layer of the release's {} m spacing",
+                                              record->sampleSpacing);
+                    return report;
+                }
+                auto read = release.ReadTileRecord(*record);
+                TerrainPackError error = read.error;
+                if (read) error = query.Insert(info, *layer, std::make_shared<const TileHeights>(std::move(*read.value)));
+                else (void)query.MarkFailed(info, *layer, tile, read.error);
+                if (error.code == Code::None) ++report.loaded;
+                else if (++report.failed == 1) report.firstError = std::move(error);
+            }
         }
         return report;
     }
 
-    TerrainPreloadReport PreloadAllTerrainTiles(TerrainHeightQuery &query, const TerrainReleaseHandle &release)
+    TerrainPreloadReport PreloadAllTerrainTiles(TerrainHeightQuery &query, const TerrainReleaseHandle &release,
+                                                std::optional<uint32_t> releaseLayer)
     {
-        std::vector<TileCoord> tiles;
-        const TileRange range = release.Layout().Tiles();
-        for (int32_t z = range.min.z; z <= range.max.z; ++z)
-            for (int32_t x = range.min.x; x <= range.max.x; ++x)
-                tiles.push_back({x, z});
-        return PreloadTerrainTiles(query, release, tiles);
+        TerrainPreloadReport total;
+        if (releaseLayer && *releaseLayer >= release.Layers().size())
+        {
+            total.firstError = Error(Code::InvalidInput, "unknown release layer {}", *releaseLayer);
+            return total;
+        }
+        if (release.Info() != query.Release())
+        {
+            total.firstError = Error(Code::WrongIdentity, "release identity differs from the query");
+            return total;
+        }
+        for (const auto &r : release.Index().tiles)
+        {
+            if ((releaseLayer && r.layer != *releaseLayer) || r.kind != TerrainPayloadKind::Height) continue;
+            std::optional<uint32_t> layer;
+            for (uint32_t l = 0; l < query.LayerCount(); ++l)
+                if (query.Layer(l).layout.SampleSpacing() == r.sampleSpacing) layer = l;
+            if (!layer)
+            {
+                total.firstError = Error(Code::InvalidInput, "query has no {} m layer", r.sampleSpacing);
+                return total;
+            }
+            auto read = release.ReadTileRecord(r);
+            auto error = read.error;
+            if (read) error = query.Insert(release.Info(), *layer, std::make_shared<const TileHeights>(std::move(*read.value)));
+            else (void)query.MarkFailed(release.Info(), *layer, r.tile, read.error);
+            if (error.code == Code::None) ++total.loaded;
+            else if (++total.failed == 1) total.firstError = error;
+        }
+        return total;
     }
 }

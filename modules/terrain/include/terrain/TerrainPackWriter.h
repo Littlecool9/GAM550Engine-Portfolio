@@ -45,14 +45,30 @@ namespace mir
         uint64_t heightsHash = 0;
     };
 
-    // No disk. Needs exactly one tile per layout tile, any order.
+    struct TerrainTileWrite
+    {
+        const TileHeights *heights = nullptr;
+        uint32_t layer = 0;
+        bool source = true;
+        std::optional<double> maxDeviation;
+    };
+
+    TerrainResult<TerrainEncodedRelease> EncodeTerrainRelease(const TerrainReleaseInfo &info,
+                                                              std::span<const TerrainLayout> layers,
+                                                              std::span<const TerrainTileWrite> tiles,
+                                                              const TerrainPackWriteOptions &options = {});
+
+    uint64_t TerrainHeightsHash(std::span<const TerrainLayout> layers,
+                                std::span<const TerrainTileWrite> tiles);
+
+    // Single-layer convenience; exactly one source per map tile.
     TerrainResult<TerrainEncodedRelease> EncodeTerrainRelease(const TerrainReleaseInfo &info,
                                                               const TerrainLayout &layout,
                                                               std::span<const TileHeights> tiles,
                                                               const TerrainPackWriteOptions &options = {});
 
     // Independent of chunk size and alignment.
-    uint64_t TerrainHeightsHash(std::span<const TileHeights> tiles);
+    uint64_t TerrainHeightsHash(const TerrainLayout &layout, std::span<const TileHeights> tiles);
 
     // The nonce makes two bakes of the same source distinct releases. Never zero.
     TerrainReleaseId MintTerrainReleaseId(AssetId asset, TerrainSourceFingerprint source, uint64_t heightsHash,

@@ -93,8 +93,9 @@ namespace mir::terrainbake
         class ContinuityChecker
         {
         public:
-            ContinuityChecker(const TerrainLayout &layout, const TileSampleLookup &lookup, TerrainReport &report)
-                : mLayout(layout), mLookup(lookup), mReport(report), mN(layout.IntervalsPerTile())
+            ContinuityChecker(const TerrainLayout &layout, const TileSampleLookup &lookup, TerrainReport &report,
+                              const std::function<bool(TileCoord)> &baked)
+                : mLayout(layout), mLookup(lookup), mReport(report), mBaked(baked), mN(layout.IntervalsPerTile())
             {
             }
 
@@ -129,6 +130,7 @@ namespace mir::terrainbake
 
             void Edge(TileCoord lo, TileCoord hi, bool acrossX)
             {
+                if (mBaked && (!mBaked(lo) || !mBaked(hi))) return;
                 ++mStats.edges;
                 const std::span<const float> a = Samples(lo);
                 const std::span<const float> b = Samples(hi);
@@ -215,8 +217,9 @@ namespace mir::terrainbake
 
             void Corner(int32_t x, int32_t z)
             {
-                ++mStats.corners;
                 const TileCoord tiles[4] = {{x, z}, {x + 1, z}, {x, z + 1}, {x + 1, z + 1}};
+                if (mBaked && std::any_of(std::begin(tiles), std::end(tiles), [&](TileCoord t) { return !mBaked(t); })) return;
+                ++mStats.corners;
                 std::span<const float> s[4];
                 for (int t = 0; t < 4; ++t)
                 {
@@ -265,15 +268,16 @@ namespace mir::terrainbake
             const TerrainLayout &mLayout;
             const TileSampleLookup &mLookup;
             TerrainReport &mReport;
+            const std::function<bool(TileCoord)> &mBaked;
             int32_t mN;
             ContinuityStats mStats;
         };
     }
 
     ContinuityStats CheckTileContinuity(const TerrainLayout &layout, const TileSampleLookup &lookup,
-                                        TerrainReport &report)
+                                        TerrainReport &report, const std::function<bool(TileCoord)> &baked)
     {
-        const ContinuityStats stats = ContinuityChecker(layout, lookup, report).Run();
+        const ContinuityStats stats = ContinuityChecker(layout, lookup, report, baked).Run();
         auto finish = [&](std::string_view name, uint32_t compared, uint32_t total, const char *what) {
             std::string detail = std::format("{} of {} {} compared", compared, total, what);
             if (name == check::kEdges)

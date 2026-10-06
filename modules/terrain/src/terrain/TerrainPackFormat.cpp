@@ -18,6 +18,8 @@
 #include <cmath>
 #include <limits>
 #include <utility>
+#include <tuple>
+#include <bit>
 
 namespace mir
 {
@@ -70,6 +72,8 @@ namespace mir
             uint32_t tileCount = 0;
             uint32_t tileRecordSize = 0;
             uint64_t heightsHash = 0;
+            uint32_t layerCount = 0;
+            uint32_t layerRecordSize = 0;
         };
 
         TerrainResult<Header> ParseHeader(std::span<const std::byte> bytes)
@@ -125,6 +129,11 @@ namespace mir
             h.tileCount = LoadU32(bytes, 104);
             h.tileRecordSize = LoadU32(bytes, 108);
             h.heightsHash = LoadU64(bytes, 112);
+            h.layerCount = LoadU32(bytes, 120);
+            h.layerRecordSize = LoadU32(bytes, 124);
+            if (h.layerCount == 0 || h.layerRecordSize < kTerrainLayerRecordSize || h.layerRecordSize % 8 != 0)
+                return Fail<Header>(Code::Malformed, "layer count {} or record size {} is invalid",
+                                    h.layerCount, h.layerRecordSize);
 
             if (!IsPowerOfTwo(h.alignment) || h.alignment > kMaxTerrainPayloadAlignment)
                 return Fail<Header>(Code::Malformed, "payload alignment {} is not a power of two up to {}",
@@ -144,7 +153,8 @@ namespace mir
             const uint64_t room = body - h.headerSize;
             const uint64_t packBytes = uint64_t(h.packCount) * h.packRecordSize;
             const uint64_t tileBytes = uint64_t(h.tileCount) * h.tileRecordSize;
-            if (packBytes > room || tileBytes > room - packBytes)
+            const uint64_t layerBytes = uint64_t(h.layerCount) * h.layerRecordSize;
+            if (packBytes > room || tileBytes > room - packBytes || layerBytes > room - packBytes - tileBytes)
                 return Fail<Header>(Code::Malformed, "{} pack and {} tile records do not fit in {} bytes (truncated?)",
                                     h.packCount, h.tileCount, bytes.size());
 
@@ -184,7 +194,18 @@ namespace mir
             r.minHeight = LoadF32(b, at + 48);
             r.maxHeight = LoadF32(b, at + 52);
             r.validExtent = {LoadF64(b, at + 56), LoadF64(b, at + 64), LoadF64(b, at + 72), LoadF64(b, at + 80)};
+            r.layer = LoadU32(b, at + 88);
+            r.kind = static_cast<TerrainPayloadKind>(LoadU32(b, at + 92));
+            r.level = LoadU32(b, at + 96);
+            r.source = LoadU32(b, at + 100) != 0;
+            if (LoadU32(b, at + 104) != 0)
+                r.maxDeviation = LoadF64(b, at + 112);
             return r;
+        }
+
+        auto RecordKey(const TerrainTileRecord &r)
+        {
+            return std::tuple(r.tile.z, r.tile.x, r.kind, r.level, r.layer);
         }
 
         TerrainPackError CheckTileRecord(const Header &h, const TerrainLayout &layout,
@@ -201,10 +222,10 @@ namespace mir
                 return Error(Code::Malformed, "tile {}: stored in {} but belongs to chunk {} at {} tiles per chunk",
                              tile, name, Describe(chunk), h.chunkTiles);
 
-            const int32_t side = h.intervals + 1;
-            if (r.samplesPerSide != side || r.sampleSpacing != h.spacing)
+            const int32_t side = layout.IntervalsPerTile() + 1;
+            if (r.samplesPerSide != side || r.sampleSpacing != layout.SampleSpacing())
                 return Error(Code::Malformed, "tile {}: {} samples per side at spacing {}, the layout has {} at {}",
-                             tile, r.samplesPerSide, r.sampleSpacing, side, h.spacing);
+                             tile, r.samplesPerSide, r.sampleSpacing, side, layout.SampleSpacing());
             const uint64_t length = uint64_t(side) * uint64_t(side) * sizeof(float);
             if (r.length != length)
                 return Error(Code::Malformed, "tile {}: payload length {} should be {}", tile, r.length, length);
@@ -222,6 +243,13 @@ namespace mir
             if (!std::isfinite(r.minHeight) || !std::isfinite(r.maxHeight) || r.minHeight > r.maxHeight)
                 return Error(Code::Malformed, "tile {}: height range [{}, {}] is invalid", tile, r.minHeight,
                              r.maxHeight);
+            if (r.kind != TerrainPayloadKind::Height || r.level != 0)
+                return Error(Code::Unsupported, "tile {}: payload kind {} level {} is not decoded by this reader",
+                             tile, static_cast<uint32_t>(r.kind), r.level);
+            if (r.maxDeviation && (!std::isfinite(*r.maxDeviation) || *r.maxDeviation < 0.0))
+                return Error(Code::Malformed, "tile {}: layer {} deviation is invalid", tile, r.layer);
+            if (!layout.Contains(r.tile))
+                return Error(Code::Malformed, "tile {} is outside the layer {} layout", tile, r.layer);
             const TerrainLocalBounds extent = *layout.ValidExtent(r.tile);
             if (r.validExtent != extent)
                 return Error(Code::Malformed, "tile {}: valid extent {} differs from the layout's {}", tile,
@@ -235,16 +263,29 @@ namespace mir
         uint64_t HeightsHashOf(std::span<const TerrainTileRecord> records)
         {
             std::vector<std::byte> bytes;
-            bytes.reserve(records.size() * 16);
+            bytes.reserve(records.size() * 56);
             LeWriter out(bytes);
             for (const TerrainTileRecord &r : records)
             {
                 out.I32(r.tile.x);
                 out.I32(r.tile.z);
+                out.U32(r.layer);
+                out.U32(static_cast<uint32_t>(r.kind));
+                out.U32(r.level);
+                out.U32(r.source ? 1 : 0);
+                out.F64(r.sampleSpacing);
+                out.I32(r.samplesPerSide);
+                out.U32(r.maxDeviation ? 1 : 0);
+                out.F64(r.maxDeviation.value_or(0.0));
                 out.U64(r.checksum);
             }
             return Fnv1a64(bytes);
         }
+    }
+
+    uint64_t TerrainRecordsHeightsHash(std::span<const TerrainTileRecord> records)
+    {
+        return detail::HeightsHashOf(records);
     }
 
     TerrainChunkCoord TerrainChunkOf(TileCoord tile, int32_t chunkTiles)
@@ -257,14 +298,46 @@ namespace mir
         return std::format("chunk_{}_{}.tpack", chunk.x, chunk.z);
     }
 
+    bool TerrainLayersNest(const TerrainLayout &fine, const TerrainLayout &coarse)
+    {
+        if (coarse.SampleSpacing() <= fine.SampleSpacing() ||
+            fine.IntervalsPerTile() % coarse.IntervalsPerTile() != 0 || fine.Bounds() != coarse.Bounds())
+            return false;
+        const int32_t ratio = fine.IntervalsPerTile() / coarse.IntervalsPerTile();
+        if (coarse.SampleSpacing() != fine.SampleSpacing() * ratio || (fine.Tiles().min != coarse.Tiles().min || fine.Tiles().max != coarse.Tiles().max))
+            return false;
+        const auto equalEdge = [&](int64_t t) {
+            const double a = fine.SamplePosition(t * fine.IntervalsPerTile());
+            const double b = coarse.SamplePosition(t * coarse.IntervalsPerTile());
+            return std::bit_cast<uint64_t>(a) == std::bit_cast<uint64_t>(b);
+        };
+        const TileRange range = fine.Tiles();
+        for (int64_t x = range.min.x; x <= int64_t(range.max.x) + 1; ++x)
+            if (!equalEdge(x)) return false;
+        for (int64_t z = range.min.z; z <= int64_t(range.max.z) + 1; ++z)
+            if (!equalEdge(z)) return false;
+        return true;
+    }
+
     const TerrainTileRecord *TerrainIndex::Find(TileCoord tile) const
     {
-        if (!layout.Contains(tile))
-            return nullptr;
-        const TileRange range = layout.Tiles();
-        const int64_t width = int64_t(range.max.x) - range.min.x + 1;
-        const int64_t at = (int64_t(tile.z) - range.min.z) * width + (int64_t(tile.x) - range.min.x);
-        return &tiles[static_cast<size_t>(at)];
+        auto at = std::lower_bound(tiles.begin(), tiles.end(), tile, [](const TerrainTileRecord &r, TileCoord t) {
+            return detail::LessZX(r.tile.x, r.tile.z, t.x, t.z);
+        });
+        for (; at != tiles.end() && at->tile == tile; ++at)
+            if (at->source) return &*at;
+        return nullptr;
+    }
+
+    const TerrainTileRecord *TerrainIndex::Find(TileCoord tile, uint32_t layer, TerrainPayloadKind kind,
+                                               uint32_t level) const
+    {
+        TerrainTileRecord key;
+        key.tile = tile; key.layer = layer; key.kind = kind; key.level = level;
+        auto at = std::lower_bound(tiles.begin(), tiles.end(), key, [](const auto &a, const auto &b) {
+            return RecordKey(a) < RecordKey(b);
+        });
+        return at != tiles.end() && RecordKey(*at) == RecordKey(key) ? &*at : nullptr;
     }
 
     TerrainResult<TerrainIndex> ParseTerrainIndex(std::span<const std::byte> bytes)
@@ -279,6 +352,24 @@ namespace mir
         if (!layout)
             return Fail<R>(Code::Malformed, "layout (spacing {}, {} intervals per tile, bounds {}) is invalid",
                            h.spacing, h.intervals, DescribeBounds(h.bounds));
+
+        const size_t layerTable = size_t(h.headerSize) + size_t(h.packCount) * h.packRecordSize +
+                                  size_t(h.tileCount) * h.tileRecordSize;
+        std::vector<TerrainLayout> layers;
+        layers.reserve(h.layerCount);
+        for (uint32_t l = 0; l < h.layerCount; ++l)
+        {
+            const size_t at = layerTable + size_t(l) * h.layerRecordSize;
+            auto layer = TerrainLayout::Create(LoadF64(bytes, at), LoadI32(bytes, at + 8), h.bounds);
+            if (!layer || layer->IntervalsPerTile() > kMaxTerrainTileIntervals)
+                return Fail<R>(Code::Malformed, "layer {}: spacing or intervals is invalid", l);
+            if (l == 0 && (layer->SampleSpacing() != h.spacing || layer->IntervalsPerTile() != h.intervals))
+                return Fail<R>(Code::Malformed, "layer 0 differs from the reference grid");
+            if (l > 0 && !TerrainLayersNest(layers.back(), *layer))
+                return Fail<R>(Code::Malformed, "layer {}: spacing {} does not nest or tile edges differ bitwise", l,
+                               layer->SampleSpacing());
+            layers.push_back(*layer);
+        }
 
         std::vector<TerrainPackRecord> packs(h.packCount);
         for (uint32_t p = 0; p < h.packCount; ++p)
@@ -301,11 +392,11 @@ namespace mir
         const TileRange range = layout->Tiles();
         const uint64_t width = uint64_t(int64_t(range.max.x) - range.min.x + 1);
         const uint64_t height = uint64_t(int64_t(range.max.z) - range.min.z + 1);
-        if (width > std::numeric_limits<uint32_t>::max() / height || width * height != h.tileCount)
-            return Fail<R>(Code::Malformed,
-                           "{} tile records, but the layout has {} x {} tiles from {} to {}; a release lists every "
-                           "tile once",
-                           h.tileCount, width, height, Describe(range.min), Describe(range.max));
+        if (width > std::numeric_limits<uint32_t>::max() / height || width * height > h.tileCount)
+            return Fail<R>(Code::Malformed, "{} payload records cannot cover {} x {} map tiles: a source tile is missing",
+                           h.tileCount, width, height);
+        std::vector<uint32_t> sources(static_cast<size_t>(width * height), 0);
+        std::vector<uint32_t> finest(sources.size(), h.layerCount);
 
         const size_t tileTable = size_t(h.headerSize) + size_t(h.packCount) * h.packRecordSize;
         std::vector<TerrainTileRecord> tiles(h.tileCount);
@@ -314,22 +405,38 @@ namespace mir
         {
             TerrainTileRecord &r = tiles[t];
             r = ReadTileRecord(bytes, tileTable + size_t(t) * h.tileRecordSize);
-            const TileCoord expected{static_cast<int32_t>(range.min.x + int64_t(t % width)),
-                                     static_cast<int32_t>(range.min.z + int64_t(t / width))};
-            if (r.tile != expected)
-            {
-                if (t > 0 && r.tile == tiles[t - 1].tile)
-                    return Fail<R>(Code::Malformed, "tile records {} and {} both name tile {}", t - 1, t,
-                                   Describe(r.tile));
-                return Fail<R>(Code::Malformed,
-                               "tile record {} names tile {}, expected {}: records cover the layout once in (z, x) "
-                               "order",
-                               t, Describe(r.tile), Describe(expected));
-            }
-            const TerrainPackError checked = CheckTileRecord(h, *layout, packs, r);
+            if (r.layer >= layers.size())
+                return Fail<R>(Code::Malformed, "tile record {} {}: unknown layer {}", t, Describe(r.tile), r.layer);
+            if (t > 0 && !(RecordKey(tiles[t - 1]) < RecordKey(r)))
+                return Fail<R>(Code::Malformed, "tile records {} and {} duplicate a key or are not in increasing order (both name tile {})",
+                               t - 1, t, Describe(r.tile));
+            const size_t raw = tileTable + size_t(t) * h.tileRecordSize;
+            if (LoadU32(bytes, raw + 100) > 1 || LoadU32(bytes, raw + 104) > 1)
+                return Fail<R>(Code::Malformed, "tile record {}: invalid source/deviation flag", t);
+            const TerrainPackError checked = CheckTileRecord(h, layers[r.layer], packs, r);
             if (checked.code != Code::None)
                 return detail::Failure<R>(checked, "");
+            const size_t mapTile = size_t(int64_t(r.tile.z) - range.min.z) * width +
+                                   size_t(int64_t(r.tile.x) - range.min.x);
+            if (r.source && ++sources[mapTile] > 1)
+                return Fail<R>(Code::Malformed, "tile {} has two source records", Describe(r.tile));
+            finest[mapTile] = std::min(finest[mapTile], r.layer);
             ++tilesPerPack[r.pack];
+        }
+
+        for (size_t t = 0; t < sources.size(); ++t)
+        {
+            const TileCoord tile{static_cast<int32_t>(range.min.x + int64_t(t % width)),
+                                 static_cast<int32_t>(range.min.z + int64_t(t / width))};
+            if (sources[t] != 1)
+                return Fail<R>(Code::Malformed, "tile {} has no source record", Describe(tile));
+        }
+        for (const auto &r : tiles)
+        {
+            const size_t t = size_t(int64_t(r.tile.z) - range.min.z) * width + size_t(int64_t(r.tile.x) - range.min.x);
+            if (r.source && r.layer != finest[t])
+                return Fail<R>(Code::Malformed, "tile {} source layer {} is not its finest baked layer {}",
+                               Describe(r.tile), r.layer, finest[t]);
         }
 
         for (uint32_t p = 0; p < h.packCount; ++p)
@@ -370,6 +477,7 @@ namespace mir
             .payloadAlignment = h.alignment,
             .chunkTiles = h.chunkTiles,
             .layout = *layout,
+            .layers = std::move(layers),
             .heightsHash = heightsHash,
             .packs = std::move(packs),
             .tiles = std::move(tiles),
@@ -382,10 +490,17 @@ namespace mir
     {
         using R = TileHeights;
         const std::string tile = Describe(record.tile);
-        const int32_t intervals = index.layout.IntervalsPerTile();
+        if (record.layer >= index.layers.size())
+            return Fail<R>(Code::Malformed, "tile {}: unknown layer {}", tile, record.layer);
+        const int32_t intervals = index.layers[record.layer].IntervalsPerTile();
         if (record.samplesPerSide != intervals + 1)
             return Fail<R>(Code::Malformed, "tile {}: {} samples per side, the layout has {}", tile,
                            record.samplesPerSide, intervals + 1);
+        if (record.sampleSpacing != index.layers[record.layer].SampleSpacing() ||
+            record.length != uint64_t(intervals + 1) * (intervals + 1) * sizeof(float))
+            return Fail<R>(Code::Malformed, "tile {}: spacing or payload length differs from layer {}", tile, record.layer);
+        if (record.kind != TerrainPayloadKind::Height || record.level != 0)
+            return Fail<R>(Code::Unsupported, "tile {}: payload kind/level is not a height layer", tile);
         if (payload.size() != record.length)
             return Fail<R>(Code::Io, "tile {}: got {} payload bytes, the index says {}", tile, payload.size(),
                            record.length);
@@ -408,8 +523,8 @@ namespace mir
                 TerrainResult<R> bad =
                     Fail<R>(Code::Corrupt, "tile {}: sample ({}, {}) is not finite", tile, s % side, s / side);
                 bad.error.nonFiniteSample =
-                    GlobalSampleIndex{index.layout.TileFirstSample(record.tile.x) + int64_t(s % side),
-                                      index.layout.TileFirstSample(record.tile.z) + int64_t(s / side)};
+                    GlobalSampleIndex{index.layers[record.layer].TileFirstSample(record.tile.x) + int64_t(s % side),
+                                      index.layers[record.layer].TileFirstSample(record.tile.z) + int64_t(s / side)};
                 return bad;
             }
             lo = std::min(lo, h);

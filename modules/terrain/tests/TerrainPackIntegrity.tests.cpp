@@ -65,10 +65,10 @@ TEST_CASE("A malformed or corrupt index is refused before any tile is read", "[t
     }
     SECTION("unsupported major format, sealed or not")
     {
-        CHECK(edited([](auto &b) { StoreU32(b, 4, 2); }).code == Code::Unsupported);
-        const TerrainPackError e = edited([](auto &b) { StoreU32(b, 4, 2); }, false);
+        CHECK(edited([](auto &b) { StoreU32(b, 4, 3); }).code == Code::Unsupported);
+        const TerrainPackError e = edited([](auto &b) { StoreU32(b, 4, 3); }, false);
         CHECK(e.code == Code::Unsupported);
-        CHECK(Mentions(e, "format version 2"));
+        CHECK(Mentions(e, "format version 3"));
     }
     SECTION("unsupported content version")
     {
@@ -90,7 +90,7 @@ TEST_CASE("A malformed or corrupt index is refused before any tile is read", "[t
     {
         const TerrainPackError e = edited([](auto &b) { StoreU32(b, 104, 8); });
         CHECK(e.code == Code::Malformed);
-        CHECK(Mentions(e, "every tile once"));
+        CHECK(Mentions(e, "layer"));
     }
     SECTION("more records than bytes")
     {
@@ -142,10 +142,9 @@ TEST_CASE("A malformed or corrupt index is refused before any tile is read", "[t
     SECTION("records out of order")
     {
         const TerrainPackError e = edited([&](auto &b) {
-            StoreU32(b, rec3, static_cast<uint32_t>(-1));
-            StoreU32(b, rec4, static_cast<uint32_t>(-2));
+            std::swap_ranges(b.begin() + rec3, b.begin() + rec3 + kTerrainTileRecordSize, b.begin() + rec4);
         });
-        CHECK(Mentions(e, "expected (-2, 0)"));
+        CHECK(Mentions(e, "increasing order"));
     }
     SECTION("pack index out of range or in the wrong chunk")
     {

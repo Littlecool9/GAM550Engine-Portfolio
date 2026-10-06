@@ -23,16 +23,26 @@
 
 namespace mir
 {
-    // Byte layout and compatibility rules: docs/modules/terrain.md.
-    inline constexpr TerrainFormatVersion kTerrainFormatVersion{1};
+    // Format 2 only. LE index: 128-byte header, pack table, payload table,
+    // layer table, extension bytes, FNV64 trailer. Header fields through 112
+    // retain their offsets; 120/124 are layer count/record size (16 bytes).
+    // Layer: spacing f64, intervals i32, reserved u32. Payload fields 0..87
+    // retain their offsets; 88 layer, 92 kind, 96 level, 100 source flag,
+    // 104 hasDeviation, 108 reserved, 112 deviation f64 (120 bytes total).
+    // Keys sort by (z, x, kind, level, layer). Every tile has one finest
+    // Height source. Height, LodHeight, Normal and Region keys are reserved;
+    // this reader decodes Height only. Unknown kinds fail, never get skipped.
+    // New content may extend these keys in a minor without changing addressing.
+    inline constexpr TerrainFormatVersion kTerrainFormatVersion{2};
     inline constexpr uint32_t kTerrainFormatMinor = 0;
 
     // Payload: (n + 1)^2 float32 in TileHeights order. A new encoding bumps this, not the format.
     inline constexpr uint32_t kTerrainHeightsContentVersion = 1;
 
-    inline constexpr uint32_t kTerrainIndexHeaderSize = 120;
+    inline constexpr uint32_t kTerrainIndexHeaderSize = 128;
     inline constexpr uint32_t kTerrainPackRecordSize = 32;
-    inline constexpr uint32_t kTerrainTileRecordSize = 88;
+    inline constexpr uint32_t kTerrainTileRecordSize = 120;
+    inline constexpr uint32_t kTerrainLayerRecordSize = 16;
     inline constexpr uint32_t kTerrainPackHeaderSize = 48;
     inline constexpr uint32_t kTerrainIndexTrailerSize = 8;
 
@@ -67,6 +77,16 @@ namespace mir
         uint64_t checksum = 0;
     };
 
+    enum class TerrainPayloadKind : uint32_t
+    {
+        Height = 0,
+        LodHeight = 1,
+        Normal = 2,
+        Region = 3,
+    };
+
+    bool TerrainLayersNest(const TerrainLayout &fine, const TerrainLayout &coarse);
+
     struct TerrainTileRecord
     {
         TileCoord tile;
@@ -80,6 +100,11 @@ namespace mir
         float minHeight = 0.0f;
         float maxHeight = 0.0f;
         TerrainLocalBounds validExtent;
+        uint32_t layer = 0;
+        TerrainPayloadKind kind = TerrainPayloadKind::Height;
+        uint32_t level = 0;
+        bool source = true;
+        std::optional<double> maxDeviation;
     };
 
     enum class TerrainPackErrorCode : uint8_t
@@ -113,7 +138,7 @@ namespace mir
         explicit operator bool() const { return Ok(); }
     };
 
-    // Fully cross-checked; records cover the layout, sorted by (z, x).
+    // Fully checked sparse payloads; layout is the stable finest reference grid.
     struct TerrainIndex
     {
         TerrainReleaseInfo release;
@@ -122,13 +147,20 @@ namespace mir
         uint32_t payloadAlignment = 0;
         int32_t chunkTiles = 0;
         TerrainLayout layout;
-    // Fnv1a64 over every (tileX, tileZ, payload checksum).
+        std::vector<TerrainLayout> layers;
+    // Fnv1a64 of the ordered payload keys, spacing, source flags and checksums.
         uint64_t heightsHash = 0;
         std::vector<TerrainPackRecord> packs;
         std::vector<TerrainTileRecord> tiles;
 
+        // The unique source payload.
         const TerrainTileRecord *Find(TileCoord tile) const;
+        const TerrainTileRecord *Find(TileCoord tile, uint32_t layer,
+                                       TerrainPayloadKind kind = TerrainPayloadKind::Height,
+                                       uint32_t level = 0) const;
     };
+
+    uint64_t TerrainRecordsHeightsHash(std::span<const TerrainTileRecord> records);
 
     // Never returns a partial index.
     TerrainResult<TerrainIndex> ParseTerrainIndex(std::span<const std::byte> bytes);

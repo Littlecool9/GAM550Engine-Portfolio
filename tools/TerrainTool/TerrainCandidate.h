@@ -24,7 +24,7 @@ namespace mir::terrainbake
 {
     // Written last. Publishing copies only the release files; the manifest stays behind.
     inline constexpr std::string_view kCandidateManifestFileName = "candidate.json";
-    inline constexpr uint32_t kCandidateManifestVersion = 1;
+    inline constexpr uint32_t kCandidateManifestVersion = 2;
 
     struct TerrainCandidateManifest
     {
@@ -38,6 +38,8 @@ namespace mir::terrainbake
         uint32_t formatMinor = 0;
         uint32_t contentVersion = 0;
         uint32_t surfaceVersion = 0;
+        uint32_t layerCount = 0;
+        uint32_t payloadCount = 0;
         // Index first, then packs in index order.
         std::vector<TerrainFileSummary> files;
     };

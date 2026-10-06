@@ -14,6 +14,7 @@
 #include <terrain/TerrainSurface.h>
 
 #include <cstdint>
+#include <functional>
 
 namespace mir::terrainbake
 {
@@ -32,5 +33,5 @@ namespace mir::terrainbake
 
     // Fills "edges" and "corners"; tiles the lookup lacks are skipped.
     ContinuityStats CheckTileContinuity(const TerrainLayout &layout, const TileSampleLookup &lookup,
-                                        TerrainReport &report);
+                                        TerrainReport &report, const std::function<bool(TileCoord)> &baked = {});
 }

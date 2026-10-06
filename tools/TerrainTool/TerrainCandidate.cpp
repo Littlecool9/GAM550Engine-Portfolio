@@ -110,6 +110,8 @@ namespace mir::terrainbake
               {"formatMinor", m.formatMinor},
               {"contentVersion", m.contentVersion},
               {"surfaceVersion", m.surfaceVersion},
+              {"layerCount", m.layerCount},
+              {"payloadCount", m.payloadCount},
               {"heightsHash", TerrainIdHex(m.heightsHash)}}},
             {"files", files},
         };
@@ -157,6 +159,8 @@ namespace mir::terrainbake
             m.formatMinor = r.U32(*release, "formatMinor", "release.formatMinor");
             m.contentVersion = r.U32(*release, "contentVersion", "release.contentVersion");
             m.surfaceVersion = r.U32(*release, "surfaceVersion", "release.surfaceVersion");
+            m.layerCount = r.U32(*release, "layerCount", "release.layerCount");
+            m.payloadCount = r.U32(*release, "payloadCount", "release.payloadCount");
             m.heightsHash = r.Hex(*release, "heightsHash", "release.heightsHash");
         }
         if (const Json *files = r.Member(j, "files", "files"))

@@ -263,11 +263,11 @@ namespace mir
         return result;
     }
 
-    TileSampleLookup TerrainResidentRelease::Lookup() const
+    TileSampleLookup TerrainResidentRelease::Lookup(uint32_t layer) const
     {
-        return [this](TileCoord tile) -> std::span<const float>
+        return [this, layer](TileCoord tile) -> std::span<const float>
         {
-            const std::shared_ptr<const TileHeights> heights = mQuery.ResidentTile(0, tile);
+            const std::shared_ptr<const TileHeights> heights = mQuery.ResidentTile(layer, tile);
             return heights ? heights->Samples() : std::span<const float>();
         };
     }

@@ -194,7 +194,7 @@ namespace mir::terrainbake
                                                           const TerrainLayout &layout, std::vector<TileHeights> tiles,
                                                           const TerrainBakeOptions &options, TerrainReport &report)
     {
-        const uint64_t heightsHash = TerrainHeightsHash(tiles);
+        const uint64_t heightsHash = TerrainHeightsHash(layout, tiles);
         const uint64_t nonce = options.nonce ? *options.nonce : MakeTerrainReleaseNonce();
         const TerrainReleaseInfo info{asset, source, kTerrainFormatVersion,
                                       MintTerrainReleaseId(asset, source, heightsHash, nonce)};
@@ -222,6 +222,9 @@ namespace mir::terrainbake
         manifest.formatMinor = kTerrainFormatMinor;
         manifest.contentVersion = kTerrainHeightsContentVersion;
         manifest.surfaceVersion = kTerrainSurfaceVersion;
+        const auto index = ParseTerrainIndex(baked.encoded.index);
+        manifest.layerCount = static_cast<uint32_t>(index.value->layers.size());
+        manifest.payloadCount = static_cast<uint32_t>(index.value->tiles.size());
         manifest.files = DescribeReleaseFiles(baked.encoded);
         return manifest;
     }

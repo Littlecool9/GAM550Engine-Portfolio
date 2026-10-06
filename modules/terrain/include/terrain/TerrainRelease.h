@@ -48,12 +48,16 @@ namespace mir
 
         const TerrainReleaseInfo &Info() const { return mIndex->release; }
         const TerrainIndex &Index() const { return *mIndex; }
+        // Reference grid; source precision comes from Index().Find(tile).
         const TerrainLayout &Layout() const { return mIndex->layout; }
+        std::span<const TerrainLayout> Layers() const { return mIndex->layers; }
         const TerrainByteSource &Source() const { return *mSource; }
         TerrainByteSource &Source() { return *mSource; }
 
     // Reads only the tile's byte range.
         TerrainResult<TileHeights> ReadTile(const TileKey &key) const;
+        TerrainResult<TileHeights> ReadTile(const TileKey &key, uint32_t layer) const;
+        TerrainResult<TileHeights> ReadTileRecord(const TerrainTileRecord &record) const;
 
     // Reads every pack whole and checks it.
         TerrainPackError VerifyAllPacks() const;

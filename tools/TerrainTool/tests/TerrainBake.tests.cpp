@@ -30,7 +30,7 @@ using Json = nlohmann::json;
 namespace
 {
     // Final = source in P1, so this follows the generator's pinned hash.
-    constexpr uint64_t kExampleHeightsHash = 0x47af51a1d3ecb46eull;
+    constexpr uint64_t kExampleHeightsHash = 0x4dcd42e8001dec6eull;
 
     void CheckAllPassed(const TerrainReport &report)
     {
@@ -66,7 +66,7 @@ TEST_CASE("Bake final heights are the generator's source heights, tile by tile",
         CHECK(std::equal(source.begin(), source.end(), tile.Samples().begin(), tile.Samples().end(),
                          [](float a, float b) { return std::bit_cast<uint32_t>(a) == std::bit_cast<uint32_t>(b); }));
     }
-    CHECK(TerrainHeightsHash(*tiles) == kExampleHeightsHash);
+    CHECK(TerrainHeightsHash(recipe.layout, *tiles) == kExampleHeightsHash);
 }
 
 TEST_CASE("A bake mints its release id once from the final heights and a nonce", "[terraintool][bake]")

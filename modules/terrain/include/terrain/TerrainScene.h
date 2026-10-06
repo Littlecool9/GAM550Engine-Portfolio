@@ -92,7 +92,7 @@ namespace mir
         const TerrainHeightQuery &Query() const { return mQuery; }
 
         // Valid while this object lives.
-        TileSampleLookup Lookup() const;
+        TileSampleLookup Lookup(uint32_t layer = 0) const;
 
     private:
         TerrainResidentRelease(TerrainReleaseHandle handle, TerrainHeightQuery query);

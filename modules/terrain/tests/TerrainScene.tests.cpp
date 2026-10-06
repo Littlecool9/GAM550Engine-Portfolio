@@ -386,7 +386,7 @@ TEST_CASE("A missing, corrupt or incompatible release is one clear issue and the
     const AssetId newer = TerrainAsset("terrain/newer.terrain.json");
     const TerrainReleaseInfo newerInfo = Info(newer, 0x2222);
     TerrainEncodedRelease encoded = Encode(newerInfo, ReliefLayout(), BuildTiles(ReliefLayout()));
-    StoreU32(encoded.index, 4, 2);
+    StoreU32(encoded.index, 4, 3);
     ResealIndex(encoded.index);
     WriteRelease(root, newerInfo, encoded);
     PointCurrentAt(root, newer, newerInfo.release);

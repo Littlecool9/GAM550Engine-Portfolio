@@ -216,7 +216,7 @@ TEST_CASE("Damaged release files fail with the tile and file named", "[terrainto
     SECTION("an unsupported major format")
     {
         std::vector<std::byte> index = ReadFile(dir / kTerrainIndexFileName);
-        StoreU32(index, 4, 2);
+        StoreU32(index, 4, 3);
         WriteFile(dir / kTerrainIndexFileName, index);
         const TerrainReport report = Validate(dir);
         CHECK(FailedChecks(report) == Names{"format"});

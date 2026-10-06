@@ -169,13 +169,31 @@ namespace mir
                                      Describe(range.max));
         }
 
+        return ReadTileRecord(*record);
+    }
+
+    TerrainResult<TileHeights> TerrainReleaseHandle::ReadTile(const TileKey &key, uint32_t layer) const
+    {
+        if (key.asset != Info().asset)
+            return Fail<TileHeights>(Code::WrongIdentity, "tile {}: wrong asset", Describe(key.coord));
+        const auto *record = mIndex->Find(key.coord, layer);
+        if (!record)
+            return Fail<TileHeights>(Code::NotFound, "tile {} has no payload in layer {}", Describe(key.coord), layer);
+        return ReadTileRecord(*record);
+    }
+
+    TerrainResult<TileHeights> TerrainReleaseHandle::ReadTileRecord(const TerrainTileRecord &input) const
+    {
+        const auto *record = mIndex->Find(input.tile, input.layer, input.kind, input.level);
+        if (!record || record != &input)
+            return Fail<TileHeights>(Code::InvalidInput, "payload record does not belong to this immutable index");
         const std::string pack = TerrainPackFileName(mIndex->packs[record->pack].chunk);
         const std::string where = std::format("{}/{}: ", mSource->Describe(), pack);
         const std::optional<std::vector<std::byte>> bytes =
             mSource->ReadRange(pack, record->offset, static_cast<size_t>(record->length));
         if (!bytes)
             return Fail<TileHeights>(Code::Io, "{}cannot read tile {} at [{}, {}) (missing or truncated pack)", where,
-                                     Describe(key.coord), record->offset, record->offset + record->length);
+                                     Describe(record->tile), record->offset, record->offset + record->length);
 
         TerrainResult<TileHeights> tile = DecodeTerrainTile(*mIndex, *record, *bytes);
         if (!tile)
