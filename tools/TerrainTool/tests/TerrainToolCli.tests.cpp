@@ -380,7 +380,8 @@ TEST_CASE("Bad command lines exit 2 and still leave a report", "[terraintool][cl
     CHECK(Run(args) == 2);
     const fs::path inside = scratch.path / "inside";
     CHECK(Run(BakeArgs(inside, inside / "report.json")) == 2);
-    CHECK_FALSE(fs::exists(inside / kCandidateManifestFileName));
+    // A refused report path is not written either, so --out is never created.
+    CHECK_FALSE(fs::exists(inside));
     CHECK(Run(BakeArgs(out, report, "not-hex")) == 2);
     std::vector<std::string> twice = BakeArgs(out, report);
     twice.push_back("--out");
@@ -388,4 +389,10 @@ TEST_CASE("Bad command lines exit 2 and still leave a report", "[terraintool][cl
     CHECK(Run(twice) == 2);
     CHECK(Run({"validate", "--report", report.string()}) == 2);
     CHECK_FALSE(fs::exists(out));
+
+    const fs::path good = scratch.path / "good";
+    REQUIRE(Run(BakeArgs(good, report)) == 0);
+    CHECK(Run(ValidateArgs(good, good / "v.json")) == 2);
+    CHECK_FALSE(fs::exists(good / "v.json"));
+    CHECK(Run(ValidateArgs(good, report)) == 0);
 }

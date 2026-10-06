@@ -101,6 +101,12 @@ namespace mir::terrainbake
         return "skipped";
     }
 
+    std::string PathUtf8(const std::filesystem::path &path)
+    {
+        const std::u8string text = path.generic_u8string();
+        return std::string(text.begin(), text.end());
+    }
+
     std::string FormatDiagnostic(const TerrainDiagnostic &d)
     {
         std::string line = std::format("[{}]", d.check);
@@ -129,10 +135,10 @@ namespace mir::terrainbake
         if (r.recipePath.empty())
             j["recipe"] = nullptr;
         else
-            j["recipe"] = {{"path", r.recipePath.generic_string()},
+            j["recipe"] = {{"path", PathUtf8(r.recipePath)},
                            {"fingerprint", r.recipeFingerprint ? Json(TerrainIdHex(r.recipeFingerprint->value))
                                                                : Json(nullptr)}};
-        j["candidate"] = r.candidateDir.generic_string();
+        j["candidate"] = PathUtf8(r.candidateDir);
 
         Json asset = {{"id", nullptr}, {"logicalPath", nullptr}};
         if (r.release)
@@ -204,12 +210,12 @@ namespace mir::terrainbake
             std::filesystem::create_directories(path.parent_path(), ec);
         if (ec)
         {
-            error = std::format("cannot create {} ({})", path.parent_path().generic_string(), ec.message());
+            error = std::format("cannot create {} ({})", PathUtf8(path.parent_path()), ec.message());
             return false;
         }
         if (!WriteText(path, TerrainReportJson(report)))
         {
-            error = "cannot write " + path.generic_string();
+            error = "cannot write " + PathUtf8(path);
             return false;
         }
         return true;

@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -113,14 +114,14 @@ namespace
         if (report.Ok() && written)
         {
             std::printf("TerrainTool: %s ok: %s, release %s, %zu tiles, heights hash %s; report %s\n",
-                        report.command.c_str(), report.candidateDir.generic_string().c_str(),
+                        report.command.c_str(), PathUtf8(report.candidateDir).c_str(),
                         report.release ? mir::TerrainIdHex(report.release->release.value).c_str() : "-",
                         report.tiles.size(), mir::TerrainIdHex(report.heightsHash).c_str(),
-                        reportPath.generic_string().c_str());
+                        PathUtf8(reportPath).c_str());
             return 0;
         }
         std::fprintf(stderr, "TerrainTool: %s failed with %zu diagnostics; report %s\n", report.command.c_str(),
-                     report.diagnostics.size(), reportPath.generic_string().c_str());
+                     report.diagnostics.size(), PathUtf8(reportPath).c_str());
         return kExitFailed;
     }
 
@@ -153,19 +154,28 @@ namespace
         return Finish(RunTerrainValidate({line.Get("--candidate"), line.Get("--recipe")}), line.Get("--report"));
     }
 
-    // Still writes a requested report.
+    // Still writes a requested report, unless it would land in a candidate directory.
     int Usage(int argc, char **argv, const std::string &command, const std::string &message)
     {
         std::fprintf(stderr, "TerrainTool: error: %s\n%s", message.c_str(), kUsage);
+        std::optional<fs::path> reportPath;
+        std::vector<fs::path> candidates;
         for (int i = 2; i + 1 < argc; ++i)
-            if (std::string_view(argv[i]) == "--report")
-            {
-                TerrainReport report(command, {check::kArguments});
-                report.Add({std::string(check::kArguments), "", {}, std::nullopt, message});
-                std::string error;
-                WriteTerrainReport(argv[i + 1], report, error);
-                break;
-            }
+        {
+            const std::string_view arg = argv[i];
+            if (arg == "--report" && !reportPath)
+                reportPath = argv[i + 1];
+            else if ((arg == "--out" || arg == "--candidate") && *argv[i + 1] != '\0')
+                candidates.push_back(argv[i + 1]);
+        }
+        const auto holdsReport = [&](const fs::path &dir) { return IsInside(*reportPath, dir); };
+        if (!reportPath || std::any_of(candidates.begin(), candidates.end(), holdsReport))
+            return kExitUsage;
+
+        TerrainReport report(command, {check::kArguments});
+        report.Add({std::string(check::kArguments), "", {}, std::nullopt, message});
+        std::string error;
+        WriteTerrainReport(*reportPath, report, error);
         return kExitUsage;
     }
 }

@@ -99,6 +99,8 @@ namespace mir
     {
         TerrainPackErrorCode code = TerrainPackErrorCode::None;
         std::string message;
+        // Set only when a payload that matches its checksum holds NaN or infinity: the first such sample.
+        std::optional<GlobalSampleIndex> nonFiniteSample;
     };
 
     template <typename T>

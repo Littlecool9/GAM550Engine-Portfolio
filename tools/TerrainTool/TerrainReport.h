@@ -128,4 +128,8 @@ namespace mir::terrainbake
 
     // Creates the parent directory.
     bool WriteTerrainReport(const std::filesystem::path &path, const TerrainReport &report, std::string &error);
+
+    // Generic form in UTF-8. MSVC's generic_string() gives ANSI code page bytes (which JSON rejects) and throws on
+    // characters the code page lacks.
+    std::string PathUtf8(const std::filesystem::path &path);
 }

@@ -20,6 +20,7 @@
 #include <nlohmann/json.hpp>
 
 #include <fstream>
+#include <iterator>
 
 using namespace mir;
 using namespace mir::terrainbake;
@@ -189,6 +190,32 @@ TEST_CASE("A bake refuses an existing non-empty directory and leaves it as it wa
         CHECK_FALSE(RunTerrainBake(ExampleRequest(second, std::nullopt)).Ok());
         CHECK(Snapshot(second) == before);
     }
+}
+
+TEST_CASE("A bake under a non-ASCII path writes UTF-8 paths and leaves no partial directory", "[terraintool][bake]")
+{
+    ScratchDir scratch("bake_utf8");
+    // CJK and Latin-1 letters: no ANSI code page holds both, and neither is ASCII.
+    const fs::path dir = scratch.path / fs::path(u8"\u5730\u5f62-\u00fc");
+    fs::create_directories(dir);
+    const fs::path recipe = dir / fs::path(u8"relief-\u00e9.terrain.json");
+    fs::copy_file(ExampleRecipePath(), recipe);
+    const fs::path out = dir / fs::path(u8"\u5019\u9009");
+
+    TerrainBakeRequest request = ExampleRequest(out);
+    request.recipePath = recipe;
+    const TerrainReport report = RunTerrainBake(request);
+    CheckAllPassed(report);
+    CHECK(std::distance(fs::directory_iterator(dir), fs::directory_iterator()) == 2);
+
+    const std::optional<std::string> text = ReadText(out / kCandidateManifestFileName);
+    REQUIRE(text);
+    const ManifestParseResult manifest = ParseCandidateManifest(*text);
+    REQUIRE(manifest.manifest);
+    CHECK(manifest.manifest->recipePath == PathUtf8(recipe));
+    const Json json = Json::parse(TerrainReportJson(report));
+    CHECK(json.at("candidate").get<std::string>() == PathUtf8(out));
+    CHECK(json.at("recipe").at("path").get<std::string>() == PathUtf8(recipe));
 }
 
 TEST_CASE("An invalid recipe or asset path fails before anything is written", "[terraintool][bake]")

@@ -177,9 +177,11 @@ TEST_CASE("Damaged release files fail with the tile and file named", "[terrainto
         REQUIRE(coverage.size() == 1);
         CHECK(coverage[0].field == "chunk_0_0.tpack");
         CHECK(SameTiles(coverage[0].tiles, {{0, 0}}));
-        // Seams into the missing tile cannot be compared, so they are not passing.
+        // Seams into the missing tile cannot be compared, nor its samples read, so they are not passing.
         CHECK(report.Status(check::kEdges) == CheckStatus::Skipped);
         CHECK(report.Status(check::kCorners) == CheckStatus::Skipped);
+        CHECK(report.Status(check::kPayloads) == CheckStatus::Skipped);
+        CHECK(report.Status(check::kFinite) == CheckStatus::Skipped);
         CHECK(report.tiles.size() == 4);
     }
     SECTION("a corrupt payload byte")
@@ -195,6 +197,8 @@ TEST_CASE("Damaged release files fail with the tile and file named", "[terrainto
         CHECK(payloads[0].field == "payload");
         CHECK(SameTiles(payloads[0].tiles, {{-1, 0}}));
         CHECK(payloads[0].message.find("checksum") != std::string::npos);
+        // The corrupt tile's heights were never decoded.
+        CHECK(report.Status(check::kFinite) == CheckStatus::Skipped);
     }
     SECTION("a resealed non-finite height")
     {

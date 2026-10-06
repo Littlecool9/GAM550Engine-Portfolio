@@ -15,7 +15,6 @@
 
 #include <nlohmann/json.hpp>
 
-#include <charconv>
 #include <format>
 #include <limits>
 #include <span>
@@ -68,17 +67,14 @@ namespace mir::terrainbake
 
             uint64_t Hex(const Json &object, std::string_view key, const std::string &path)
             {
-                const std::string text = String(object, key, path);
-                uint64_t value = 0;
-                const bool lower = text.find_first_not_of("0123456789abcdef") == std::string::npos;
-                const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value, 16);
-                if (text.size() != 16 || !lower || ec != std::errc() || end != text.data() + text.size())
+                const std::optional<uint64_t> value = ParseTerrainIdHex(String(object, key, path));
+                if (!value)
                 {
                     if (object.is_object() && object.contains(key) && object.at(key).is_string())
                         mIssues.push_back({path, "expected 16 lowercase hex digits"});
                     return 0;
                 }
-                return value;
+                return *value;
             }
 
         private:
@@ -188,7 +184,7 @@ namespace mir::terrainbake
         auto write = [&](const std::string &name, std::span<const std::byte> bytes) {
             if (WriteBytes(dir / name, bytes))
                 return true;
-            error = "cannot write " + (dir / name).generic_string();
+            error = "cannot write " + PathUtf8(dir / name);
             return false;
         };
         if (!write(std::string(kTerrainIndexFileName), encoded.index))
@@ -198,7 +194,7 @@ namespace mir::terrainbake
                 return false;
         if (!WriteText(dir / kCandidateManifestFileName, EncodeCandidateManifest(manifest)))
         {
-            error = "cannot write " + (dir / kCandidateManifestFileName).generic_string();
+            error = "cannot write " + PathUtf8(dir / kCandidateManifestFileName);
             return false;
         }
         return true;

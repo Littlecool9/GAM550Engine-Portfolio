@@ -17,8 +17,6 @@
 #include <terrain/TerrainRelease.h>
 
 #include <algorithm>
-#include <bit>
-#include <cmath>
 #include <format>
 #include <initializer_list>
 #include <memory>
@@ -37,43 +35,6 @@ namespace mir::terrainbake
         std::string Tile(TileCoord t)
         {
             return std::format("({}, {})", t.x, t.z);
-        }
-
-        struct NonFinite
-        {
-            GlobalSampleIndex first;
-            float value = 0.0f;
-            size_t count = 0;
-        };
-
-        // Bytes that match their checksum but hold NaN or infinity.
-        std::optional<NonFinite> FindNonFinite(const TerrainReleaseHandle &handle, const TerrainTileRecord &record,
-                                               const std::string &pack)
-        {
-            const std::optional<std::vector<std::byte>> bytes =
-                handle.Source().ReadRange(pack, record.offset, static_cast<size_t>(record.length));
-            const size_t side = static_cast<size_t>(record.samplesPerSide);
-            if (!bytes || Fnv1a64(*bytes) != record.checksum || bytes->size() != side * side * sizeof(float))
-                return std::nullopt;
-
-            const TerrainLayout &layout = handle.Layout();
-            std::optional<NonFinite> found;
-            for (size_t s = 0; s < side * side; ++s)
-            {
-                uint32_t bits = 0;
-                for (size_t b = 0; b < 4; ++b)
-                    bits |= uint32_t(std::to_integer<uint8_t>((*bytes)[s * 4 + b])) << (8 * b);
-                const float h = std::bit_cast<float>(bits);
-                if (std::isfinite(h))
-                    continue;
-                if (!found)
-                    found = NonFinite{{layout.TileFirstSample(record.tile.x) + int64_t(s % side),
-                                       layout.TileFirstSample(record.tile.z) + int64_t(s / side)},
-                                      h,
-                                      0};
-                ++found->count;
-            }
-            return found;
         }
 
         void SkipAll(TerrainReport &report, std::initializer_list<std::string_view> checks, const std::string &why)
@@ -186,7 +147,7 @@ namespace mir::terrainbake
         if (!fs::is_directory(dir, ec))
         {
             report.Add({std::string(kCandidate), "", {}, std::nullopt,
-                        std::format("{} is not a directory", dir.generic_string())});
+                        std::format("{} is not a directory", PathUtf8(dir))});
             SkipAll(report,
                     {check::kFormat, check::kIndex, check::kPacks, check::kCoverage, check::kPayloads,
                      check::kFinite, check::kEdges, check::kCorners, check::kIdentity},
@@ -268,7 +229,7 @@ namespace mir::terrainbake
         known.insert(std::string(kCandidateManifestFileName));
         for (const fs::directory_entry &entry : fs::directory_iterator(dir, ec))
         {
-            const std::string name = entry.path().filename().string();
+            const std::string name = PathUtf8(entry.path().filename());
             if (!known.contains(name))
                 report.Add({std::string(kCandidate), name, {}, std::nullopt,
                             std::format("{} is not part of the release (stray, or left from another bake)", name)});
@@ -298,12 +259,12 @@ namespace mir::terrainbake
                 summary.readable = true;
                 decoded.emplace(record.tile, std::move(*read.value));
             }
-            else if (const std::optional<NonFinite> bad = FindNonFinite(handle, record, pack))
+            else if (const std::optional<GlobalSampleIndex> bad = read.error.nonFiniteSample)
             {
                 ++nonFinite;
-                report.Add({std::string(check::kFinite), "samples", {record.tile}, bad->first,
-                            std::format("tile {} stores {} non-finite heights; first {} at sample ({}, {})",
-                                        Tile(record.tile), bad->count, bad->value, bad->first.x, bad->first.z)});
+                report.Add({std::string(check::kFinite), "samples", {record.tile}, bad,
+                            std::format("tile {} holds a non-finite height at sample ({}, {})", Tile(record.tile),
+                                        bad->x, bad->z)});
             }
             else
                 report.Add({std::string(check::kPayloads), "payload", {record.tile}, std::nullopt, read.error.message});
@@ -312,8 +273,19 @@ namespace mir::terrainbake
         const size_t total = index.tiles.size();
         report.Ran(check::kCoverage, std::format("{} of {} layout tiles present, each listed once by the index",
                                                  total - missing, total));
-        report.Ran(check::kPayloads, std::format("{} of {} tiles read back and decode", decoded.size(), total));
-        report.Ran(check::kFinite, std::format("{} tiles hold non-finite heights", nonFinite));
+        // A tile these checks never saw keeps them from passing.
+        const std::string payloads = std::format("{} of {} tiles read back and decode", decoded.size(), total);
+        if (missing > 0)
+            report.Skip(check::kPayloads, payloads + "; missing tiles were not checked");
+        else
+            report.Ran(check::kPayloads, payloads);
+        const size_t checkedFinite = decoded.size() + nonFinite;
+        const std::string finite =
+            std::format("{} of {} tiles checked, {} hold non-finite heights", checkedFinite, total, nonFinite);
+        if (checkedFinite < total)
+            report.Skip(check::kFinite, finite);
+        else
+            report.Ran(check::kFinite, finite);
 
         const TileSampleLookup lookup = [&](TileCoord tile) -> std::span<const float> {
             const auto it = decoded.find(tile);
@@ -336,7 +308,7 @@ namespace mir::terrainbake
             report.Add({std::string(check::kArguments), "--candidate", {}, std::nullopt, "no candidate directory"});
             return report;
         }
-        report.Ran(check::kArguments, "candidate " + request.candidateDir.generic_string());
+        report.Ran(check::kArguments, "candidate " + PathUtf8(request.candidateDir));
 
         std::optional<TerrainRecipe> recipe;
         if (request.recipePath.empty())

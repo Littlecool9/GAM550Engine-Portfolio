@@ -49,6 +49,19 @@ namespace mir::terrainbake
             report.Add({std::string(check), std::move(field), {}, std::nullopt, std::move(message)});
         }
 
+        // Removes the staging directory on every return and exception unless cleared after the rename.
+        struct StagingCleanup
+        {
+            fs::path dir;
+
+            ~StagingCleanup()
+            {
+                std::error_code ignored;
+                if (!dir.empty())
+                    fs::remove_all(dir, ignored);
+            }
+        };
+
         bool CheckArguments(const TerrainBakeRequest &request, const fs::path &out, std::string &assetPath,
                             TerrainReport &report)
         {
@@ -72,12 +85,12 @@ namespace mir::terrainbake
             else if (fs::exists(out, ec))
             {
                 if (!fs::is_directory(out, ec))
-                    Fail(report, kArguments, "--out", std::format("{} exists and is not a directory", out.generic_string()));
+                    Fail(report, kArguments, "--out", std::format("{} exists and is not a directory", PathUtf8(out)));
                 else if (!fs::is_empty(out, ec))
                     Fail(report, kArguments, "--out",
                          std::format("{} exists and is not empty; a bake never writes into or replaces an existing "
                                      "directory (remove the old candidate or choose another --out)",
-                                     out.generic_string()));
+                                     PathUtf8(out)));
             }
             if (report.Status(kArguments) == CheckStatus::Failed)
                 return false;
@@ -198,34 +211,33 @@ namespace mir::terrainbake
         report.layout = baked->layout;
 
         // Written beside the target so the rename stays on one volume.
-        const fs::path staging =
-            out.parent_path() / (out.filename().string() + "." + TerrainIdHex(baked->info.release.value) + ".partial");
+        fs::path staging = out;
+        staging += "." + TerrainIdHex(baked->info.release.value) + ".partial";
         std::error_code ec;
         if (fs::exists(staging, ec))
         {
             Fail(report, check::kWrite, "--out",
-                 std::format("{} already exists (left by an interrupted bake?); remove it", staging.generic_string()));
+                 std::format("{} already exists (left by an interrupted bake?); remove it", PathUtf8(staging)));
             return report;
         }
         fs::create_directories(staging, ec);
+        StagingCleanup cleanup{staging};
         std::string error;
         const TerrainCandidateManifest manifest =
-            MakeCandidateManifest(*baked, assetPath, request.recipePath.generic_string());
+            MakeCandidateManifest(*baked, assetPath, PathUtf8(request.recipePath));
         if (ec || !WriteCandidateFiles(staging, baked->encoded, manifest, error))
         {
             Fail(report, check::kWrite, "--out",
-                 ec ? std::format("cannot create {} ({})", staging.generic_string(), ec.message()) : error);
-            fs::remove_all(staging, ec);
+                 ec ? std::format("cannot create {} ({})", PathUtf8(staging), ec.message()) : error);
             return report;
         }
 
         ValidateTerrainCandidate(staging, {&recipe, true}, report);
         if (!report.Ok())
         {
-            fs::remove_all(staging, ec);
             report.Skip(check::kWrite, std::format("the written files failed validation; {} was removed and {} "
                                                    "not created",
-                                                   staging.generic_string(), out.generic_string()));
+                                                   PathUtf8(staging), PathUtf8(out)));
             return report;
         }
 
@@ -236,17 +248,16 @@ namespace mir::terrainbake
         if (ec)
         {
             Fail(report, check::kWrite, "--out",
-                 std::format("cannot rename {} to {} ({})", staging.generic_string(), out.generic_string(),
+                 std::format("cannot rename {} to {} ({})", PathUtf8(staging), PathUtf8(out),
                              ec.message()));
-            std::error_code ignored;
-            fs::remove_all(staging, ignored);
             return report;
         }
+        cleanup.dir.clear();
         uint64_t bytes = 0;
         for (const TerrainFileSummary &file : manifest.files)
             bytes += file.bytes;
         report.Ran(check::kWrite, std::format("{} release files ({} bytes) and {} in {}", manifest.files.size(), bytes,
-                                              kCandidateManifestFileName, out.generic_string()));
+                                              kCandidateManifestFileName, PathUtf8(out)));
         return report;
     }
 }
