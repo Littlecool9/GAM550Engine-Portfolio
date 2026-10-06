@@ -7,6 +7,7 @@
  *
  */
 #include "TerrainRecipe.h"
+#include "TerrainSeams.h"
 
 #include "TerrainNoise.h"
 #include "TerrainReport.h"
@@ -673,6 +674,9 @@ namespace mir::terrainbake
 
         if (recipe.recipeVersion != 1)
         {
+            fields["finalSeams.version"] = std::to_string(kTerrainSeamVersion);
+            fields["finalSeams.bandMultiplier"] = Bits(kTerrainSeamBandMultiplier);
+            fields["finalSeams.weight"] = "smoothstep";
             fields["precision.defaultSpacing"] = recipe.defaultSpacing ? Bits(*recipe.defaultSpacing) : "none";
             for (const auto &rule : recipe.sourceRules)
                 fields["precision.tile." + std::to_string(rule.tile.z) + "." + std::to_string(rule.tile.x)] = Bits(rule.spacing);

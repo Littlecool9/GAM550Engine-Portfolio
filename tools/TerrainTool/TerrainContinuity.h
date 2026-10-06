@@ -29,7 +29,21 @@ namespace mir::terrainbake
         uint32_t cornersCompared = 0;
         uint64_t probes = 0;
         double maxSurfaceDifference = 0.0;
+        double maxTolerance = 0.0;
+        uint64_t breakpoints = 0;
     };
+
+    struct TerrainContinuityTile
+    {
+        const TerrainLayout *layout = nullptr;
+        std::span<const float> samples;
+    };
+    using TerrainContinuityLookup = std::function<TerrainContinuityTile(TileCoord)>;
+
+    // Float32 interpolation allowance plus a double coordinate/evaluation roundoff bound.
+    double TerrainSeamTolerance(double supportMagnitude, double coordinateMagnitude, double minSpacing);
+    ContinuityStats CheckMixedTileContinuity(const TerrainLayout &reference, const TerrainContinuityLookup &lookup,
+                                            TerrainReport &report);
 
     // Fills "edges" and "corners"; tiles the lookup lacks are skipped.
     ContinuityStats CheckTileContinuity(const TerrainLayout &layout, const TileSampleLookup &lookup,

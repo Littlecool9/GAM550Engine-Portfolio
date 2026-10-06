@@ -9,6 +9,7 @@
 #include "TerrainValidate.h"
 
 #include "TerrainCandidate.h"
+#include "TerrainSeams.h"
 
 #include <assets/AssetId.h>
 #include <core/fs/FileIO.h>
@@ -190,6 +191,8 @@ namespace mir::terrainbake
         {
             report.assetPath = manifest->assetPath;
             report.nonce = manifest->nonce;
+            report.seams = manifest->seams;
+            ReportSeamWarnings(report);
         }
 
         auto source = std::make_shared<TerrainFileSource>(dir);
@@ -329,8 +332,67 @@ namespace mir::terrainbake
                         mixed = true;
         if (mixed)
         {
-            report.Skip(check::kEdges, "same-layer pairs checked; mixed source continuity awaits #120 final seam adjustment");
-            report.Skip(check::kCorners, "same-layer corners checked; mixed source continuity awaits #120 final seam adjustment");
+            const TerrainContinuityLookup sources = [&](TileCoord tile) {
+                const auto *record = index.Find(tile);
+                if (!record) return TerrainContinuityTile{};
+                const auto it = decoded[record->layer].find(tile);
+                return TerrainContinuityTile{&index.layers[record->layer],
+                    it == decoded[record->layer].end() ? std::span<const float>() : it->second.Samples()};
+            };
+            CheckMixedTileContinuity(layout, sources, report);
+        }
+        const bool requiresSeams = (options.recipe && options.recipe->recipeVersion == 2) || mixed ||
+            std::any_of(index.tiles.begin(), index.tiles.end(), [&](const auto &r) {
+                return r.source && r.sampleSpacing != layout.SampleSpacing();
+            });
+        if (manifest && requiresSeams && !manifest->seams)
+            report.Add({std::string(check::kIdentity), "seams", {}, std::nullopt, "v2 source candidate is missing its seam summary"});
+        if (manifest && manifest->seams)
+        {
+            const auto &s = *manifest->seams;
+            if (s.algorithmVersion != kTerrainSeamVersion || s.bandMultiplier != kTerrainSeamBandMultiplier || s.weight != "smoothstep" || s.warningThreshold != kTerrainSeamWarningThreshold)
+                report.Add({std::string(check::kIdentity), "seams", {}, std::nullopt, "candidate seam algorithm differs from this tool"});
+            if (s.adjustments.size() != static_cast<size_t>(std::count_if(index.tiles.begin(), index.tiles.end(), [](const auto &r) { return r.source; })))
+                report.Add({std::string(check::kIdentity), "seams.adjustments", {}, std::nullopt, "seam summary does not cover each source tile"});
+            for (const auto &a : s.adjustments)
+            {
+                const auto *record = index.Find(a.tile);
+                auto fail = [&](const char *message) {
+                    report.Add({std::string(check::kIdentity), "seams.adjustments", {a.tile}, std::nullopt, message});
+                };
+                if (!record) { fail("adjustment names a tile outside the source index"); continue; }
+                for (TileCoord t : a.relatedTiles)
+                    if (!index.Find(t) || t == a.tile || std::abs(int64_t(t.x) - a.tile.x) > 1 || std::abs(int64_t(t.z) - a.tile.z) > 1)
+                        fail("related tile is not an incident source neighbour");
+                if (a.maxAdjustment == 0.0)
+                {
+                    if (!a.border.empty() || a.bandWidth != 0.0 || !a.relatedTiles.empty()) fail("zero adjustment must have no border or band");
+                    continue;
+                }
+                const TerrainLayout &sourceLayout = index.layers[record->layer];
+                const int64_t firstX = sourceLayout.TileFirstSample(a.tile.x), firstZ = sourceLayout.TileFirstSample(a.tile.z);
+                const int64_t n = sourceLayout.IntervalsPerTile();
+                auto onGrid = [&](double coordinate, int64_t first) {
+                    if (coordinate < sourceLayout.SamplePosition(first) || coordinate > sourceLayout.SamplePosition(first + n)) return false;
+                    const int64_t local = std::llround((coordinate - sourceLayout.SamplePosition(first)) / sourceLayout.SampleSpacing());
+                    return local >= 0 && local <= n && coordinate == sourceLayout.SamplePosition(first + local);
+                };
+                if (!onGrid(a.x, firstX) || !onGrid(a.z, firstZ)) fail("adjustment position is not a source sample of its tile");
+                TileCoord neighbour = a.tile;
+                if (a.border == "left") --neighbour.x;
+                else if (a.border == "right") ++neighbour.x;
+                else if (a.border == "bottom") --neighbour.z;
+                else if (a.border == "top") ++neighbour.z;
+                else { fail("positive adjustment has no valid contributing border"); continue; }
+                const auto *other = index.Find(neighbour);
+                const double edgeSpacing = std::max(record->sampleSpacing, other ? other->sampleSpacing : record->sampleSpacing);
+                const double expectedWidth = std::min(layout.TileSize() * 0.5, kTerrainSeamBandMultiplier * edgeSpacing);
+                if (a.bandWidth != expectedWidth) fail("adjustment band width differs from its official edge band");
+                const double distance = a.border == "left" ? a.x - sourceLayout.SamplePosition(firstX) :
+                    a.border == "right" ? sourceLayout.SamplePosition(firstX + n) - a.x :
+                    a.border == "bottom" ? a.z - sourceLayout.SamplePosition(firstZ) : sourceLayout.SamplePosition(firstZ + n) - a.z;
+                if (distance < 0.0 || distance >= expectedWidth) fail("positive adjustment position lies outside its active contributing band");
+            }
         }
         CheckIdentity(index, manifest, options.recipe, files, report);
     }

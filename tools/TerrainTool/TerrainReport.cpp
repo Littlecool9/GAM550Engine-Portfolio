@@ -73,6 +73,13 @@ namespace mir::terrainbake
         diagnostics.push_back(std::move(diagnostic));
     }
 
+    void TerrainReport::Warn(TerrainDiagnostic warning)
+    {
+        if (std::none_of(warnings.begin(), warnings.end(), [&](const auto &w) {
+            return w.check == warning.check && w.field == warning.field && w.tiles == warning.tiles && w.message == warning.message;
+        })) warnings.push_back(std::move(warning));
+    }
+
     CheckStatus TerrainReport::Status(std::string_view name) const
     {
         for (const TerrainCheck &c : checks)
@@ -189,6 +196,28 @@ namespace mir::terrainbake
             j["sourceEstimates"].push_back({{"spacing", estimate.spacing}, {"tileCount", estimate.tileCount},
                 {"samplesPerTile", estimate.samplesPerTile}, {"heightBytes", estimate.heightBytes}});
         j["filter"] = {{"referenceSamples", r.referenceSamples}, {"peakDoubleBytes", r.peakDoubleSamples * sizeof(double)}};
+
+        j["warnings"] = Json::array();
+        for (const auto &w : r.warnings)
+        {
+            Json tiles = Json::array();
+            for (const auto &t : w.tiles) tiles.push_back(TileJson(t));
+            j["warnings"].push_back({{"check", w.check}, {"border", w.field}, {"tiles", tiles}, {"message", w.message}});
+        }
+        j["seams"] = nullptr;
+        if (r.seams)
+        {
+            const auto &s = *r.seams;
+            j["seams"] = {{"algorithmVersion", s.algorithmVersion}, {"weight", s.weight}, {"bandMultiplier", s.bandMultiplier},
+                {"warningThreshold", s.warningThreshold}, {"maxAdjustment", s.maxAdjustment}, {"adjustments", Json::array()}};
+            for (const auto &a : s.adjustments)
+            {
+                Json related = Json::array();
+                for (const auto &t : a.relatedTiles) related.push_back(TileJson(t));
+                j["seams"]["adjustments"].push_back({{"tile", TileJson(a.tile)}, {"border", a.border},
+                    {"maxAdjustment", a.maxAdjustment}, {"position", {a.x, a.z}}, {"bandWidth", a.bandWidth}, {"relatedTiles", related}});
+            }
+        }
 
         j["files"] = Json::array();
         for (const TerrainFileSummary &f : r.files)

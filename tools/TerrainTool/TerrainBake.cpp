@@ -9,6 +9,7 @@
 #include "TerrainBake.h"
 
 #include "TerrainGenerator.h"
+#include "TerrainSeams.h"
 #include "TerrainValidate.h"
 
 #include <assets/AssetPath.h>
@@ -200,7 +201,8 @@ namespace mir::terrainbake
                    std::format("{} source tiles from \"{}\" v{}; fixed reference {} m, tile {} m; {}",
                                tiles.size(), recipe.generatorId, recipe.generatorVersion,
                                layout.SampleSpacing(), layout.TileSize(), recipe.recipeVersion == 1 ?
-                               "uniform P1 heights unchanged" : "filtered source grids; final seam adjustment is #120"));
+                               "uniform P1 heights unchanged" : "filtered source grids"));
+        if (!AdjustTerrainSeams(recipe, tiles, report)) return std::nullopt;
         return tiles;
     }
 
@@ -221,7 +223,7 @@ namespace mir::terrainbake
         report.Ran(check::kEncode, std::format("release {}: index and {} packs, heights hash {}",
                                                TerrainIdHex(info.release.value), encoded.value->packs.size(),
                                                TerrainIdHex(encoded.value->heightsHash)));
-        return TerrainBakedRelease{info, layout, nonce, std::move(tiles), std::move(*encoded.value)};
+        return TerrainBakedRelease{info, layout, nonce, std::move(tiles), std::move(*encoded.value), report.seams};
     }
 
     std::optional<TerrainBakedRelease> EncodeBakedRelease(AssetId asset, TerrainSourceFingerprint source,
@@ -230,6 +232,17 @@ namespace mir::terrainbake
     {
         if (recipe.recipeVersion == 1)
             return EncodeBakedRelease(asset, source, recipe.layout, std::move(tiles), options, report);
+        if (!report.seams)
+        {
+            Fail(report, check::kEncode, "seams", "v2 final heights require a seam summary");
+            return std::nullopt;
+        }
+        if (report.seams->algorithmVersion != kTerrainSeamVersion ||
+            report.seams->bandMultiplier != kTerrainSeamBandMultiplier || report.seams->weight != "smoothstep" || report.seams->warningThreshold != kTerrainSeamWarningThreshold)
+        {
+            Fail(report, check::kEncode, "seams", "prototype seam options cannot be encoded as a production candidate");
+            return std::nullopt;
+        }
         const auto layers = recipe.SourceLayers();
         std::vector<TerrainTileWrite> records;
         for (const auto &tile : tiles)
@@ -257,7 +270,7 @@ namespace mir::terrainbake
         }
         report.Ran(check::kEncode, std::format("release {}: {} source tiles, {} sparse layers, {} packs",
             TerrainIdHex(info.release.value), tiles.size(), layers.size(), encoded.value->packs.size()));
-        return TerrainBakedRelease{info, recipe.layout, nonce, std::move(tiles), std::move(*encoded.value)};
+        return TerrainBakedRelease{info, recipe.layout, nonce, std::move(tiles), std::move(*encoded.value), report.seams};
     }
 
     TerrainCandidateManifest MakeCandidateManifest(const TerrainBakedRelease &baked, std::string assetPath,
@@ -276,6 +289,7 @@ namespace mir::terrainbake
         manifest.layerCount = static_cast<uint32_t>(index.value->layers.size());
         manifest.payloadCount = static_cast<uint32_t>(index.value->tiles.size());
         manifest.files = DescribeReleaseFiles(baked.encoded);
+        manifest.seams = baked.seams;
         return manifest;
     }
 

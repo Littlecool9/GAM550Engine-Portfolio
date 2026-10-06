@@ -43,9 +43,10 @@ namespace mir::terrainbake
         // Every map tile in (z, x) order, each at its source spacing.
         std::vector<TileHeights> tiles;
         TerrainEncodedRelease encoded;
+        std::optional<TerrainSeamSummary> seams;
     };
 
-    // Source samples at the assigned precision; #120 adjusts final seams.
+    // Assigned source grids adjusted into the authoritative final surface.
     std::optional<std::vector<TileHeights>> BakeFinalHeights(const TerrainRecipe &recipe, TerrainReport &report);
 
     // Fills the "encode" check.

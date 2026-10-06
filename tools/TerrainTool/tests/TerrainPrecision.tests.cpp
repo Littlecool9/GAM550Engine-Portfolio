@@ -364,7 +364,7 @@ TEST_CASE("Source sample estimates follow tile size and do not bake global refer
     CHECK(samples.size() == 1089);
 }
 
-TEST_CASE("Mixed candidate validation reports source assignment and pending final seams", "[terraintool][precision]")
+TEST_CASE("Mixed candidate validation reports source assignment and continuous final seams", "[terraintool][precision]")
 {
     ScratchDir scratch("mixed_candidate");
     const auto recipePath = scratch.path / "relief-2x2.terrain.json";
@@ -375,8 +375,8 @@ TEST_CASE("Mixed candidate validation reports source assignment and pending fina
     for (const auto &d : report.diagnostics)
         UNSCOPED_INFO(FormatDiagnostic(d));
     REQUIRE(report.Ok());
-    CHECK(report.Status(check::kEdges) == CheckStatus::Skipped);
-    CHECK(report.Status(check::kCorners) == CheckStatus::Skipped);
+    CHECK(report.Status(check::kEdges) == CheckStatus::Passed);
+    CHECK(report.Status(check::kCorners) == CheckStatus::Passed);
     REQUIRE(report.tiles.size() == 4);
     for (const auto &summary : report.tiles)
     {

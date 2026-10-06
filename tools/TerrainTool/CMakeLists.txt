@@ -5,12 +5,14 @@ add_library(terrain_bake STATIC
     TerrainBake.cpp
     TerrainCandidate.cpp
     TerrainContinuity.cpp
+    TerrainMixedContinuity.cpp
     TerrainGenerator.cpp
     TerrainNoise.cpp
     TerrainPackage.cpp
     TerrainPublish.cpp
     TerrainRecipe.cpp
     TerrainReport.cpp
+    TerrainSeams.cpp
     TerrainSync.cpp
     TerrainValidate.cpp
 )
@@ -31,6 +33,7 @@ if(BUILD_TESTING)
         tests/TerrainPrecision.tests.cpp
         tests/TerrainPublish.tests.cpp
         tests/TerrainRecipe.tests.cpp
+        tests/TerrainSeams.tests.cpp
         tests/TerrainSync.tests.cpp
         tests/TerrainToolCli.tests.cpp
         tests/TerrainValidate.tests.cpp
@@ -46,4 +49,10 @@ option(MJOLNIR_TERRAIN_INDEX_BENCHMARK "Build the metadata-only format 2 index b
 if(MJOLNIR_TERRAIN_INDEX_BENCHMARK)
     add_executable(terrain_index_benchmark experiments/TerrainIndexBenchmark.cpp)
     target_link_libraries(terrain_index_benchmark PRIVATE mir::terrain)
+endif()
+
+option(MJOLNIR_TERRAIN_SEAM_EXPERIMENT "Build mixed-source transition measurements" OFF)
+if(MJOLNIR_TERRAIN_SEAM_EXPERIMENT)
+    add_executable(terrain_seam_experiment experiments/TerrainSeamExperiment.cpp)
+    target_link_libraries(terrain_seam_experiment PRIVATE terrain_bake)
 endif()

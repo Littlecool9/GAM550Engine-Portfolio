@@ -119,6 +119,9 @@ namespace
         for (const TerrainDiagnostic &d : report.diagnostics)
             std::fprintf(stderr, "TerrainTool: error: %s\n", FormatDiagnostic(d).c_str());
 
+        for (const auto &w : report.warnings)
+            std::fprintf(stderr, "TerrainTool: WARNING: %s\n", FormatDiagnostic(w).c_str());
+
         std::string error;
         const bool written = WriteTerrainReport(reportPath, report, error);
         if (!written)

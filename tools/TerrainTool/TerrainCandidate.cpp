@@ -15,6 +15,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cmath>
+#include <set>
 #include <format>
 #include <limits>
 #include <span>
@@ -60,6 +62,17 @@ namespace mir::terrainbake
                 return v && v->is_number_unsigned() ? v->get<uint64_t>() : 0;
             }
 
+            double Number(const Json &object, std::string_view key, const std::string &path)
+            {
+                const Json *v = Member(object, key, path);
+                if (!v || !v->is_number() || !std::isfinite(v->get<double>()))
+                {
+                    if (v) mIssues.push_back({path, "expected a finite number"});
+                    return 0.0;
+                }
+                return v->get<double>();
+            }
+
             uint32_t U32(const Json &object, std::string_view key, const std::string &path)
             {
                 return static_cast<uint32_t>(Unsigned(object, key, path, std::numeric_limits<uint32_t>::max()));
@@ -97,7 +110,7 @@ namespace mir::terrainbake
         for (const TerrainFileSummary &f : m.files)
             files.push_back({{"name", f.name}, {"bytes", f.bytes}, {"fnv1a64", TerrainIdHex(f.checksum)}});
 
-        const Json j = {
+        Json j = {
             {"kind", kManifestKind},
             {"candidateVersion", kCandidateManifestVersion},
             {"toolVersion", m.toolVersion},
@@ -115,6 +128,20 @@ namespace mir::terrainbake
               {"heightsHash", TerrainIdHex(m.heightsHash)}}},
             {"files", files},
         };
+        j["seams"] = nullptr;
+        if (m.seams)
+        {
+            const auto &s = *m.seams;
+            j["seams"] = {{"algorithmVersion", s.algorithmVersion}, {"weight", s.weight}, {"bandMultiplier", s.bandMultiplier},
+                {"warningThreshold", s.warningThreshold}, {"maxAdjustment", s.maxAdjustment}, {"adjustments", Json::array()}};
+            for (const auto &a : s.adjustments)
+            {
+                Json related = Json::array();
+                for (const auto &t : a.relatedTiles) related.push_back({t.x, t.z});
+                j["seams"]["adjustments"].push_back({{"tile", {a.tile.x, a.tile.z}}, {"border", a.border},
+                    {"maxAdjustment", a.maxAdjustment}, {"position", {a.x, a.z}}, {"bandWidth", a.bandWidth}, {"relatedTiles", related}});
+            }
+        }
         return j.dump(2) + "\n";
     }
 
@@ -175,6 +202,73 @@ namespace mir::terrainbake
                     m.files.push_back({r.String(f, "name", at + ".name"), r.Unsigned(f, "bytes", at + ".bytes"),
                                        r.Hex(f, "fnv1a64", at + ".fnv1a64")});
                 }
+        }
+
+        if (const Json *seams = r.Member(j, "seams", "seams"); seams && !seams->is_null())
+        {
+            TerrainSeamSummary s;
+            s.algorithmVersion = r.U32(*seams, "algorithmVersion", "seams.algorithmVersion");
+            s.weight = r.String(*seams, "weight", "seams.weight");
+            s.bandMultiplier = r.Number(*seams, "bandMultiplier", "seams.bandMultiplier");
+            s.warningThreshold = r.Number(*seams, "warningThreshold", "seams.warningThreshold");
+            s.maxAdjustment = r.Number(*seams, "maxAdjustment", "seams.maxAdjustment");
+            if (s.algorithmVersion == 0 || (s.weight != "smoothstep" && s.weight != "linear") || s.bandMultiplier <= 0.0 || s.warningThreshold <= 0.0 || s.maxAdjustment < 0.0)
+                result.issues.push_back({"seams", "invalid seam summary"});
+            if (const Json *list = r.Member(*seams, "adjustments", "seams.adjustments"))
+            {
+                if (!list->is_array()) result.issues.push_back({"seams.adjustments", "expected an array"});
+                else
+                {
+                    std::set<std::pair<int32_t, int32_t>> seen;
+                    double largest = 0.0;
+                    for (size_t i = 0; i < list->size(); ++i)
+                    {
+                        const Json &v = list->at(i);
+                        const std::string at = std::format("seams.adjustments[{}]", i);
+                        TerrainSeamAdjustment a;
+                        a.border = r.String(v, "border", at + ".border");
+                        a.maxAdjustment = r.Number(v, "maxAdjustment", at + ".maxAdjustment");
+                        a.bandWidth = r.Number(v, "bandWidth", at + ".bandWidth");
+                        if (a.maxAdjustment < 0.0 || a.bandWidth < 0.0 ||
+                            (a.border != "" && a.border != "left" && a.border != "right" && a.border != "bottom" && a.border != "top"))
+                            result.issues.push_back({at, "invalid adjustment"});
+                        if (const Json *tile = r.Member(v, "tile", at + ".tile"))
+                        {
+                            if (!tile->is_array() || tile->size() != 2 ||
+                                !tile->at(0).is_number_integer() || !tile->at(1).is_number_integer() ||
+                                tile->at(0).get<double>() < INT32_MIN || tile->at(0).get<double>() > INT32_MAX ||
+                                tile->at(1).get<double>() < INT32_MIN || tile->at(1).get<double>() > INT32_MAX)
+                                result.issues.push_back({at + ".tile", "expected two int32 coordinates"});
+                            else a.tile = {tile->at(0).get<int32_t>(), tile->at(1).get<int32_t>()};
+                        }
+                        if (!seen.emplace(a.tile.z, a.tile.x).second)
+                            result.issues.push_back({at + ".tile", "duplicate tile"});
+                        if (const Json *p = r.Member(v, "position", at + ".position"))
+                        {
+                            if (!p->is_array() || p->size() != 2 || !p->at(0).is_number() || !p->at(1).is_number() ||
+                                !std::isfinite(p->at(0).get<double>()) || !std::isfinite(p->at(1).get<double>()))
+                                result.issues.push_back({at + ".position", "expected two finite coordinates"});
+                            else { a.x = p->at(0).get<double>(); a.z = p->at(1).get<double>(); }
+                        }
+                        if (const Json *related = r.Member(v, "relatedTiles", at + ".relatedTiles"))
+                        {
+                            if (!related->is_array()) result.issues.push_back({at + ".relatedTiles", "expected tile array"});
+                            else for (const Json &t : *related)
+                            {
+                                if (!t.is_array() || t.size() != 2 || !t.at(0).is_number_integer() || !t.at(1).is_number_integer() ||
+                                    t.at(0).get<double>() < INT32_MIN || t.at(0).get<double>() > INT32_MAX ||
+                                    t.at(1).get<double>() < INT32_MIN || t.at(1).get<double>() > INT32_MAX)
+                                    result.issues.push_back({at + ".relatedTiles", "expected int32 tile coordinates"});
+                                else a.relatedTiles.push_back({t.at(0).get<int32_t>(), t.at(1).get<int32_t>()});
+                            }
+                        }
+                        largest = std::max(largest, a.maxAdjustment);
+                        s.adjustments.push_back(std::move(a));
+                    }
+                    if (largest != s.maxAdjustment) result.issues.push_back({"seams.maxAdjustment", "does not match tile maxima"});
+                }
+            }
+            m.seams = std::move(s);
         }
 
         if (result.issues.empty())

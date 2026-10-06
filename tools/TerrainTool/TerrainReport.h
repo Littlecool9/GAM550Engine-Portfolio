@@ -25,8 +25,8 @@
 namespace mir::terrainbake
 {
     // Bump when a command's behaviour or output changes. 2: publish, sync. 3: package.
-    inline constexpr uint32_t kTerrainToolVersion = 5;
-    inline constexpr uint32_t kTerrainReportVersion = 3;
+    inline constexpr uint32_t kTerrainToolVersion = 6;
+    inline constexpr uint32_t kTerrainReportVersion = 4;
 
     // In report order.
     namespace check
@@ -112,6 +112,26 @@ namespace mir::terrainbake
         bool published = false;
     };
 
+    struct TerrainSeamAdjustment
+    {
+        TileCoord tile;
+        std::string border;
+        double maxAdjustment = 0.0;
+        double x = 0.0, z = 0.0;
+        double bandWidth = 0.0;
+        std::vector<TileCoord> relatedTiles;
+    };
+
+    struct TerrainSeamSummary
+    {
+        uint32_t algorithmVersion = 0;
+        double bandMultiplier = 0.0;
+        double warningThreshold = 0.0;
+        double maxAdjustment = 0.0;
+        std::string weight = "smoothstep";
+        std::vector<TerrainSeamAdjustment> adjustments;
+    };
+
     class TerrainReport
     {
     public:
@@ -120,6 +140,7 @@ namespace mir::terrainbake
         void Ran(std::string_view check, std::string detail = {});
         void Skip(std::string_view check, std::string reason);
         void Add(TerrainDiagnostic diagnostic);
+        void Warn(TerrainDiagnostic warning);
 
         CheckStatus Status(std::string_view check) const;
         bool Ok() const;
@@ -145,6 +166,8 @@ namespace mir::terrainbake
         std::optional<TerrainPublishSummary> publish;
         std::vector<TerrainCheck> checks;
         std::vector<TerrainDiagnostic> diagnostics;
+        std::vector<TerrainDiagnostic> warnings;
+        std::optional<TerrainSeamSummary> seams;
 
     private:
         TerrainCheck *Find(std::string_view check);
