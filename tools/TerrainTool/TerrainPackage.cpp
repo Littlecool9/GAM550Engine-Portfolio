@@ -63,7 +63,7 @@ namespace mir::terrainbake
             std::error_code ec;
             for (const fs::directory_entry &entry : fs::directory_iterator(assetDir, ec))
             {
-                const std::string name = entry.path().filename().string();
+                const std::string name = PathUtf8(entry.path().filename());
                 if (name != kTerrainCurrentPointerFileName && name != keepHex && name != kTerrainPublishLockFileName)
                     extra.push_back(entry.path());
             }
@@ -74,9 +74,9 @@ namespace mir::terrainbake
                 std::error_code removeEc;
                 fs::remove_all(path, removeEc);
                 if (removeEc)
-                    left.push_back(std::format("{} ({})", path.filename().string(), removeEc.message()));
+                    left.push_back(std::format("{} ({})", PathUtf8(path.filename()), removeEc.message()));
                 else
-                    removed.push_back(path.filename().string());
+                    removed.push_back(PathUtf8(path.filename()));
             }
             // Not a failure: only current is read, and the next package retries.
             std::string detail = std::format("kept current and {}; removed {}", keepHex,
@@ -110,13 +110,13 @@ namespace mir::terrainbake
             Fail(report, check::kArguments, "--out",
                  std::format("{} and the game's releases tree {} must not contain each other: package removes old "
                              "releases from its output",
-                             out.generic_string(), source.generic_string()));
+                             PathUtf8(out), PathUtf8(source)));
         if (report.Status(check::kArguments) == CheckStatus::Failed)
             return report;
         report.assetPath = asset.logicalPath;
         report.Ran(check::kArguments, std::format("asset {} ({}), from {} to {}", asset.logicalPath,
-                                                  TerrainIdHex(asset.asset.value), source.generic_string(),
-                                                  out.generic_string()));
+                                                  TerrainIdHex(asset.asset.value), PathUtf8(source),
+                                                  PathUtf8(out)));
 
         const AssetId id = asset.asset;
         std::string problem;
@@ -141,7 +141,7 @@ namespace mir::terrainbake
             report.publish->current = PeekTerrainCurrent(out, id);
             return report;
         }
-        report.Ran(check::kLock, (assetDir / kTerrainPublishLockFileName).generic_string());
+        report.Ran(check::kLock, PathUtf8(assetDir / kTerrainPublishLockFileName));
 
         std::optional<TerrainReleaseId> previous;
         std::optional<std::string> mismatch;
@@ -184,7 +184,7 @@ namespace mir::terrainbake
         const bool named = report.release && report.release->asset == id && report.release->release == *release;
         if (report.Ok() && !named)
             Fail(report, check::kIdentity, std::string(kTerrainIndexFileName),
-                 std::format("{} is not release {} of asset {}", sourceDir.generic_string(), releaseHex,
+                 std::format("{} is not release {} of asset {}", PathUtf8(sourceDir), releaseHex,
                              TerrainIdHex(id.value)));
         else if (report.Ok())
             report.Ran(check::kIdentity, std::format("{} is release {} of asset {}, as current names",
