@@ -43,7 +43,7 @@ namespace mir::terrainbake
                     report.Skip(c, why);
         }
 
-        // Only a directory holding nothing but candidate files.
+        // Only an empty directory or candidate.json plus candidate files; a release never has candidate.json.
         bool RemoveOwnCandidate(const fs::path &dir, std::string &error)
         {
             std::error_code ec;
@@ -54,9 +54,13 @@ namespace mir::terrainbake
                 error = std::format("{} exists and is not a directory", PathUtf8(dir));
                 return false;
             }
+            bool empty = true;
+            bool hasManifest = false;
             for (const fs::directory_entry &entry : fs::directory_iterator(dir, ec))
             {
                 const std::string name = PathUtf8(entry.path().filename());
+                empty = false;
+                hasManifest = hasManifest || name == kCandidateManifestFileName;
                 const bool candidateFile = name == kTerrainIndexFileName || name == kCandidateManifestFileName ||
                                            (name.starts_with("chunk_") && name.ends_with(".tpack"));
                 if (!entry.is_regular_file(ec) || !candidateFile)
@@ -66,6 +70,13 @@ namespace mir::terrainbake
                                         PathUtf8(dir), name);
                     return false;
                 }
+            }
+            if (!empty && !hasManifest)
+            {
+                error = std::format("{} has no {}, so it is not a TerrainTool candidate; sync only replaces its own "
+                                    "candidate (choose another --candidate)",
+                                    PathUtf8(dir), kCandidateManifestFileName);
+                return false;
             }
             fs::remove_all(dir, ec);
             if (ec)

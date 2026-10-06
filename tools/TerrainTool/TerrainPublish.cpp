@@ -175,7 +175,7 @@ namespace mir::terrainbake
             const std::optional<TerrainCandidateManifest> manifest = ReadManifest(candidate);
             if (manifest && !manifest->release.asset.IsNull())
                 asset = manifest->release.asset;
-            if (!report.Ok() || !manifest)
+            if (!report.Ok() || !manifest || !asset)
             {
                 if (report.Ok())
                     Fail(report, check::kCandidate, std::string(kCandidateManifestFileName),

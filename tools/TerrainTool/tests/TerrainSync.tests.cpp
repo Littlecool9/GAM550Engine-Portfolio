@@ -205,6 +205,16 @@ TEST_CASE("Sync deletes only its own candidate and never one inside the releases
         CHECK(report.Status(check::kWrite) == CheckStatus::Failed);
         CHECK(ReadText(request.candidateDir / "notes.txt") == "mine");
     }
+    SECTION("release files without candidate.json, as in a published release")
+    {
+        fs::create_directories(request.candidateDir);
+        REQUIRE(WriteText(request.candidateDir / kTerrainIndexFileName, "index"));
+        REQUIRE(WriteText(request.candidateDir / "chunk_0_0.tpack", "pack"));
+        const TerrainReport report = Sync(request);
+        CHECK(report.Status(check::kWrite) == CheckStatus::Failed);
+        CHECK(ReadText(request.candidateDir / kTerrainIndexFileName) == "index");
+        CHECK(ReadText(request.candidateDir / "chunk_0_0.tpack") == "pack");
+    }
     SECTION("a candidate inside the releases tree")
     {
         request.candidateDir = tree.releases / "candidate";
