@@ -68,9 +68,9 @@ TEST_CASE("The example recipe loads and validates", "[terraintool][recipe]")
     CHECK(result.issues.empty());
 
     const TerrainRecipe &recipe = *result.recipe;
-    CHECK(recipe.recipeVersion == kTerrainRecipeVersion);
+    CHECK(recipe.recipeVersion == 1);
     CHECK(recipe.generatorId == kReliefGeneratorId);
-    CHECK(recipe.generatorVersion == kReliefGeneratorVersion);
+    CHECK(recipe.generatorVersion == 1);
     CHECK(recipe.seed == 20261001u);
     CHECK(recipe.layout.SampleSpacing() == 4.0);
     CHECK(recipe.layout.IntervalsPerTile() == 64);
@@ -239,8 +239,8 @@ TEST_CASE("Unsupported generators and versions are refused", "[terraintool][reci
     CHECK(HasIssue(Parse(newer), "generator.version", "unsupported version 2"));
 
     Json schema = Example();
-    schema["recipeVersion"] = 2;
-    CHECK(HasIssue(Parse(schema), "recipeVersion", "unsupported recipe version 2"));
+    schema["recipeVersion"] = 3;
+    CHECK(HasIssue(Parse(schema), "recipeVersion", "unsupported recipe version 3"));
 }
 
 TEST_CASE("Malformed documents, non-finite numbers and duplicate keys are reported", "[terraintool][recipe]")
@@ -273,7 +273,7 @@ TEST_CASE("Malformed documents, non-finite numbers and duplicate keys are report
     wide["layout"]["intervalsPerTile"] = kMaxTerrainTileIntervals + 1;
     CHECK(HasIssue(Parse(wide), "layout.intervalsPerTile", "out of range [1, 4096]"));
 
-    // 511 tiles of 64 intervals at 1 m are 32705 samples; one more tile is 32769.
+    // Reference-grid size is independent of the collider block limit.
     Json large = Example();
     large["parameters"]["tilt"] = {{"x", 0.0}, {"z", 0.0}};
     large["layout"]["sampleSpacing"] = 1.0;
@@ -281,7 +281,7 @@ TEST_CASE("Malformed documents, non-finite numbers and duplicate keys are report
     large["layout"]["bounds"] = {{"minX", 0.0}, {"minZ", 0.0}, {"maxX", 32704.0}, {"maxZ", 64.0}};
     Valid(large);
     large["layout"]["bounds"]["maxX"] = 32704.5;
-    CHECK(HasIssue(Parse(large), "layout.bounds", "32769 x 65 tile samples exceed 32768"));
+    CHECK(Parse(large).recipe);
 
     CHECK(HasIssue(LoadTerrainRecipe(std::string(TERRAIN_FIXTURE_DIR) + "/missing.terrain.json"), "", "cannot read"));
 }

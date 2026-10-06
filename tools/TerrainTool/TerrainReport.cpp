@@ -178,7 +178,17 @@ namespace mir::terrainbake
                                   {"pack", t.pack},
                                   {"minHeight", t.minHeight},
                                   {"maxHeight", t.maxHeight},
-                                  {"readable", t.readable}});
+                                  {"readable", t.readable},
+                                  {"sourceSpacing", t.sourceSpacing},
+                                  {"payloadSpacing", t.payloadSpacing},
+                                  {"samplesPerSide", t.samplesPerSide},
+                                  {"layer", t.layer},
+                                  {"source", t.source}});
+        j["sourceEstimates"] = Json::array();
+        for (const auto &estimate : r.sourceEstimates)
+            j["sourceEstimates"].push_back({{"spacing", estimate.spacing}, {"tileCount", estimate.tileCount},
+                {"samplesPerTile", estimate.samplesPerTile}, {"heightBytes", estimate.heightBytes}});
+        j["filter"] = {{"referenceSamples", r.referenceSamples}, {"peakDoubleBytes", r.peakDoubleSamples * sizeof(double)}};
 
         j["files"] = Json::array();
         for (const TerrainFileSummary &f : r.files)

@@ -131,6 +131,15 @@ namespace mir::terrainbake
                 layoutField("layout.bounds.minZ", want.Bounds().minZ, have.Bounds().minZ);
                 layoutField("layout.bounds.maxX", want.Bounds().maxX, have.Bounds().maxX);
                 layoutField("layout.bounds.maxZ", want.Bounds().maxZ, have.Bounds().maxZ);
+                report.sourceEstimates = recipe->SourceEstimates();
+                for (const auto &record : index.tiles)
+                    if (record.source)
+                    {
+                        const auto spacing = recipe->SourceSpacing(record.tile);
+                        if (!spacing || *spacing != record.sampleSpacing)
+                            report.Add({std::string(check::kIdentity), "precision.tiles", {record.tile}, std::nullopt,
+                                        "release source spacing differs from the tile's recipe assignment"});
+                    }
             }
             if (!manifest && !recipe)
                 report.Skip(check::kIdentity, "no candidate.json or recipe to compare with");
@@ -253,7 +262,9 @@ namespace mir::terrainbake
         for (const TerrainTileRecord &record : index.tiles)
         {
             const std::string &pack = packNames[record.pack];
-            TerrainTileSummary summary{record.tile, pack, record.minHeight, record.maxHeight, false};
+            const auto *sourceRecord = index.Find(record.tile);
+            TerrainTileSummary summary{record.tile, pack, record.minHeight, record.maxHeight, false,
+                sourceRecord->sampleSpacing, record.sampleSpacing, static_cast<uint32_t>(record.samplesPerSide), record.layer, record.source};
             if (!handle.Source().Size(pack))
             {
                 ++missing;
@@ -309,6 +320,18 @@ namespace mir::terrainbake
             });
         }
 
+        bool mixed = false;
+        for (const auto &record : index.tiles)
+            if (record.source)
+                for (const TileCoord neighbour : {TileCoord{record.tile.x == INT32_MAX ? record.tile.x : record.tile.x + 1, record.tile.z},
+                                                   TileCoord{record.tile.x, record.tile.z == INT32_MAX ? record.tile.z : record.tile.z + 1}})
+                    if (const auto *other = index.Find(neighbour); other && other->layer != record.layer)
+                        mixed = true;
+        if (mixed)
+        {
+            report.Skip(check::kEdges, "same-layer pairs checked; mixed source continuity awaits #120 final seam adjustment");
+            report.Skip(check::kCorners, "same-layer corners checked; mixed source continuity awaits #120 final seam adjustment");
+        }
         CheckIdentity(index, manifest, options.recipe, files, report);
     }
 

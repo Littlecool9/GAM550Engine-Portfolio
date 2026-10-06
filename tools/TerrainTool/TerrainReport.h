@@ -8,6 +8,8 @@
  */
 #pragma once
 
+#include "TerrainRecipe.h"
+
 #include <terrain/TerrainIdentity.h>
 #include <terrain/TerrainLayout.h>
 #include <terrain/TileKey.h>
@@ -23,8 +25,8 @@
 namespace mir::terrainbake
 {
     // Bump when a command's behaviour or output changes. 2: publish, sync. 3: package.
-    inline constexpr uint32_t kTerrainToolVersion = 4;
-    inline constexpr uint32_t kTerrainReportVersion = 2;
+    inline constexpr uint32_t kTerrainToolVersion = 5;
+    inline constexpr uint32_t kTerrainReportVersion = 3;
 
     // In report order.
     namespace check
@@ -85,6 +87,11 @@ namespace mir::terrainbake
         float minHeight = 0.0f;
         float maxHeight = 0.0f;
         bool readable = false;
+        double sourceSpacing = 0.0;
+        double payloadSpacing = 0.0;
+        uint32_t samplesPerSide = 0;
+        uint32_t layer = 0;
+        bool source = false;
     };
 
     struct TerrainFileSummary
@@ -130,6 +137,9 @@ namespace mir::terrainbake
         std::optional<uint64_t> nonce;
         std::optional<TerrainLayout> layout;
         std::vector<TerrainTileSummary> tiles;
+        std::vector<TerrainSourceEstimate> sourceEstimates;
+        uint64_t referenceSamples = 0;
+        uint64_t peakDoubleSamples = 0;
         std::vector<TerrainFileSummary> files;
         // Publish and sync only.
         std::optional<TerrainPublishSummary> publish;

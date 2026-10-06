@@ -28,6 +28,7 @@ if(BUILD_TESTING)
         tests/TerrainBake.tests.cpp
         tests/TerrainGenerator.tests.cpp
         tests/TerrainPackage.tests.cpp
+        tests/TerrainPrecision.tests.cpp
         tests/TerrainPublish.tests.cpp
         tests/TerrainRecipe.tests.cpp
         tests/TerrainSync.tests.cpp

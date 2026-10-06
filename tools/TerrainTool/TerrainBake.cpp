@@ -41,6 +41,8 @@ namespace mir::terrainbake
                 return "a wrong block size";
             case SourceFillStatus::NonFinite:
                 return "a non-finite height";
+            case SourceFillStatus::InvalidGrid:
+                return "a grid that does not nest in the reference grid";
             }
             return "?";
         }
@@ -160,10 +162,19 @@ namespace mir::terrainbake
         const TerrainLayout &layout = generator.Layout();
         const TileRange range = layout.Tiles();
         std::vector<TileHeights> tiles;
-        for (int32_t z = range.min.z; z <= range.max.z; ++z)
-            for (int32_t x = range.min.x; x <= range.max.x; ++x)
+        report.sourceEstimates = recipe.SourceEstimates();
+        for (int64_t tz = range.min.z; tz <= range.max.z; ++tz)
+            for (int64_t tx = range.min.x; tx <= range.max.x; ++tx)
             {
-                std::optional<TileHeights> tile = TileHeights::Create({x, z}, layout.IntervalsPerTile());
+                const int32_t x = static_cast<int32_t>(tx), z = static_cast<int32_t>(tz);
+                const auto sourceLayout = recipe.SourceLayout({x, z});
+                if (!sourceLayout)
+                {
+                    report.Add({std::string(check::kGenerate), "precision.tiles", {{x, z}}, std::nullopt,
+                                "tile has no source spacing"});
+                    return std::nullopt;
+                }
+                std::optional<TileHeights> tile = TileHeights::Create({x, z}, sourceLayout->IntervalsPerTile());
                 if (!tile)
                 {
                     report.Add({std::string(check::kGenerate), "layout.intervalsPerTile", {{x, z}}, std::nullopt,
@@ -171,7 +182,9 @@ namespace mir::terrainbake
                                             layout.IntervalsPerTile(), kMaxTerrainTileIntervals)});
                     return std::nullopt;
                 }
-                const SourceFillResult filled = generator.FillTile({x, z}, tile->Samples());
+                const SourceFillResult filled = generator.FillTile(*sourceLayout, {x, z}, tile->Samples());
+                report.referenceSamples += filled.referenceSamples;
+                report.peakDoubleSamples = std::max(report.peakDoubleSamples, filled.peakDoubleSamples);
                 if (!filled.Ok())
                 {
                     const bool atSample = filled.status == SourceFillStatus::NonFinite;
@@ -184,9 +197,10 @@ namespace mir::terrainbake
                 tiles.push_back(std::move(*tile));
             }
         report.Ran(check::kGenerate,
-                   std::format("{} tiles of {}^2 samples from \"{}\" v{}; final heights = source heights (P1)",
-                               tiles.size(), layout.IntervalsPerTile() + 1, recipe.generatorId,
-                               recipe.generatorVersion));
+                   std::format("{} source tiles from \"{}\" v{}; fixed reference {} m, tile {} m; {}",
+                               tiles.size(), recipe.generatorId, recipe.generatorVersion,
+                               layout.SampleSpacing(), layout.TileSize(), recipe.recipeVersion == 1 ?
+                               "uniform P1 heights unchanged" : "filtered source grids; final seam adjustment is #120"));
         return tiles;
     }
 
@@ -208,6 +222,42 @@ namespace mir::terrainbake
                                                TerrainIdHex(info.release.value), encoded.value->packs.size(),
                                                TerrainIdHex(encoded.value->heightsHash)));
         return TerrainBakedRelease{info, layout, nonce, std::move(tiles), std::move(*encoded.value)};
+    }
+
+    std::optional<TerrainBakedRelease> EncodeBakedRelease(AssetId asset, TerrainSourceFingerprint source,
+                                                          const TerrainRecipe &recipe, std::vector<TileHeights> tiles,
+                                                          const TerrainBakeOptions &options, TerrainReport &report)
+    {
+        if (recipe.recipeVersion == 1)
+            return EncodeBakedRelease(asset, source, recipe.layout, std::move(tiles), options, report);
+        const auto layers = recipe.SourceLayers();
+        std::vector<TerrainTileWrite> records;
+        for (const auto &tile : tiles)
+        {
+            const auto spacing = recipe.SourceSpacing(tile.Tile());
+            const auto layer = std::find_if(layers.begin(), layers.end(), [&](const auto &layout) {
+                return spacing && layout.SampleSpacing() == *spacing;
+            });
+            if (layer == layers.end())
+            {
+                Fail(report, check::kEncode, "precision.tiles", "tile has no assigned source layer");
+                return std::nullopt;
+            }
+            records.push_back({&tile, static_cast<uint32_t>(layer - layers.begin()), true, std::nullopt});
+        }
+        const uint64_t heightsHash = TerrainHeightsHash(layers, records);
+        const uint64_t nonce = options.nonce ? *options.nonce : MakeTerrainReleaseNonce();
+        const TerrainReleaseInfo info{asset, source, kTerrainFormatVersion,
+                                      MintTerrainReleaseId(asset, source, heightsHash, nonce)};
+        auto encoded = EncodeTerrainRelease(info, layers, records, options.pack);
+        if (!encoded)
+        {
+            Fail(report, check::kEncode, "", encoded.error.message);
+            return std::nullopt;
+        }
+        report.Ran(check::kEncode, std::format("release {}: {} source tiles, {} sparse layers, {} packs",
+            TerrainIdHex(info.release.value), tiles.size(), layers.size(), encoded.value->packs.size()));
+        return TerrainBakedRelease{info, recipe.layout, nonce, std::move(tiles), std::move(*encoded.value)};
     }
 
     TerrainCandidateManifest MakeCandidateManifest(const TerrainBakedRelease &baked, std::string assetPath,
@@ -256,7 +306,7 @@ namespace mir::terrainbake
         if (!tiles)
             return false;
         std::optional<TerrainBakedRelease> baked = EncodeBakedRelease(
-            MakeAssetId(assetPath), fingerprint, recipe.layout, std::move(*tiles), request.options, report);
+            MakeAssetId(assetPath), fingerprint, recipe, std::move(*tiles), request.options, report);
         if (!baked)
             return false;
         report.release = baked->info;

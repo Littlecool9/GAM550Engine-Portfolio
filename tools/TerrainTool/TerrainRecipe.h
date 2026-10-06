@@ -20,12 +20,12 @@
 
 namespace mir::terrainbake
 {
-    inline constexpr uint32_t kTerrainRecipeVersion = 1;
+    inline constexpr uint32_t kTerrainRecipeVersion = 2;
     // Bumping it changes every fingerprint.
-    inline constexpr uint32_t kRecipeCanonicalVersion = 1;
+    inline constexpr uint32_t kRecipeCanonicalVersion = 2;
     inline constexpr std::string_view kReliefGeneratorId = "mir.relief";
     // Bump when anything changes the samples.
-    inline constexpr uint32_t kReliefGeneratorVersion = 1;
+    inline constexpr uint32_t kReliefGeneratorVersion = 2;
     // float32 still resolves ~1 mm here.
     inline constexpr double kMaxHeightMagnitude = 10000.0;
 
@@ -49,6 +49,20 @@ namespace mir::terrainbake
         double plainsBlend = 0.0;  // m, [0, 1000]; 0 is a hard floor
     };
 
+    struct TerrainSourceRule
+    {
+        TileCoord tile;
+        double spacing = 1.0;
+    };
+
+    struct TerrainSourceEstimate
+    {
+        double spacing = 1.0;
+        uint64_t tileCount = 0;
+        uint64_t samplesPerTile = 0;
+        uint64_t heightBytes = 0;
+    };
+
     // Every field is required, so no hidden default can change a fingerprint.
     struct TerrainRecipe
     {
@@ -58,6 +72,14 @@ namespace mir::terrainbake
         uint64_t seed = 0;
         TerrainLayout layout;
         ReliefParameters relief;
+        // v1 is uniform; v2 null requires explicit coverage.
+        std::optional<double> defaultSpacing;
+        std::vector<TerrainSourceRule> sourceRules;
+
+        std::optional<double> SourceSpacing(TileCoord tile) const;
+        std::optional<TerrainLayout> SourceLayout(TileCoord tile) const;
+        std::vector<TerrainLayout> SourceLayers() const;
+        std::vector<TerrainSourceEstimate> SourceEstimates() const;
     };
 
         // Dotted JSON path; empty for the whole document.

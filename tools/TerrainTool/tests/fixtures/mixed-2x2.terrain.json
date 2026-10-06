@@ -1,0 +1,69 @@
+{
+  "recipeVersion": 2,
+  "generator": {
+    "id": "mir.relief",
+    "version": 2
+  },
+  "seed": 20261001,
+  "layout": {
+    "sampleSpacing": 1.0,
+    "intervalsPerTile": 256,
+    "bounds": {
+      "minX": -250.0,
+      "minZ": -256.0,
+      "maxX": 256.0,
+      "maxZ": 250.0
+    }
+  },
+  "parameters": {
+    "baseHeight": 15.0,
+    "tilt": {
+      "x": 0.15,
+      "z": 0.0
+    },
+    "broad": {
+      "amplitude": 20.0,
+      "wavelength": 512.0,
+      "octaves": 2
+    },
+    "ridges": {
+      "amplitude": 30.0,
+      "wavelength": 192.0,
+      "octaves": 2
+    },
+    "detail": {
+      "amplitude": 1.0,
+      "wavelength": 24.0,
+      "octaves": 2
+    },
+    "plains": {
+      "height": 0.0,
+      "blend": 4.0
+    }
+  },
+  "precision": {
+    "defaultSpacing": null,
+    "tiles": [
+      {
+        "x": -1,
+        "z": -1,
+        "spacing": 1.0
+      },
+      {
+        "x": 0,
+        "z": -1,
+        "spacing": 8.0
+      },
+      {
+        "x": -1,
+        "z": 0,
+        "spacing": 2.0
+      },
+      {
+        "x": 0,
+        "z": 0,
+        "spacing": 4.0
+      }
+    ]
+  }
+}
