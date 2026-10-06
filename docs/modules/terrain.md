@@ -7,10 +7,13 @@ a baked release is stored in, with a reader that fetches one tile by byte
 range, the canonical surface over a release's final samples, a resident height
 query over one release, and a tile's fixed-LOD triangle mesh built from those
 samples on the CPU (plain data; `app` uploads it). It does not bake, publish,
-stream or collide terrain yet; those are later P1 issues and P3. Generating
-heights is offline work: the `terrain_bake` library in `tools/TerrainTool/`
-reads a source recipe and produces source heights on this module's grid; the
-engine never links it.
+stream or collide terrain itself; collision is built by physics from these
+samples, publishing is a later P1 issue, streaming is P3. Generating and baking
+heights is offline work: the `terrain_bake` library and the headless
+`TerrainTool` executable in `tools/TerrainTool/` read a source recipe, produce
+heights on this module's grid, encode a candidate release with this module's
+writer and validate it with its reader (see [TerrainTool CLI](#terraintool-cli));
+the engine never links them.
 
 `mir::terrain` · depends `mir::assets`, `mir::core` (public) · API `modules/terrain/include/terrain/` · maintainer Jackey Cen · reviewed 2026-10-02
 
@@ -128,6 +131,73 @@ The mesh has no renderer types. `app` converts it to renderer vertices,
 uploads it (traced like any mesh when ray tracing is on) and places the draw at placement plus
 origin in double (see [renderer.md](renderer.md) and [app.md](app.md)).
 
+### TerrainTool CLI
+
+Releases are made offline by `TerrainTool` (`tools/TerrainTool/`), built with
+the engine and run without the editor, a window or a GPU. It has two commands.
+Neither reads or writes a published release tree or a `current` pointer, and
+neither takes a releases path; publishing is a separate step (#116).
+
+```text
+TerrainTool bake --recipe <file> --id-root <logical root> --source-path <relative path>
+                 --out <candidate dir> --report <json> [--nonce <hex>] [--chunk-tiles <n>]
+TerrainTool validate --candidate <dir> [--recipe <file>] --report <json>
+```
+
+- **Asset id.** `MakeAssetId(MakeLogicalAssetPath(idRoot, sourcePath))`, the
+  path a cooked asset at that place would get. For
+  `games/G/assets/terrain/hills.terrain.json` pass `--id-root games/G/assets
+  --source-path terrain/hills.terrain.json`. `--recipe` is the file to read and
+  may live anywhere (tests use fixtures).
+- **bake** checks the recipe (every bad field by path), generates every layout
+  tile (P1: final heights are the generator's float32 source heights), mints
+  the release id once from the asset, recipe fingerprint, final-height hash and
+  a nonce (`--nonce` fixes it, so the same input gives the same bytes), encodes,
+  writes `<out>.<releaseIdHex16>.partial/`, validates that directory and only
+  then renames it to `--out`. An existing non-empty `--out` is refused, so
+  `--out` is either absent or a complete, validated candidate.
+- **A candidate** is exactly a release directory's files, `release.tindex` and
+  one `chunk_<x>_<z>.tpack` per storage chunk (`--chunk-tiles`, default 16), plus
+  `candidate.json`, written last: asset id and logical path, recipe path and
+  fingerprint, release id, nonce, format and minor, content and surface
+  versions, heights hash, and each release file's size and Fnv1a64.
+- **validate** re-checks a candidate through `TerrainReleaseHandle`:
+  `candidate.json` and stray files, format, index, whole packs, coverage (every
+  layout tile's pack exists), payloads, finite heights, shared edges and
+  four-tile corners (shared samples bit-identical, and `EvaluateSurfaceInCell`
+  from each side within `SurfaceTolerance` at four probes per cell), and
+  identity (manifest against index; with `--recipe`, fingerprint and layout).
+- **Exit codes.** 0: every check passed. 1: a check failed. 2: a bad command
+  line (a report is still written when `--report` was given). Every diagnostic
+  is printed to stderr and written to the report.
+
+The report is JSON: `kind`, `reportVersion`, `tool` (name, version),
+`command`, `ok`, `recipe` (path, fingerprint), `candidate`, `asset` (id,
+logical path), `release` (id, source fingerprint, format version and minor,
+content and surface versions, heights hash, nonce), `layout`, `tiles` (each
+tile's pack, stored height range and whether it read back), `files`, `checks`
+(each `passed`, `failed` or `skipped` with a detail; a check that could not
+cover every tile is `skipped`, never `passed`) and `diagnostics` (`check`,
+`field`, `tiles`, `sample`, `message`). `field` is a dotted recipe or
+`candidate.json` path, a release file name, or `payload`, `samples` or
+`surface`; `sample` is a global sample index.
+
+Fixture: `tools/TerrainTool/tests/fixtures/relief-2x2.terrain.json` is 2 x 2
+tiles of 256 m at 4 m (65 x 65 samples, one pack per tile since the tiles
+straddle the origin). From `builds/windows-msvc-debug`:
+
+```text
+tools\TerrainTool\TerrainTool.exe bake --recipe ..\..\tools\TerrainTool\tests\fixtures\relief-2x2.terrain.json ^
+    --id-root games/TerrainFixture/assets --source-path terrain/relief-2x2.terrain.json ^
+    --out terrain-candidates\relief-2x2 --report terrain-candidates\relief-2x2.bake.json
+tools\TerrainTool\TerrainTool.exe validate --candidate terrain-candidates\relief-2x2 ^
+    --recipe ..\..\tools\TerrainTool\tests\fixtures\relief-2x2.terrain.json --report terrain-candidates\relief-2x2.validate.json
+```
+
+Bake again only after removing the old candidate (or with another `--out`).
+Its heights hash is `47af51a1d3ecb46e` in Debug and Release; without
+`--nonce` every bake is a new release id.
+
 ## API
 
 | Type | Header | Role |
@@ -232,9 +302,17 @@ own IO failures once.
 
 **Only the release reader touches disk, and only to read.** It goes through
 core `ReadBytes`, `ReadByteRange`, `FileSize` and `ReadText`, opening a file
-per read. Nothing here writes a release or the `current` pointer: the bake
-writes encoded bytes itself, and publishing (copy, verify, switch the pointer
-atomically, never delete a release that may be open) belongs to #116.
+per read. Nothing here writes a release or the `current` pointer: TerrainTool's
+bake writes the encoded bytes itself, into a candidate directory only, and
+publishing (copy, verify, switch the pointer atomically, never delete a
+release that may be open) belongs to #116.
+
+**A candidate is validated before anyone may call it usable.** The bake
+validates its own output from disk before the directory gets its final name,
+and `TerrainTool validate` repeats every check later. Seam checks reuse
+`EvaluateSurfaceInCell` and the reader; they never decode or interpolate on
+their own. Shared samples must match bit for bit (`+0` and `-0` differ), and a
+seam next to an unreadable tile is reported as not checked, never as passing.
 
 **Generated heights are a function of the grid position only.** The generator
 (#113) evaluates each sample at `SamplePosition(i)` in double and rounds once to
@@ -356,9 +434,12 @@ surface, the tile mesh builder, the release format, its in-memory encoder, the
 synchronous range reader and the resident height query with a synchronous
 preload work; nothing takes the query's payload requests yet (P3). No scene
 loads terrain yet: app's private `TerrainRender` uploads tile meshes but has no
-caller until the `TerrainInstance` work (#118). The first non-test caller is
-the offline `terrain_bake` library (#113: recipe, fingerprint, "mir.relief"
-generator), tested by `terrain_tool_tests`.
+caller until the `TerrainInstance` work (#118). Its other non-test callers are
+offline: the `terrain_bake` library (#113: recipe, fingerprint, "mir.relief"
+generator; #115: bake, candidate directory, validation) and the `TerrainTool`
+executable over it, tested by `terrain_tool_tests` (the CLI through
+`LaunchProcess`). Bakes hold every tile in memory, as the encoder takes the
+whole set; that is fine for P1's small maps, not for a 150 km map.
 
 Tests in `modules/terrain/tests/`: `TerrainLayout` (validation, clipped edge
 tiles, shared edge samples, padding), `TileAddressing` (floor on both sides of
@@ -413,8 +494,19 @@ camera-relative narrowing, sizes for 65 and 257 samples a side).
 7. Colliders over more than one shape (maps past Jolt's 32768 samples a side,
    P3 residency) bring the per-tile seam back; measure overlap or a compound
    shape before choosing.
+8. Publishing a validated candidate and moving `current` (#116), reusing
+   `ValidateTerrainCandidate` (without `candidate.json` on the copied release).
+9. Bake and validate in bounded memory (per chunk or tile row) before maps grow
+   past a few hundred tiles.
 
 ## Changed
+
+*2026-10-02* — **TerrainTool bake and validate (#115).** `tools/TerrainTool/`
+adds the headless `TerrainTool` executable and, in `terrain_bake`, the bake
+(recipe to final heights to a release id minted once to an encoded candidate
+written through a `.partial` directory) and the validation (reader integrity,
+coverage, finite heights, bit-identical seams and surface probes, identity)
+with a JSON report. No change to the module itself.
 
 *2026-10-02* — **Static height fields (#16).** Physics builds a Jolt height
 field from a block of these samples (`PhysicsWorld::CreateStaticHeightField`).

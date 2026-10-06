@@ -52,6 +52,11 @@ TEST_CASE("Release directories and the current pointer follow the naming contrac
     CHECK(TerrainReleaseDir(root, asset, release) == root / "0000000000001234" / "0000000000abcdef");
     CHECK(TerrainCurrentPointerPath(root, asset) == root / "0000000000001234" / "current");
     CHECK(EncodeTerrainCurrentPointer(release) == "0000000000abcdef");
+
+    CHECK(ParseTerrainIdHex(TerrainIdHex(0xfedcba9876543210)) == 0xfedcba9876543210);
+    CHECK(ParseTerrainIdHex("0000000000000000") == 0u);
+    for (std::string_view bad : {"", "1234", "0000000000001234\n", "000000000000ABCD", "+000000000001234"})
+        CHECK_FALSE(ParseTerrainIdHex(bad));
 }
 
 TEST_CASE("The current pointer holds exactly one release id", "[terrain][release]")

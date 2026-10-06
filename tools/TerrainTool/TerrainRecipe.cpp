@@ -9,6 +9,7 @@
 #include "TerrainRecipe.h"
 
 #include "TerrainNoise.h"
+#include "TerrainReport.h"
 
 #include <assets/AssetId.h>
 #include <core/fs/FileIO.h>
@@ -490,7 +491,7 @@ namespace mir::terrainbake
     {
         const std::optional<std::string> text = ReadText(path);
         if (!text)
-            return {std::nullopt, {{"", "cannot read " + path.generic_string()}}};
+            return {std::nullopt, {{"", "cannot read " + PathUtf8(path)}}};
         return ParseTerrainRecipe(*text);
     }
 

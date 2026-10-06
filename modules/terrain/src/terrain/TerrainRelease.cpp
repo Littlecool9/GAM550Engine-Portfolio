@@ -77,6 +77,16 @@ namespace mir
         return Hex(value);
     }
 
+    std::optional<uint64_t> ParseTerrainIdHex(std::string_view text)
+    {
+        if (text.size() != 16 || !std::all_of(text.begin(), text.end(), IsLowerHex))
+            return std::nullopt;
+        uint64_t value = 0;
+        for (char c : text)
+            value = (value << 4) | static_cast<uint64_t>(c <= '9' ? c - '0' : c - 'a' + 10);
+        return value;
+    }
+
     std::filesystem::path TerrainAssetReleasesDir(const std::filesystem::path &releasesRoot, AssetId asset)
     {
         return releasesRoot / TerrainIdHex(asset.value);
@@ -104,17 +114,14 @@ namespace mir
             text.remove_suffix(2);
         else if (text.ends_with('\n'))
             text.remove_suffix(1);
-        if (text.size() != 16 || !std::all_of(text.begin(), text.end(), IsLowerHex))
+        const std::optional<uint64_t> value = ParseTerrainIdHex(text);
+        if (!value)
             return Fail<TerrainReleaseId>(Code::Malformed, "current pointer must be exactly 16 lowercase hex digits");
-
-        uint64_t value = 0;
-        for (char c : text)
-            value = (value << 4) | static_cast<uint64_t>(c <= '9' ? c - '0' : c - 'a' + 10);
-        if (value == 0)
+        if (*value == 0)
             return Fail<TerrainReleaseId>(Code::Malformed, "current pointer names release 0");
 
         TerrainResult<TerrainReleaseId> result;
-        result.value = TerrainReleaseId(value);
+        result.value = TerrainReleaseId(*value);
         return result;
     }
 

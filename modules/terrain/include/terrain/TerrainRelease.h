@@ -17,6 +17,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -26,6 +27,8 @@ namespace mir
     inline constexpr std::string_view kTerrainCurrentPointerFileName = "current";
 
     std::string TerrainIdHex(uint64_t value);
+    // Exactly 16 lowercase hex digits; 0 is accepted.
+    std::optional<uint64_t> ParseTerrainIdHex(std::string_view text);
     std::filesystem::path TerrainAssetReleasesDir(const std::filesystem::path &releasesRoot, AssetId asset);
     std::filesystem::path TerrainReleaseDir(const std::filesystem::path &releasesRoot, AssetId asset,
                                             TerrainReleaseId release);

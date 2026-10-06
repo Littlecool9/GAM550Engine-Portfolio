@@ -69,7 +69,10 @@ namespace mir::detail
     template <typename T>
     TerrainResult<T> Failure(TerrainPackError error, std::string_view prefix)
     {
-        return Failure<T>(error.code, std::string(prefix) + error.message);
+        error.message.insert(0, prefix);
+        TerrainResult<T> result;
+        result.error = std::move(error);
+        return result;
     }
 
     uint64_t HeightsHashOf(std::span<const TerrainTileRecord> records);
