@@ -201,6 +201,38 @@ namespace mir
         return tile;
     }
 
+    TerrainResult<std::vector<std::byte>> TerrainReleaseHandle::ReadPayload(const TerrainTileRecord &input) const
+    {
+        using R=std::vector<std::byte>;
+        const auto *record=mIndex->Find(input.tile,input.layer,input.kind,input.level);
+        if(record!=&input)return Fail<R>(Code::InvalidInput,"payload record is not from this index");
+        const auto name=TerrainPackFileName(mIndex->packs[input.pack].chunk);
+        auto bytes=mSource->ReadRange(name,input.offset,static_cast<size_t>(input.length));
+        if(!bytes)return Fail<R>(Code::Io,"cannot read payload range in {}",name);
+        if(bytes->size()!=input.length||Fnv1a64(*bytes)!=input.checksum)return Fail<R>(Code::Corrupt,"payload checksum/length differs");
+        return {std::move(bytes),{}};
+    }
+
+    TerrainResult<TerrainLodSurface> TerrainReleaseHandle::ReadLod(const TileKey &key,uint32_t layer) const
+    {
+        if(key.asset!=Info().asset)return Fail<TerrainLodSurface>(Code::WrongIdentity,"wrong asset");
+        const auto *source=mIndex->Find(key.coord);
+        const auto *record=source&&layer>=source->layer?mIndex->Find(key.coord,layer,TerrainPayloadKind::LodHeight,layer-source->layer):nullptr;
+        if(!record)return Fail<TerrainLodSurface>(Code::NotFound,"LOD key is absent");
+        auto bytes=ReadPayload(*record);if(!bytes)return Failure<TerrainLodSurface>(bytes.error,"");
+        return DecodeTerrainLod(*mIndex,*record,*bytes.value);
+    }
+
+    TerrainResult<TerrainLodNormals> TerrainReleaseHandle::ReadNormals(const TileKey &key,uint32_t layer) const
+    {
+        if(key.asset!=Info().asset)return Fail<TerrainLodNormals>(Code::WrongIdentity,"wrong asset");
+        const auto *source=mIndex->Find(key.coord);
+        const auto *record=source&&layer>=source->layer?mIndex->Find(key.coord,layer,TerrainPayloadKind::Normal,layer-source->layer):nullptr;
+        if(!record)return Fail<TerrainLodNormals>(Code::NotFound,"normal key is absent");
+        auto bytes=ReadPayload(*record);if(!bytes)return Failure<TerrainLodNormals>(bytes.error,"");
+        return DecodeTerrainNormals(*mIndex,*record,*bytes.value);
+    }
+
     TerrainPackError TerrainReleaseHandle::VerifyAllPacks() const
     {
         const TerrainIndex &index = *mIndex;
@@ -243,10 +275,12 @@ namespace mir
                     return Error(Code::Malformed, "{}tile {} starts at {}, inside the {}-byte header", where,
                                  Describe(tile->tile), tile->offset, headerSize);
                 // ParseTerrainIndex already kept every range inside fileSize.
-                const TerrainResult<TileHeights> decoded = DecodeTerrainTile(
-                    index, *tile, all.subspan(static_cast<size_t>(tile->offset), static_cast<size_t>(tile->length)));
-                if (!decoded)
-                    return {decoded.error.code, where + decoded.error.message};
+                const auto payload=all.subspan(static_cast<size_t>(tile->offset),static_cast<size_t>(tile->length));
+                TerrainPackError error;
+                if(tile->kind==TerrainPayloadKind::Height) error=DecodeTerrainTile(index,*tile,payload).error;
+                else if(tile->kind==TerrainPayloadKind::LodHeight) error=DecodeTerrainLod(index,*tile,payload).error;
+                else if(tile->kind==TerrainPayloadKind::Normal) error=DecodeTerrainNormals(index,*tile,payload).error;
+                if(error.code!=Code::None)return {error.code,where+error.message};
             }
         }
         return {};

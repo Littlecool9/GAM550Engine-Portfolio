@@ -125,11 +125,13 @@ TEST_CASE("A bake writes exactly the release files and a manifest, then nothing 
     REQUIRE(report.release);
     CHECK(report.release->asset == MakeAssetId(ExampleAssetPath()));
     CHECK(report.assetPath == ExampleAssetPath());
-    CHECK(report.heightsHash == kExampleHeightsHash);
     CHECK(report.nonce == kNonce);
     CHECK(report.surfaceVersion == kTerrainSurfaceVersion);
     CHECK(report.candidateDir == out);
-    REQUIRE(report.tiles.size() == 4);
+    REQUIRE(report.tiles.size() == 24);
+    CHECK(std::count_if(report.tiles.begin(), report.tiles.end(), [](const auto &t) { return t.source; }) == 4);
+    CHECK(std::count_if(report.tiles.begin(), report.tiles.end(), [](const auto &t) { return t.kind == 1; }) == 8);
+    CHECK(std::count_if(report.tiles.begin(), report.tiles.end(), [](const auto &t) { return t.kind == 2; }) == 8);
     for (const TerrainTileSummary &tile : report.tiles)
         CHECK(tile.readable);
     REQUIRE(report.files.size() == 5);
@@ -155,6 +157,16 @@ TEST_CASE("A bake writes exactly the release files and a manifest, then nothing 
         TerrainReleaseHandle::Open(std::make_shared<TerrainFileSource>(out));
     REQUIRE(opened);
     CHECK(opened.value->Info() == *report.release);
+    CHECK(opened.value->Index().heightsHash == report.heightsHash);
+    std::vector<TileHeights> sources;
+    for (const auto &record : opened.value->Index().tiles)
+        if (record.source)
+        {
+            auto tile = opened.value->ReadTileRecord(record);
+            REQUIRE(tile);
+            sources.push_back(std::move(*tile.value));
+        }
+    CHECK(TerrainHeightsHash(LoadExample().layout, sources) == kExampleHeightsHash);
 }
 
 TEST_CASE("A bake refuses an existing non-empty directory and leaves it as it was", "[terraintool][bake]")

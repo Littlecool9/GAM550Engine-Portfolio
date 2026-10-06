@@ -92,7 +92,10 @@ TEST_CASE("Publish copies only the release files and moves current last", "[terr
     CHECK_FALSE(report.publish->previous);
     CHECK(report.publish->current == id);
     CHECK(report.release->release == id);
-    CHECK(report.tiles.size() == 4);
+    REQUIRE(report.tiles.size() == 24);
+    CHECK(std::count_if(report.tiles.begin(), report.tiles.end(), [](const auto &t) { return t.source; }) == 4);
+    CHECK(std::count_if(report.tiles.begin(), report.tiles.end(), [](const auto &t) { return t.kind == 1; }) == 8);
+    CHECK(std::count_if(report.tiles.begin(), report.tiles.end(), [](const auto &t) { return t.kind == 2; }) == 8);
 
     const fs::path assetDir = TerrainAssetReleasesDir(releases, ExampleAsset());
     std::vector<std::string> names{TerrainIdHex(id.value), "current"};

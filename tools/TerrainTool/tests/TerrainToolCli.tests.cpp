@@ -140,13 +140,15 @@ TEST_CASE("TerrainTool bake writes a validated 2x2 candidate and a structured re
     CHECK(report.at("layout").at("sampleSpacing") == 4.0);
     CHECK(report.at("layout").at("intervalsPerTile") == 64);
 
-    REQUIRE(report.at("tiles").size() == 4);
-    Json coords = Json::array();
+    REQUIRE(report.at("tiles").size() == 24);
+    Json coords = Json::array();size_t lodCount=0,normalCount=0;
     for (const Json &tile : report.at("tiles"))
     {
-        coords.push_back(tile.at("tile"));
+        if(tile.at("source").get<bool>())coords.push_back(tile.at("tile"));
+        lodCount+=tile.at("kind")==1;normalCount+=tile.at("kind")==2;
         CHECK(tile.at("readable") == true);
     }
+    CHECK(lodCount==8);CHECK(normalCount==8);
     CHECK(Text(coords) == Tiles({{-1, -1}, {0, -1}, {-1, 0}, {0, 0}}));
     CHECK(report.at("files").size() == 5);
     for (const Json &c : report.at("checks"))
@@ -247,9 +249,12 @@ TEST_CASE("TerrainTool fails bad recipes and damaged candidates with tiles and f
         const Json report = ReadJson(reportPath);
         CHECK(report.at("ok") == false);
         const std::vector<Json> coverage = DiagnosticsOf(report, "coverage");
-        REQUIRE(coverage.size() == 1);
-        CHECK(Text(coverage[0].at("tiles")) == Tiles({{-1, 0}}));
-        CHECK(coverage[0].at("field") == "chunk_-1_0.tpack");
+        REQUIRE(coverage.size() == 6);
+        for(const auto &diagnostic:coverage)
+        {
+            CHECK(Text(diagnostic.at("tiles")) == Tiles({{-1, 0}}));
+            CHECK(diagnostic.at("field") == "chunk_-1_0.tpack");
+        }
         CHECK(CheckStatusOf(report, "edges") == "skipped");
     }
     SECTION("corrupt payload")
@@ -269,7 +274,7 @@ TEST_CASE("TerrainTool fails bad recipes and damaged candidates with tiles and f
     }
     SECTION("non-finite height")
     {
-        REQUIRE(Run(BakeArgs(baked, scratch.path / "bake.json")) == 0);
+        WriteCraftedCandidate(baked, [](std::vector<TileHeights> &) {});
         PatchSampleSealed(baked, {-1, -1}, 40, 3, std::numeric_limits<float>::infinity());
         CHECK(Run(ValidateArgs(baked, reportPath)) == 1);
         const Json report = ReadJson(reportPath);

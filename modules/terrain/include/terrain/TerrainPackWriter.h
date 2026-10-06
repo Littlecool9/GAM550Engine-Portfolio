@@ -51,12 +51,25 @@ namespace mir
         uint32_t layer = 0;
         bool source = true;
         std::optional<double> maxDeviation;
+        uint64_t sourceChecksum = 0;
     };
 
     TerrainResult<TerrainEncodedRelease> EncodeTerrainRelease(const TerrainReleaseInfo &info,
                                                               std::span<const TerrainLayout> layers,
                                                               std::span<const TerrainTileWrite> tiles,
                                                               const TerrainPackWriteOptions &options = {});
+
+    struct TerrainPayloadWrite
+    {
+        TerrainTileRecord record;
+        std::vector<std::byte> bytes;
+    };
+
+    TerrainResult<TerrainEncodedRelease> EncodeTerrainRelease(const TerrainReleaseInfo &info,
+        std::span<const TerrainLayout> layers, std::span<const TerrainTileWrite> tiles,
+        std::span<const TerrainPayloadWrite> derived, const TerrainPackWriteOptions &options = {});
+    uint64_t TerrainPayloadsHash(std::span<const TerrainLayout> layers, std::span<const TerrainTileWrite> tiles,
+                                std::span<const TerrainPayloadWrite> derived);
 
     uint64_t TerrainHeightsHash(std::span<const TerrainLayout> layers,
                                 std::span<const TerrainTileWrite> tiles);

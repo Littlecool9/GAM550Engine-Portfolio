@@ -45,7 +45,7 @@ TEST_CASE("A release round trips every tile through its index and pack", "[terra
     REQUIRE(encoded.packs.size() == 1);
     CHECK(encoded.packs[0].fileName == "chunk_-1_-1.tpack");
     // 128 header + 32 pack + 4 * 120 payloads + 16 layer + 8 trailer; 48 header + 4 payloads of 65^2 floats, 16-aligned.
-    CHECK(encoded.index.size() == 664);
+    CHECK(encoded.index.size() == 760);
     CHECK(encoded.packs[0].bytes.size() == 48 + 3 * 16912 + 16900);
 
     auto [source, handle] = OpenInMemory(encoded);

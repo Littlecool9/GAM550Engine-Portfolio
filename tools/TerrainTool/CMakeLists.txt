@@ -5,6 +5,7 @@ add_library(terrain_bake STATIC
     TerrainBake.cpp
     TerrainCandidate.cpp
     TerrainContinuity.cpp
+    TerrainDerivatives.cpp
     TerrainMixedContinuity.cpp
     TerrainGenerator.cpp
     TerrainNoise.cpp
@@ -29,6 +30,7 @@ if(BUILD_TESTING)
     add_executable(terrain_tool_tests
         tests/TerrainBake.tests.cpp
         tests/TerrainGenerator.tests.cpp
+        tests/TerrainDerivatives.tests.cpp
         tests/TerrainPackage.tests.cpp
         tests/TerrainPrecision.tests.cpp
         tests/TerrainPublish.tests.cpp

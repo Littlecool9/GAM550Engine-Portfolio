@@ -212,7 +212,7 @@ TEST_CASE("The committed fixture opens unchanged and matches the encoder byte fo
     CHECK(ReadOk(handle, {-1, -1}) == tiles[1]);
     CHECK(handle.Source().Stats().reads == 1);
     CHECK(handle.Source().Stats().bytes == 100);
-    CHECK(encoded.index.size() == 1240);
+    CHECK(encoded.index.size() == 1432);
     for (const TerrainEncodedPack &pack : encoded.packs)
         CHECK(pack.bytes.size() == 260);
 }

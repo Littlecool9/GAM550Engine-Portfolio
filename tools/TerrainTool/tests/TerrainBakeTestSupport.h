@@ -277,6 +277,8 @@ namespace mir::terrainbake::test
         std::vector<TileHeights> tiles;
         for (const TerrainTileRecord &record : handle.Index().tiles)
         {
+            if (record.kind != TerrainPayloadKind::Height)
+                continue;
             TerrainResult<TileHeights> tile = handle.ReadTileRecord(record);
             REQUIRE(tile);
             tiles.push_back(std::move(*tile.value));

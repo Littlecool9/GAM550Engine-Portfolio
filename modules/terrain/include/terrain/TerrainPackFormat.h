@@ -24,24 +24,26 @@
 namespace mir
 {
     // Format 2 only. LE index: 128-byte header, pack table, payload table,
-    // layer table, extension bytes, FNV64 trailer. Header fields through 112
+    // layer table, extension bytes, FNV64 trailer. Minor 1 appends derived provenance.
+    // Header fields through 112
     // retain their offsets; 120/124 are layer count/record size (16 bytes).
     // Layer: spacing f64, intervals i32, reserved u32. Payload fields 0..87
     // retain their offsets; 88 layer, 92 kind, 96 level, 100 source flag,
-    // 104 hasDeviation, 108 reserved, 112 deviation f64 (120 bytes total).
+    // 104 hasDeviation, 108 reserved, 112 deviation f64; minor 1 adds sourceChecksum
+    // u64 at 120, topologyHash u64 at 128, vertex/index counts u32 at 136/140.
     // Keys sort by (z, x, kind, level, layer). Every tile has one finest
-    // Height source. Height, LodHeight, Normal and Region keys are reserved;
-    // this reader decodes Height only. Unknown kinds fail, never get skipped.
+    // Height source. Height is a regular float grid; LodHeight and Normal use typed v1 headers.
+    // Region stays reserved. Unknown kinds fail, never get skipped.
     // New content may extend these keys in a minor without changing addressing.
     inline constexpr TerrainFormatVersion kTerrainFormatVersion{2};
-    inline constexpr uint32_t kTerrainFormatMinor = 0;
+    inline constexpr uint32_t kTerrainFormatMinor = 1;
 
     // Payload: (n + 1)^2 float32 in TileHeights order. A new encoding bumps this, not the format.
     inline constexpr uint32_t kTerrainHeightsContentVersion = 1;
 
     inline constexpr uint32_t kTerrainIndexHeaderSize = 128;
     inline constexpr uint32_t kTerrainPackRecordSize = 32;
-    inline constexpr uint32_t kTerrainTileRecordSize = 120;
+    inline constexpr uint32_t kTerrainTileRecordSize = 144;
     inline constexpr uint32_t kTerrainLayerRecordSize = 16;
     inline constexpr uint32_t kTerrainPackHeaderSize = 48;
     inline constexpr uint32_t kTerrainIndexTrailerSize = 8;
@@ -105,6 +107,10 @@ namespace mir
         uint32_t level = 0;
         bool source = true;
         std::optional<double> maxDeviation;
+        uint64_t sourceChecksum = 0;
+        uint64_t topologyHash = 0;
+        uint32_t vertexCount = 0;
+        uint32_t indexCount = 0;
     };
 
     enum class TerrainPackErrorCode : uint8_t

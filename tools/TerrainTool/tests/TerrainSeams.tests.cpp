@@ -63,12 +63,12 @@ namespace
     TerrainSourceFingerprint BeforeSeamFingerprint(const TerrainRecipe &r)
     {
         auto text = CanonicalRecipeText(r);
-        for (const std::string prefix : {"finalSeams.version=", "finalSeams.bandMultiplier=", "finalSeams.weight="})
+        for (const std::string prefix : {"finalSeams.version=", "finalSeams.bandMultiplier=", "finalSeams.weight=", "derivatives.version=", "derivatives.maxSpacing="})
         {
             const auto pos = text.find(prefix); REQUIRE(pos != std::string::npos);
             text.erase(pos, text.find('\n', pos) - pos + 1);
         }
-        const auto pos = text.find("canonicalVersion=3"); REQUIRE(pos != std::string::npos);
+        const auto pos = text.find("canonicalVersion=4"); REQUIRE(pos != std::string::npos);
         text.replace(pos, 18, "canonicalVersion=2");
         return TerrainSourceFingerprint(Fnv1a64(text));
     }
@@ -240,11 +240,11 @@ TEST_CASE("Seam algorithm is in v2 identity and prototype settings cannot publis
     CHECK(canonical.find("finalSeams.version=1") != std::string::npos);
     CHECK(canonical.find("finalSeams.weight=smoothstep") != std::string::npos);
     auto old = canonical;
-    for (const std::string prefix : {"finalSeams.version=", "finalSeams.bandMultiplier=", "finalSeams.weight="})
+    for (const std::string prefix : {"finalSeams.version=", "finalSeams.bandMultiplier=", "finalSeams.weight=", "derivatives.version=", "derivatives.maxSpacing="})
     {
         const auto pos = old.find(prefix); REQUIRE(pos != std::string::npos); old.erase(pos, old.find('\n', pos) - pos + 1);
     }
-    const auto pos = old.find("canonicalVersion=3"); REQUIRE(pos != std::string::npos); old.replace(pos, 18, "canonicalVersion=2");
+    const auto pos = old.find("canonicalVersion=4"); REQUIRE(pos != std::string::npos); old.replace(pos, 18, "canonicalVersion=2");
     CHECK(Fnv1a64(old) != FingerprintRecipe(r).value);
     CHECK(CanonicalRecipeText(LoadExample()).find("finalSeams") == std::string::npos);
     auto tiles = Raw(r); TerrainReport report("prototype", {});

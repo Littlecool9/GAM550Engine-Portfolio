@@ -674,6 +674,8 @@ namespace mir::terrainbake
 
         if (recipe.recipeVersion != 1)
         {
+            fields["derivatives.version"] = "1";
+            fields["derivatives.maxSpacing"] = Bits(8.0);
             fields["finalSeams.version"] = std::to_string(kTerrainSeamVersion);
             fields["finalSeams.bandMultiplier"] = Bits(kTerrainSeamBandMultiplier);
             fields["finalSeams.weight"] = "smoothstep";

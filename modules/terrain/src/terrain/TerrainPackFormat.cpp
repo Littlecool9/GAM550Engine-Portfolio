@@ -145,7 +145,7 @@ namespace mir
             if (h.packRecordSize < kTerrainPackRecordSize || h.packRecordSize % 8 != 0)
                 return Fail<Header>(Code::Malformed, "pack record size {} is invalid (needs >= {}, a multiple of 8)",
                                     h.packRecordSize, kTerrainPackRecordSize);
-            if (h.tileRecordSize < kTerrainTileRecordSize || h.tileRecordSize % 8 != 0)
+            if (h.tileRecordSize < (h.minor == 0 ? 120u : kTerrainTileRecordSize) || h.tileRecordSize % 8 != 0)
                 return Fail<Header>(Code::Malformed, "tile record size {} is invalid (needs >= {}, a multiple of 8)",
                                     h.tileRecordSize, kTerrainTileRecordSize);
 
@@ -181,7 +181,7 @@ namespace mir
             return r;
         }
 
-        TerrainTileRecord ReadTileRecord(std::span<const std::byte> b, size_t at)
+        TerrainTileRecord ReadTileRecord(std::span<const std::byte> b, size_t at, uint32_t size)
         {
             TerrainTileRecord r;
             r.tile = {LoadI32(b, at), LoadI32(b, at + 4)};
@@ -200,6 +200,11 @@ namespace mir
             r.source = LoadU32(b, at + 100) != 0;
             if (LoadU32(b, at + 104) != 0)
                 r.maxDeviation = LoadF64(b, at + 112);
+            if (size >= 144)
+            {
+                r.sourceChecksum = LoadU64(b, at + 120); r.topologyHash = LoadU64(b, at + 128);
+                r.vertexCount = LoadU32(b, at + 136); r.indexCount = LoadU32(b, at + 140);
+            }
             return r;
         }
 
@@ -227,7 +232,7 @@ namespace mir
                 return Error(Code::Malformed, "tile {}: {} samples per side at spacing {}, the layout has {} at {}",
                              tile, r.samplesPerSide, r.sampleSpacing, side, layout.SampleSpacing());
             const uint64_t length = uint64_t(side) * uint64_t(side) * sizeof(float);
-            if (r.length != length)
+            if (r.kind == TerrainPayloadKind::Height && r.length != length)
                 return Error(Code::Malformed, "tile {}: payload length {} should be {}", tile, r.length, length);
             if (r.offset % h.alignment != 0)
                 return Error(Code::Malformed, "tile {}: offset {} is not a multiple of the payload alignment {}", tile,
@@ -243,9 +248,21 @@ namespace mir
             if (!std::isfinite(r.minHeight) || !std::isfinite(r.maxHeight) || r.minHeight > r.maxHeight)
                 return Error(Code::Malformed, "tile {}: height range [{}, {}] is invalid", tile, r.minHeight,
                              r.maxHeight);
-            if (r.kind != TerrainPayloadKind::Height || r.level != 0)
-                return Error(Code::Unsupported, "tile {}: payload kind {} level {} is not decoded by this reader",
-                             tile, static_cast<uint32_t>(r.kind), r.level);
+            if (r.kind == TerrainPayloadKind::Region || static_cast<uint32_t>(r.kind) > 3)
+                return Error(Code::Unsupported, "tile {}: unsupported payload kind", tile);
+            if (r.kind == TerrainPayloadKind::Height)
+            {
+                if (r.level != 0 || (r.source && r.sourceChecksum) || r.topologyHash || r.vertexCount || r.indexCount)
+                    return Error(Code::Malformed, "tile {}: regular Height has derived topology fields", tile);
+            }
+            else
+            {
+                const uint64_t expected = 80ull + uint64_t(r.vertexCount)*12 +
+                    (r.kind == TerrainPayloadKind::LodHeight ? uint64_t(r.indexCount)*4 : 0);
+                if (h.minor < 1 || r.source || !r.maxDeviation || r.vertexCount < 4 || r.indexCount < 6 ||
+                    r.indexCount % 3 || r.length != expected)
+                    return Error(Code::Malformed, "tile {}: derived count/source/length/error fields invalid", tile);
+            }
             if (r.maxDeviation && (!std::isfinite(*r.maxDeviation) || *r.maxDeviation < 0.0))
                 return Error(Code::Malformed, "tile {}: layer {} deviation is invalid", tile, r.layer);
             if (!layout.Contains(r.tile))
@@ -278,6 +295,7 @@ namespace mir
                 out.U32(r.maxDeviation ? 1 : 0);
                 out.F64(r.maxDeviation.value_or(0.0));
                 out.U64(r.checksum);
+                if(r.sourceChecksum)out.U64(r.sourceChecksum);
             }
             return Fnv1a64(bytes);
         }
@@ -404,7 +422,7 @@ namespace mir
         for (uint32_t t = 0; t < h.tileCount; ++t)
         {
             TerrainTileRecord &r = tiles[t];
-            r = ReadTileRecord(bytes, tileTable + size_t(t) * h.tileRecordSize);
+            r = ReadTileRecord(bytes, tileTable + size_t(t) * h.tileRecordSize, h.tileRecordSize);
             if (r.layer >= layers.size())
                 return Fail<R>(Code::Malformed, "tile record {} {}: unknown layer {}", t, Describe(r.tile), r.layer);
             if (t > 0 && !(RecordKey(tiles[t - 1]) < RecordKey(r)))
@@ -418,9 +436,9 @@ namespace mir
                 return detail::Failure<R>(checked, "");
             const size_t mapTile = size_t(int64_t(r.tile.z) - range.min.z) * width +
                                    size_t(int64_t(r.tile.x) - range.min.x);
-            if (r.source && ++sources[mapTile] > 1)
+            if (r.source && (r.kind != TerrainPayloadKind::Height || ++sources[mapTile] > 1))
                 return Fail<R>(Code::Malformed, "tile {} has two source records", Describe(r.tile));
-            finest[mapTile] = std::min(finest[mapTile], r.layer);
+            if (r.kind == TerrainPayloadKind::Height) finest[mapTile] = std::min(finest[mapTile], r.layer);
             ++tilesPerPack[r.pack];
         }
 
@@ -434,6 +452,25 @@ namespace mir
         for (const auto &r : tiles)
         {
             const size_t t = size_t(int64_t(r.tile.z) - range.min.z) * width + size_t(int64_t(r.tile.x) - range.min.x);
+            if (r.kind != TerrainPayloadKind::Height || r.sourceChecksum)
+            {
+                auto begin = std::lower_bound(tiles.begin(),tiles.end(),r.tile,[](const auto &v,TileCoord tile){
+                    return detail::LessZX(v.tile.x,v.tile.z,tile.x,tile.z);});
+                auto end = begin;while(end!=tiles.end()&&end->tile==r.tile)++end;
+                const auto source = std::find_if(begin,end,[](const auto &v){return v.source;});
+                if (source == end || r.sourceChecksum != source->checksum || r.layer < source->layer ||
+                    (r.kind != TerrainPayloadKind::Height && r.level != r.layer - source->layer))
+                    return Fail<R>(Code::Malformed, "derived source checksum/spacing/level differs");
+                if (r.kind == TerrainPayloadKind::Normal)
+                {
+                    auto mesh = std::find_if(begin, end, [&](const auto &v) {
+                        return v.tile==r.tile && v.layer==r.layer && v.level==r.level && v.kind==TerrainPayloadKind::LodHeight; });
+                    if (mesh==end || mesh->topologyHash!=r.topologyHash || mesh->vertexCount!=r.vertexCount ||
+                        mesh->indexCount!=r.indexCount || mesh->maxDeviation!=r.maxDeviation ||
+                        mesh->minHeight!=r.minHeight || mesh->maxHeight!=r.maxHeight)
+                        return Fail<R>(Code::Malformed, "normal topology/count/range differs from LOD record");
+                }
+            }
             if (r.source && r.layer != finest[t])
                 return Fail<R>(Code::Malformed, "tile {} source layer {} is not its finest baked layer {}",
                                Describe(r.tile), r.layer, finest[t]);

@@ -99,8 +99,11 @@ TEST_CASE("Explicit source defaults fill only unassigned tiles", "[terraintool][
     const auto baked = BakeMixed(recipe);
     const auto index = ParseTerrainIndex(baked.encoded.index);
     REQUIRE(index);
-    CHECK(index.value->tiles.size() == 4);
-    CHECK(index.value->layers.size() == 2);
+    CHECK(index.value->tiles.size() == 21);
+    CHECK(std::count_if(index.value->tiles.begin(), index.value->tiles.end(), [](const auto &t) { return t.source; }) == 4);
+    CHECK(std::count_if(index.value->tiles.begin(), index.value->tiles.end(), [](const auto &t) { return t.kind == TerrainPayloadKind::LodHeight; }) == 7);
+    CHECK(std::count_if(index.value->tiles.begin(), index.value->tiles.end(), [](const auto &t) { return t.kind == TerrainPayloadKind::Normal; }) == 7);
+    CHECK(index.value->layers.size() == 4);
     CHECK(index.value->Find({0, -1})->source);
     CHECK(index.value->Find({0, -1})->sampleSpacing == 8.0);
 }
@@ -245,9 +248,10 @@ TEST_CASE("Mixed source grids retain index precision and independent range reads
     auto opened = TerrainReleaseHandle::Open(memory);
     REQUIRE(opened);
     const auto &handle = *opened.value;
-    REQUIRE(handle.Index().tiles.size() == 4);
+    REQUIRE(std::count_if(handle.Index().tiles.begin(),handle.Index().tiles.end(),[](const auto &r){return r.source;}) == 4);
     for (const auto &record : handle.Index().tiles)
     {
+        if(!record.source)continue;
         CHECK(record.source);
         CHECK(record.sampleSpacing == recipe.SourceSpacing(record.tile));
         CHECK(record.samplesPerSide == int32_t(recipe.layout.TileSize() / record.sampleSpacing) + 1);
@@ -352,9 +356,9 @@ TEST_CASE("Source sample estimates follow tile size and do not bake global refer
     const auto baked = BakeMixed(coarse);
     const auto index = ParseTerrainIndex(baked.encoded.index);
     REQUIRE(index);
-    CHECK(index.value->layers.size() == 2);
+    CHECK(index.value->layers.size() == 4);
     for (const auto &record : index.value->tiles)
-        CHECK(record.layer == 1);
+        CHECK(record.layer == 3);
     const TerrainGenerator generator(coarse);
     const auto layout = *coarse.SourceLayout({0, 0});
     std::vector<float> samples(TileSampleCount(layout));
@@ -377,10 +381,16 @@ TEST_CASE("Mixed candidate validation reports source assignment and continuous f
     REQUIRE(report.Ok());
     CHECK(report.Status(check::kEdges) == CheckStatus::Passed);
     CHECK(report.Status(check::kCorners) == CheckStatus::Passed);
-    REQUIRE(report.tiles.size() == 4);
+    REQUIRE(report.tiles.size() == 30);
+    CHECK(std::count_if(report.tiles.begin(), report.tiles.end(), [](const auto &t) { return t.source; }) == 4);
+    CHECK(std::count_if(report.tiles.begin(), report.tiles.end(), [](const auto &t) { return t.kind == 0 && !t.source; }) == 6);
+    CHECK(std::count_if(report.tiles.begin(), report.tiles.end(), [](const auto &t) { return t.kind == 1; }) == 10);
+    CHECK(std::count_if(report.tiles.begin(), report.tiles.end(), [](const auto &t) { return t.kind == 2; }) == 10);
     for (const auto &summary : report.tiles)
     {
-        CHECK(summary.source);
+        if (!summary.source)
+            continue;
+        CHECK(summary.kind == 0);
         CHECK(summary.sourceSpacing == Mixed().SourceSpacing(summary.tile));
         CHECK(summary.payloadSpacing == summary.sourceSpacing);
     }

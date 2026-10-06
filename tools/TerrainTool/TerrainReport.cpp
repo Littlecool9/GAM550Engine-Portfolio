@@ -188,6 +188,10 @@ namespace mir::terrainbake
                                   {"readable", t.readable},
                                   {"sourceSpacing", t.sourceSpacing},
                                   {"payloadSpacing", t.payloadSpacing},
+                                  {"kind", t.kind}, {"level", t.level},
+                                  {"maxDeviation", t.maxDeviation ? nlohmann::json(*t.maxDeviation) : nlohmann::json(nullptr)},
+                                  {"sourceChecksum", TerrainIdHex(t.sourceChecksum)},
+                                  {"topologyHash", TerrainIdHex(t.topologyHash)},
                                   {"samplesPerSide", t.samplesPerSide},
                                   {"layer", t.layer},
                                   {"source", t.source}});

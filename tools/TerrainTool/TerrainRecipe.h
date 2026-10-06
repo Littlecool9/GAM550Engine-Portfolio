@@ -22,7 +22,7 @@ namespace mir::terrainbake
 {
     inline constexpr uint32_t kTerrainRecipeVersion = 2;
     // Bumping it changes every fingerprint.
-    inline constexpr uint32_t kRecipeCanonicalVersion = 3;
+    inline constexpr uint32_t kRecipeCanonicalVersion = 4;
     inline constexpr std::string_view kReliefGeneratorId = "mir.relief";
     // Bump when anything changes the samples.
     inline constexpr uint32_t kReliefGeneratorVersion = 2;

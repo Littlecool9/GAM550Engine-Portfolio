@@ -7,6 +7,8 @@
  *
  */
 #include "TerrainBake.h"
+#include "TerrainDerivatives.h"
+#include <unordered_map>
 
 #include "TerrainGenerator.h"
 #include "TerrainSeams.h"
@@ -230,20 +232,21 @@ namespace mir::terrainbake
                                                           const TerrainRecipe &recipe, std::vector<TileHeights> tiles,
                                                           const TerrainBakeOptions &options, TerrainReport &report)
     {
-        if (recipe.recipeVersion == 1)
-            return EncodeBakedRelease(asset, source, recipe.layout, std::move(tiles), options, report);
-        if (!report.seams)
+        if (recipe.recipeVersion != 1 && !report.seams)
         {
             Fail(report, check::kEncode, "seams", "v2 final heights require a seam summary");
             return std::nullopt;
         }
-        if (report.seams->algorithmVersion != kTerrainSeamVersion ||
-            report.seams->bandMultiplier != kTerrainSeamBandMultiplier || report.seams->weight != "smoothstep" || report.seams->warningThreshold != kTerrainSeamWarningThreshold)
+        if (report.seams && (report.seams->algorithmVersion != kTerrainSeamVersion ||
+            report.seams->bandMultiplier != kTerrainSeamBandMultiplier || report.seams->weight != "smoothstep" || report.seams->warningThreshold != kTerrainSeamWarningThreshold))
         {
             Fail(report, check::kEncode, "seams", "prototype seam options cannot be encoded as a production candidate");
             return std::nullopt;
         }
-        const auto layers = recipe.SourceLayers();
+        std::string derivativeError;
+        auto derivatives=BakeTerrainDerivatives(recipe,tiles,derivativeError);
+        if(!derivatives){Fail(report,check::kEncode,"derivatives",derivativeError);return {};}
+        const auto &layers = derivatives->layers;
         std::vector<TerrainTileWrite> records;
         for (const auto &tile : tiles)
         {
@@ -256,13 +259,18 @@ namespace mir::terrainbake
                 Fail(report, check::kEncode, "precision.tiles", "tile has no assigned source layer");
                 return std::nullopt;
             }
-            records.push_back({&tile, static_cast<uint32_t>(layer - layers.begin()), true, std::nullopt});
+            records.push_back({&tile, static_cast<uint32_t>(layer - layers.begin()), true, 0.0});
         }
-        const uint64_t heightsHash = TerrainHeightsHash(layers, records);
+        std::unordered_map<TileCoord,uint64_t> sourceChecksums;
+        for(const auto &tile:tiles)sourceChecksums.emplace(tile.Tile(),TerrainFinalHeightChecksum(tile));
+        for(size_t i=0;i<derivatives->queryHeights.size();++i)
+            records.push_back({&derivatives->queryHeights[i],derivatives->queryLayers[i],false,derivatives->queryErrors[i],
+                sourceChecksums.at(derivatives->queryHeights[i].Tile())});
+        const uint64_t heightsHash = TerrainPayloadsHash(layers, records, derivatives->payloads);
         const uint64_t nonce = options.nonce ? *options.nonce : MakeTerrainReleaseNonce();
         const TerrainReleaseInfo info{asset, source, kTerrainFormatVersion,
                                       MintTerrainReleaseId(asset, source, heightsHash, nonce)};
-        auto encoded = EncodeTerrainRelease(info, layers, records, options.pack);
+        auto encoded = EncodeTerrainRelease(info, layers, records, derivatives->payloads, options.pack);
         if (!encoded)
         {
             Fail(report, check::kEncode, "", encoded.error.message);

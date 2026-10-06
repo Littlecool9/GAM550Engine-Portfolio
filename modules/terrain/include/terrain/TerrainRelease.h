@@ -11,6 +11,7 @@
 #include <terrain/TerrainByteSource.h>
 #include <terrain/TerrainIdentity.h>
 #include <terrain/TerrainLayout.h>
+#include <terrain/TerrainLod.h>
 #include <terrain/TerrainPackFormat.h>
 #include <terrain/TileHeights.h>
 #include <terrain/TileKey.h>
@@ -58,6 +59,9 @@ namespace mir
         TerrainResult<TileHeights> ReadTile(const TileKey &key) const;
         TerrainResult<TileHeights> ReadTile(const TileKey &key, uint32_t layer) const;
         TerrainResult<TileHeights> ReadTileRecord(const TerrainTileRecord &record) const;
+        TerrainResult<std::vector<std::byte>> ReadPayload(const TerrainTileRecord &record) const;
+        TerrainResult<TerrainLodSurface> ReadLod(const TileKey &key, uint32_t layer) const;
+        TerrainResult<TerrainLodNormals> ReadNormals(const TileKey &key, uint32_t layer) const;
 
     // Reads every pack whole and checks it.
         TerrainPackError VerifyAllPacks() const;
