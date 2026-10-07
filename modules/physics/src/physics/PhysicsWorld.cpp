@@ -16,13 +16,23 @@
 
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
+#include <Jolt/Geometry/AABox.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
+#include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
+#include <glm/geometric.hpp>
+
+#include <algorithm>
+#include <cmath>
 #include <optional>
 #include <utility>
 
@@ -133,6 +143,14 @@ namespace
         return JPH::BodyID(handle.mId);
     }
 
+    static_assert(mir::kHeightFieldHole == JPH::HeightFieldShapeConstants::cNoCollisionValue);
+
+    // Sub shape ids hold 15 bits each of x and z.
+    constexpr uint32_t kMaxHeightFieldSide = 32768;
+
+    // Covers resting contact plus Jolt's 2 cm speculative distance.
+    constexpr float kWakeMargin = 0.1f;
+
     JPH::RVec3 OffsetToWorldPoint(const JPH::BodyInterface &bodies, JPH::BodyID id,
         const glm::vec3 &localOffset)
     {
@@ -163,15 +181,16 @@ namespace mir
         }
 
         BodyHandle CreateBody(const JPH::Shape *shape, WorldPosition position,
-            const glm::quat &rotation, bool dynamic)
+            const glm::quat &rotation, bool dynamic, bool enhancedInternalEdgeRemoval = false)
         {
             const JPH::RefConst<JPH::Shape> owned(shape);
 
-            const JPH::BodyCreationSettings settings(owned,
+            JPH::BodyCreationSettings settings(owned,
                 ToJolt(position),
                 ToJolt(rotation),
                 dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
                 dynamic ? Layers::kMoving : Layers::kNonMoving);
+            settings.mEnhancedInternalEdgeRemoval = enhancedInternalEdgeRemoval;
 
             const JPH::BodyID id = mSystem.GetBodyInterface().CreateAndAddBody(settings,
                 dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
@@ -202,6 +221,7 @@ namespace mir
 
         int mCollisionSteps = 1;
         bool mBroadPhaseDirty = false;
+        std::size_t mHeightFieldsBuilt = 0;
     };
 
     PhysicsWorld::PhysicsWorld(const PhysicsWorldDesc &desc)
@@ -259,6 +279,78 @@ namespace mir
         return mImpl->CreateBody(new JPH::SphereShape(radius), position, rotation, true);
     }
 
+    BodyHandle PhysicsWorld::CreateStaticHeightField(const HeightFieldDesc &desc)
+    {
+        const uint32_t stride = desc.mSampleStride;
+        if (desc.mCountX < 2 || desc.mCountZ < 2 ||
+            desc.mSamples.size() != static_cast<std::size_t>(desc.mCountX) * desc.mCountZ)
+        {
+            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: needs countX * countZ samples, at least 2 x 2");
+            return {};
+        }
+        if (stride == 0 || (desc.mCountX - 1) % stride != 0 || (desc.mCountZ - 1) % stride != 0)
+        {
+            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: count - 1 must be a multiple of the sample stride");
+            return {};
+        }
+        const float spacing = desc.mSpacing * static_cast<float>(stride);
+        if (!(desc.mSpacing > 0.0f) || !std::isfinite(spacing))
+        {
+            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: spacing must be positive and finite");
+            return {};
+        }
+        // Jolt 5.5's triangle walk breaks from block size 3 (terrain ADR 0017).
+        if ((desc.mBlockSize != 2 && desc.mBlockSize != 4) || desc.mBitsPerSample < 1 || desc.mBitsPerSample > 8)
+        {
+            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: block size must be 2 or 4, bits per sample in [1, 8]");
+            return {};
+        }
+
+        const uint32_t columns = (desc.mCountX - 1) / stride + 1;
+        const uint32_t rows = (desc.mCountZ - 1) / stride + 1;
+        // Jolt's square is at least two blocks; every added sample is a hole.
+        const uint32_t side = std::max({columns, rows, 2 * desc.mBlockSize});
+        if (side > kMaxHeightFieldSide - kMaxHeightFieldSide % desc.mBlockSize)
+        {
+            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: {} x {} samples exceed Jolt's {} per side",
+                columns, rows, kMaxHeightFieldSide);
+            return {};
+        }
+
+        JPH::HeightFieldShapeSettings settings;
+        settings.mScale = JPH::Vec3(spacing, 1.0f, spacing);
+        settings.mSampleCount = side;
+        settings.mBlockSize = desc.mBlockSize;
+        settings.mBitsPerSample = desc.mBitsPerSample;
+        settings.mHeightSamples.resize(static_cast<std::size_t>(side) * side, kHeightFieldHole);
+        for (uint32_t z = 0; z < rows; ++z)
+        {
+            for (uint32_t x = 0; x < columns; ++x)
+            {
+                const float height = desc.mSamples[static_cast<std::size_t>(z) * stride * desc.mCountX +
+                                                  static_cast<std::size_t>(x) * stride];
+                if (!std::isfinite(height))
+                {
+                    MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: sample ({}, {}) is not finite",
+                        x * stride, z * stride);
+                    return {};
+                }
+                settings.mHeightSamples[static_cast<std::size_t>(z) * side + x] = height;
+            }
+        }
+
+        const JPH::ShapeSettings::ShapeResult result = settings.Create();
+        if (result.HasError())
+        {
+            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: {}", result.GetError().c_str());
+            return {};
+        }
+
+        ++mImpl->mHeightFieldsBuilt;
+        // Without it a sphere rolling on a planar field hops up to 2.4 cm off internal edges.
+        return mImpl->CreateBody(result.Get(), desc.mOrigin, kIdentityRotation, false, true);
+    }
+
     void PhysicsWorld::DestroyBody(BodyHandle body)
     {
         if (!body.IsValid())
@@ -270,8 +362,14 @@ namespace mir
         if (!bodies.IsAdded(id))
             return;
 
+        // Jolt's removal wakes nothing.
+        JPH::AABox bounds = bodies.GetTransformedShape(id).GetWorldSpaceBounds();
+        bounds.ExpandBy(JPH::Vec3::sReplicate(kWakeMargin));
+
         bodies.RemoveBody(id);
         bodies.DestroyBody(id);
+
+        bodies.ActivateBodiesInAABox(bounds, {}, {});
     }
 
     std::optional<WorldPosition> PhysicsWorld::BodyPosition(BodyHandle body) const
@@ -411,6 +509,60 @@ namespace mir
         const JPH::BodyID id = ToBodyId(body);
 
         bodies.AddImpulse(id, ToJolt(impulse), OffsetToWorldPoint(bodies, id, localOffset));
+    }
+
+    std::optional<RayHit> PhysicsWorld::RayCast(WorldPosition origin, const glm::vec3 &direction,
+        float maxDistance) const
+    {
+        const float length = glm::length(direction);
+        const glm::vec3 span = direction * (maxDistance / length);
+        if (!(maxDistance > 0.0f) || !(length > 0.0f) || !std::isfinite(span.x) || !std::isfinite(span.y) ||
+            !std::isfinite(span.z))
+            return std::nullopt;
+
+        const JPH::RRayCast ray(ToJolt(origin), ToJolt(span));
+        JPH::RayCastResult hit;
+        if (!mImpl->mSystem.GetNarrowPhaseQuery().CastRay(ray, hit))
+            return std::nullopt;
+
+        // origin + fraction * span: the float product is added in world precision
+        const JPH::RVec3 point = ray.GetPointOnRay(hit.mFraction);
+        const std::optional<WorldPosition> position = PositionFromJolt(point);
+        if (!position)
+            return std::nullopt;
+
+        RayHit result;
+        result.mBody = BodyHandle{ hit.mBodyID.GetIndexAndSequenceNumber() };
+        result.mPoint = *position;
+        result.mDistance = hit.mFraction * maxDistance;
+
+        const JPH::BodyLockRead lock(mImpl->mSystem.GetBodyLockInterface(), hit.mBodyID);
+        if (lock.Succeeded())
+            result.mNormal = FromJolt(lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, point));
+
+        return result;
+    }
+
+    std::optional<HeightFieldInfo> PhysicsWorld::HeightFieldInfoOf(BodyHandle body) const
+    {
+        if (!body.IsValid())
+            return std::nullopt;
+
+        const JPH::BodyLockRead lock(mImpl->mSystem.GetBodyLockInterface(), ToBodyId(body));
+        if (!lock.SucceededAndIsInBroadPhase())
+            return std::nullopt;
+
+        const JPH::Shape *shape = lock.GetBody().GetShape();
+        if (shape->GetSubType() != JPH::EShapeSubType::HeightField)
+            return std::nullopt;
+
+        const auto *field = static_cast<const JPH::HeightFieldShape *>(shape);
+        return HeightFieldInfo{ field->GetSampleCount(), field->GetStats().mSizeBytes };
+    }
+
+    std::size_t PhysicsWorld::HeightFieldsBuilt() const
+    {
+        return mImpl->mHeightFieldsBuilt;
     }
 
     std::size_t PhysicsWorld::BodyCount() const

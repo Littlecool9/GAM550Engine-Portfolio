@@ -404,7 +404,14 @@ namespace mir
         {
             const float h = LoadF32(payload, s * sizeof(float));
             if (!std::isfinite(h))
-                return Fail<R>(Code::Corrupt, "tile {}: sample ({}, {}) is not finite", tile, s % side, s / side);
+            {
+                TerrainResult<R> bad =
+                    Fail<R>(Code::Corrupt, "tile {}: sample ({}, {}) is not finite", tile, s % side, s / side);
+                bad.error.nonFiniteSample =
+                    GlobalSampleIndex{index.layout.TileFirstSample(record.tile.x) + int64_t(s % side),
+                                      index.layout.TileFirstSample(record.tile.z) + int64_t(s / side)};
+                return bad;
+            }
             lo = std::min(lo, h);
             hi = std::max(hi, h);
             samples[s] = h;
