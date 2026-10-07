@@ -341,6 +341,81 @@ TEST_CASE("SaveScene writes an unset EntityRef as kNullStableId, and it loads ba
     CHECK(resolved.IsNull());
 }
 
+TEST_CASE("SaveScene writes an EntityRef leaving the scene as null, not a live handle", "[scene]")
+{
+    mir::RegisterCoreComponents();
+    const ComponentOps &sceneRefOps = SceneRefOps();
+
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity outside = world.CreateEntity(); // alive, but not in the scene
+    Entity referrer = CreateSceneEntity(world, scene);
+    sceneRefOps.AddDefault(world, referrer);
+    sceneRefOps.FindField("target")->Write(sceneRefOps.GetComponent(world, referrer), &outside);
+
+    TempSceneDir dir("entity_ref_outside");
+    REQUIRE(mir::SaveScene(world, dir.mPath, scene));
+
+    std::ifstream file(dir.mPath / "entities" / "1.json");
+    REQUIRE(file);
+    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    CHECK(text.find("\"entity\"") == std::string::npos);
+}
+
+TEST_CASE("LoadScene does not resolve a live-handle EntityRef", "[scene]")
+{
+    mir::RegisterCoreComponents();
+    const ComponentOps &sceneRefOps = SceneRefOps();
+
+    World loadedWorld;
+    const Entity live = loadedWorld.CreateEntity();
+
+    TempSceneDir dir("entity_ref_live_handle");
+    std::filesystem::create_directories(dir.mPath / "entities");
+    {
+        std::ofstream manifest(dir.mPath / "scene.json");
+        manifest << R"({"name":"test","nextId":2,"entities":[1]})";
+    }
+    {
+        std::ofstream entityFile(dir.mPath / "entities" / "1.json");
+        entityFile << R"({"id":1,"parent":0,"components":[{"type":"SceneIOTestRef","fields":{"target":{"entity":)"
+                   << mir::PackEntity(live) << "}}}]}";
+    }
+
+    LoadedScene loaded = mir::LoadScene(loadedWorld, dir.mPath);
+
+    Entity resolved{};
+    resolved.mIndex = 0; // poison, so a no-op Write would be caught
+    sceneRefOps.FindField("target")->Read(sceneRefOps.GetComponent(loadedWorld, loaded.mEntities.at(1)), &resolved);
+    CHECK(resolved.IsNull());
+}
+
+TEST_CASE("LoadScene loads a non-integer EntityRef as null instead of throwing", "[scene]")
+{
+    mir::RegisterCoreComponents();
+    const ComponentOps &sceneRefOps = SceneRefOps();
+
+    TempSceneDir dir("entity_ref_not_integer");
+    std::filesystem::create_directories(dir.mPath / "entities");
+    {
+        std::ofstream manifest(dir.mPath / "scene.json");
+        manifest << R"({"name":"test","nextId":2,"entities":[1]})";
+    }
+    {
+        std::ofstream entityFile(dir.mPath / "entities" / "1.json");
+        entityFile << R"({"id":1,"parent":0,"components":[{"type":"SceneIOTestRef","fields":{"target":"far"}}]})";
+    }
+
+    World loadedWorld;
+    LoadedScene loaded = mir::LoadScene(loadedWorld, dir.mPath);
+    REQUIRE(loaded.mEntities.size() == 1);
+
+    Entity resolved{};
+    resolved.mIndex = 0; // poison, so a no-op Write would be caught
+    sceneRefOps.FindField("target")->Read(sceneRefOps.GetComponent(loadedWorld, loaded.mEntities.at(1)), &resolved);
+    CHECK(resolved.IsNull());
+}
+
 TEST_CASE("LoadScene skips a component name it does not recognise", "[scene]")
 {
     mir::RegisterCoreComponents();
