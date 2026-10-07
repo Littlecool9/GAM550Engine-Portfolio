@@ -941,3 +941,15 @@ range and checks it. The module now reads files, through core FileIO and only
 in the release reader; it still writes none.
 
 *2026-09-30* — **Module created (#110).**
+
+## P2 #144: Lua height queries
+
+`world:terrain_height_at(position, requiredSpacing)` exposes the resident
+`TerrainWorld::HeightAt` result, including all statuses, failure, local/world
+height, spacing, source spacing, optional error, full release identity, tile
+and layer. See [script.md](script.md#terrain-height-query-144) for the result
+shape. The binding performs no IO and resolves the World resource per call;
+Play retains its pinned release. Invalid arguments return `Failed/InvalidInput`
+with a script error log; no terrain or no covering instance gives `OutsideMap`.
+The old Backlog item 2's script query is complete; per-instance mesh uploads
+remain as described there. Verification: [#144 handoff](../terrain-p2-144.md).

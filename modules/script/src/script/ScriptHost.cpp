@@ -13,6 +13,7 @@
 #include "bindings/EntityBindings.h"
 #include "bindings/InputBindings.h"
 #include "bindings/PhysicsBindings.h"
+#include "bindings/TerrainBindings.h"
 #include "bindings/WorldBindings.h"
 
 #include <core/ecs/World.h>
@@ -54,6 +55,7 @@ namespace mir
 
             RegisterEntityBindings(mLua);
             RegisterWorldBindings(mLua);
+            RegisterTerrainBindings(mLua);
 
             RegisterInputBindings(mLua);
             RegisterPhysicsBindings(mLua);
