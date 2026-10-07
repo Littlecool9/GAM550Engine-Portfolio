@@ -55,7 +55,7 @@ namespace mir
             TerrainPlacement placement;
             TerrainRenderTiles tiles;
             BodyHandle collider;
-            // The height field's first sample, so a move needs no rebuild.
+            // The selected height field's first sample.
             TerrainLocalPosition colliderOrigin;
         };
 
@@ -67,9 +67,7 @@ namespace mir
                                                std::vector<InstanceResources> &old);
         bool BuildMeshes(const TerrainInstanceState &instance, TerrainRenderTiles &tiles);
         BodyHandle BuildCollider(const TerrainInstanceState &instance, TerrainLocalPosition &origin);
-        bool MoveCollider(const InstanceResources &resources, const TerrainInstanceState &instance);
-        std::optional<WorldPosition> ColliderWorldOrigin(const TerrainLocalPosition &origin,
-                                                         const TerrainInstanceState &instance);
+        bool MoveCollider(InstanceResources &resources, const TerrainInstanceState &instance);
         void RebuildMeshes(TerrainWorld &world);
         void Publish();
         void DestroyCollider(BodyHandle body);

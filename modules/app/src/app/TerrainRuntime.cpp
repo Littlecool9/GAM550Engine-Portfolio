@@ -13,7 +13,7 @@
 #include <core/log/Log.h>
 #include <physics/PhysicsWorld.h>
 #include <renderer/VulkanRenderer.h>
-#include <terrain/TerrainAreaSamples.h>
+#include <terrain/TerrainCollision.h>
 #include <terrain/TerrainAssetPath.h>
 #include <terrain/TerrainTileMesh.h>
 
@@ -270,57 +270,74 @@ namespace mir
                                instance.recipePath));
             return {};
         }
-
-        const TerrainResidentRelease &release = *instance.release;
-        const TerrainResult<TerrainAreaSamples> area =
-            BuildTerrainAreaSamples(release.Layout(), release.Info(), release.Lookup());
-        if (!area)
+        const TerrainCollisionPolicy defaults;
+        const auto *configured = mWorld->TryResource<TerrainCollisionPolicy>();
+        const auto &policy = configured ? *configured : defaults;
+        if (!ValidTerrainCollisionPolicy(policy))
         {
-            Report(std::format("Terrain '{}': no collider ({}); the instance is not loaded", instance.recipePath,
-                               area.error.message));
+            Report(std::format("Terrain '{}': invalid collision error policy", instance.recipePath));
             return {};
         }
-        const std::optional<WorldPosition> world = ColliderWorldOrigin(area.value->origin, instance);
-        if (!world)
-            return {};
+        const TerrainResidentRelease &release = *instance.release;
+        std::string refusals;
+        for (double spacing : policy.spacings)
+        {
+            const auto samples = BuildTerrainUniformSamples(release.Handle().Index(), release.Query(), spacing);
+            if (!samples)
+            {
+                refusals += std::format(" [{} m: {}]", spacing, samples.error.message);
+                continue;
+            }
+            const auto &area = samples.value->area;
+            const auto worldOrigin = TryTerrainLocalToWorld(area.origin, instance.placement.translation);
+            if (!worldOrigin)
+            {
+                refusals += std::format(" [{} m: origin outside world range]", spacing);
+                continue;
+            }
+            HeightFieldDesc desc;
+            desc.mSamples = area.heights;
+            desc.mCountX = area.countX;
+            desc.mCountZ = area.countZ;
+            desc.mSpacing = static_cast<float>(spacing);
+            desc.mOrigin = *worldOrigin;
+            const BodyHandle body = physics->CreateStaticHeightField(desc);
+            const auto info = physics->HeightFieldInfoOf(body);
+            const auto error = info ? TerrainCollisionErrorBudget(*samples.value, instance.placement, *worldOrigin,
+                info->mMaxQuantizationError, info->mMaxHorizontalError) : std::nullopt;
+            const bool covered = info && TerrainCollisionCovers(*samples.value, instance.placement, *worldOrigin,
+                info->mExtentX, info->mExtentZ);
+            if (covered && error && error->total <= policy.maxError)
+            {
+                MIR_LOG_INFO("Terrain '{}': collision {} m, error {} m (geometry {}, quantization {}, horizontal {}, numeric {})",
+                    instance.recipePath, spacing, error->total, error->geometry, error->quantization,
+                    error->horizontal, error->numeric);
+                if (!refusals.empty()) MIR_LOG_INFO("Terrain collision refined:{}", refusals);
+                origin = area.origin;
+                return body;
+            }
+            physics->DestroyBody(body);
+            if (!covered) refusals += std::format(" [{} m: decoded XY support does not cover the map]", spacing);
+            refusals += error ? std::format(" [{} m: total {} = geometry {} + quantization {} + horizontal {} + numeric {}]",
+                spacing, error->total, error->geometry, error->quantization, error->horizontal, error->numeric)
+                : std::format(" [{} m: height field or error proof failed]", spacing);
+        }
+        Report(std::format("Terrain '{}': no collision spacing satisfies {} m;{} the instance is not loaded",
+            instance.recipePath, policy.maxError, refusals));
+        return {};
+    }
 
-        HeightFieldDesc desc;
-        desc.mSamples = area.value->heights;
-        desc.mCountX = area.value->countX;
-        desc.mCountZ = area.value->countZ;
-        // Exact for the 1, 2, 4 and 8 m spacings.
-        desc.mSpacing = static_cast<float>(area.value->spacing);
-        desc.mOrigin = *world;
-        const BodyHandle body = physics->CreateStaticHeightField(desc);
+    bool TerrainRuntime::MoveCollider(InstanceResources &resources, const TerrainInstanceState &instance)
+    {
+        // A new placement changes the numeric error budget and decoded support coverage.
+        TerrainLocalPosition origin;
+        const BodyHandle body = BuildCollider(instance, origin);
         if (!body.IsValid())
-            Report(std::format("Terrain '{}': the height field was refused; the instance is not loaded",
-                               instance.recipePath));
-        else
-            origin = area.value->origin;
-        return body;
-    }
-
-    bool TerrainRuntime::MoveCollider(const InstanceResources &resources, const TerrainInstanceState &instance)
-    {
-        PhysicsWorld *physics = mWorld->TryResource<PhysicsWorld>();
-        if (!physics)
             return false;
-        const std::optional<WorldPosition> world = ColliderWorldOrigin(resources.colliderOrigin, instance);
-        if (!world)
-            return false;
-        physics->SetBodyTransform(resources.collider, *world, kIdentityRotation);
+        DestroyCollider(resources.collider);
+        resources.collider = body;
+        resources.colliderOrigin = origin;
         return true;
-    }
-
-    std::optional<WorldPosition> TerrainRuntime::ColliderWorldOrigin(const TerrainLocalPosition &origin,
-                                                                     const TerrainInstanceState &instance)
-    {
-        const std::optional<WorldPosition> world = TryTerrainLocalToWorld(origin, instance.placement.translation);
-        if (!world)
-            Report(std::format("Terrain '{}': the collider origin is past the world range; the instance is not "
-                               "loaded",
-                               instance.recipePath));
-        return world;
     }
 
     void TerrainRuntime::RebuildMeshes(TerrainWorld &world)

@@ -35,6 +35,7 @@
 #include <cmath>
 #include <optional>
 #include <utility>
+#include <unordered_map>
 
 namespace
 {
@@ -222,6 +223,7 @@ namespace mir
         int mCollisionSteps = 1;
         bool mBroadPhaseDirty = false;
         std::size_t mHeightFieldsBuilt = 0;
+        std::unordered_map<uint32_t, HeightFieldInfo> mHeightFieldInfo;
     };
 
     PhysicsWorld::PhysicsWorld(const PhysicsWorldDesc &desc)
@@ -346,9 +348,37 @@ namespace mir
             return {};
         }
 
+        if (result.Get()->GetSubType() != JPH::EShapeSubType::HeightField)
+        {
+            ++mImpl->mHeightFieldsBuilt;
+            return mImpl->CreateBody(result.Get(), desc.mOrigin, kIdentityRotation, false, true);
+        }
+        const auto *field = static_cast<const JPH::HeightFieldShape *>(result.Get().GetPtr());
+        HeightFieldInfo info{field->GetSampleCount(), field->GetStats().mSizeBytes};
+        for (uint32_t z = 0; z < rows; ++z)
+            for (uint32_t x = 0; x < columns; ++x)
+            {
+                const float input = desc.mSamples[size_t(z) * stride * desc.mCountX + size_t(x) * stride];
+                if (input == kHeightFieldHole) continue;
+                const JPH::Vec3 decoded = field->GetPosition(x, z);
+                if (field->IsNoCollision(x, z) || !std::isfinite(decoded.GetY()))
+                {
+                    MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: a valid sample decoded to a hole");
+                    return {};
+                }
+                info.mMaxQuantizationError = std::max(info.mMaxQuantizationError, std::abs(double(decoded.GetY()) - input));
+                info.mMaxHorizontalError = std::max({info.mMaxHorizontalError,
+                    std::abs(double(decoded.GetX()) - double(x) * desc.mSpacing * stride),
+                    std::abs(double(decoded.GetZ()) - double(z) * desc.mSpacing * stride)});
+                ++info.mValidSamples;
+            }
+        info.mExtentX = field->GetPosition(columns - 1, 0).GetX();
+        info.mExtentZ = field->GetPosition(0, rows - 1).GetZ();
         ++mImpl->mHeightFieldsBuilt;
-        // Without it a sphere rolling on a planar field hops up to 2.4 cm off internal edges.
-        return mImpl->CreateBody(result.Get(), desc.mOrigin, kIdentityRotation, false, true);
+        // Enhanced internal edge removal keeps planar crossings smooth.
+        const BodyHandle body = mImpl->CreateBody(result.Get(), desc.mOrigin, kIdentityRotation, false, true);
+        if (body.IsValid()) mImpl->mHeightFieldInfo.emplace(body.mId, info);
+        return body;
     }
 
     void PhysicsWorld::DestroyBody(BodyHandle body)
@@ -368,6 +398,7 @@ namespace mir
 
         bodies.RemoveBody(id);
         bodies.DestroyBody(id);
+        mImpl->mHeightFieldInfo.erase(body.mId);
 
         bodies.ActivateBodiesInAABox(bounds, {}, {});
     }
@@ -556,8 +587,8 @@ namespace mir
         if (shape->GetSubType() != JPH::EShapeSubType::HeightField)
             return std::nullopt;
 
-        const auto *field = static_cast<const JPH::HeightFieldShape *>(shape);
-        return HeightFieldInfo{ field->GetSampleCount(), field->GetStats().mSizeBytes };
+        const auto found = mImpl->mHeightFieldInfo.find(body.mId);
+        return found == mImpl->mHeightFieldInfo.end() ? std::nullopt : std::optional(found->second);
     }
 
     std::size_t PhysicsWorld::HeightFieldsBuilt() const

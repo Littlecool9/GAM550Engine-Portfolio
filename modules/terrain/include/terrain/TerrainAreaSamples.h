@@ -19,7 +19,7 @@
 
 namespace mir
 {
-    // The recipe refuses maps past it, so every published release loads.
+    // One collision shape only; the recipe reference grid has no such cap.
     inline constexpr uint32_t kMaxTerrainAreaSamplesPerSide = static_cast<uint32_t>(kMaxTerrainSamplesPerSide);
 
     // P1 collides with one shape over the whole map. Derived and rebuildable.
