@@ -17,7 +17,7 @@ PR 描述：运行时从同一 release 独立读取烘焙 LOD 和法线，默认
 
 debug-float 的 37 项跳过由既有 `MIR_LARGE_WORLD=OFF` 精度条件触发，包含仅验证 double 世界坐标的远处变换、查询、接触及 Lua 用例，未禁用测试。远处混合 TerrainCheck 的实际 float 加载另有以下生产验证。原始结果为本次 `builds/p2-evidence/<preset>/ctest.xml`、`inventory.json`、`test-state.json`、构建及测试日志；`final-summary.json` 校验结果为 `errors: []`。
 
-实现已在 `2f22bdc` 冻结，合入总集成 `bafd620`，包含 #123 `1a6ef1a` 和 #144 `8cc5486`；499 个产品文件 SHA256 用于确认测试期间源码未变。独立渲染验收已完成 Release 160 个场景与 32 个剔面组合，退出码 0，73,728,000 个像素路径分别验证。原始 320 张地形 PNG、64 张剔面 PNG、float32 矩阵、recipe/packs、camera/layout/stage/device 元数据与 `summary.json` 保存于本次 `builds/p2-evidence/gpu-full-float-viewport-release/`（junction 到 E:/CodexTerrainP2/run-20261006/issue-122）。
+本 worktree 在 `2f22bdc` 合入总集成 `bafd620` 的依赖，包含 #123 `1a6ef1a` 和 #144 `8cc5486`，随后冻结实现；499 个产品文件 SHA256 用于确认测试期间源码未变。独立渲染验收已完成 Release 160 个场景与 32 个剔面组合，退出码 0，73,728,000 个像素路径分别验证。原始 320 张地形 PNG、64 张剔面 PNG、float32 矩阵、recipe/packs、camera/layout/stage/device 元数据与 `summary.json` 保存于本次 `builds/p2-evidence/gpu-full-float-viewport-release/`（junction 到 E:/CodexTerrainP2/run-20261006/issue-122）。
 
 | 测量 | 实际最大值 / 数量 |
 |---|---|
