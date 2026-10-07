@@ -6,7 +6,18 @@ PR 描述：运行时从同一 release 独立读取烘焙 LOD 和法线，默认
 
 ## 验证记录
 
-最终四配置完整 CTest 在冻结实现并取得 #123 后填写。独立渲染验收已完成 Release 160 个场景与 32 个剔面组合，退出码 0，73,728,000 个像素路径分别验证。原始 320 张地形 PNG、64 张剔面 PNG、float32 矩阵、recipe/packs、camera/layout/stage/device 元数据与 `summary.json` 保存于本次 `builds/p2-evidence/gpu-full-float-viewport-release/`（junction 到 E:/CodexTerrainP2/run-20261006/issue-122）。
+四配置均显式 reconfigure、完整构建并运行全部 CTest。CPU 测试按 4 jobs 并行，GPU smoke 通过本次跨进程 mutex 串行执行，原 native 120 秒超时保留；没有删除注册项或缩减命令参数。各轮 fresh XML、inventory、Passed 状态和原生命令退出码 0 已核对。
+
+| 配置 | 注册 | 通过 | 跳过 | 失败 / 禁用 | smoke | CTest 秒 |
+|---|---:|---:|---:|---|---|---:|
+| Debug | 733 | 733 | 0 | 0 / 0 | 7/7 | 1204.93 |
+| Release | 733 | 733 | 0 | 0 / 0 | 7/7 | 126.15 |
+| debug-float | 733 | 696 | 37 | 0 / 0 | 7/7 | 1267.57 |
+| game-debug | 733 | 733 | 0 | 0 / 0 | 7/7 | 1105.65 |
+
+debug-float 的 37 项跳过由既有 `MIR_LARGE_WORLD=OFF` 精度条件触发，包含仅验证 double 世界坐标的远处变换、查询、接触及 Lua 用例，未禁用测试。远处混合 TerrainCheck 的实际 float 加载另有以下生产验证。原始结果为本次 `builds/p2-evidence/<preset>/ctest.xml`、`inventory.json`、`test-state.json`、构建及测试日志；`final-summary.json` 校验结果为 `errors: []`。
+
+实现已在 `2f22bdc` 冻结，合入总集成 `bafd620`，包含 #123 `1a6ef1a` 和 #144 `8cc5486`；499 个产品文件 SHA256 用于确认测试期间源码未变。独立渲染验收已完成 Release 160 个场景与 32 个剔面组合，退出码 0，73,728,000 个像素路径分别验证。原始 320 张地形 PNG、64 张剔面 PNG、float32 矩阵、recipe/packs、camera/layout/stage/device 元数据与 `summary.json` 保存于本次 `builds/p2-evidence/gpu-full-float-viewport-release/`（junction 到 E:/CodexTerrainP2/run-20261006/issue-122）。
 
 | 测量 | 实际最大值 / 数量 |
 |---|---|
@@ -28,13 +39,26 @@ PR 描述：运行时从同一 release 独立读取烘焙 LOD 和法线，默认
 
 第一幅单位为 D32F reverse-Z，第二幅单位为米，两幅颜色不能直接比较。已查看近地、远景、斜视、掠视、四角的真实 lit/wire PNG 与这两幅深度图，未看到公共边裂缝。光栅线框使用 `fwidth` 屏幕导数宽度且不施加 fog；RT 使用固定 0.025 重心宽度并沿用 hit fog，miss 采用现有大气天空，而工具光栅背景是 clear。颜色与线宽不要求像素相同；拓扑与接缝依据为 depth/mask 参照及共同边 bit 检查。
 
+## 混合精度生产碰撞验证
+
+集成依赖后，debug-float 的原生产 `MjolnirEngine --game games/TerrainCheck --frames 120` 退出码为 0。场景在 `(150000.5, -20, -75000.25)` 完整加载四个 terrain mesh 和一个 HeightField，asset `93f78444273cf162`，release `67f2c5e384f4fbe5`。没有禁用碰撞、减小 recipe 振幅或放宽 5 cm 门槛。
+
+| 候选统一 spacing | 总高度误差界 | 选择结果 |
+|---|---|---|
+| 8 m | 1.567420985 m | 细化 |
+| 4 m | 0.412315397 m | 细化 |
+| 2 m | 0.185196028 m | 细化 |
+| 1 m | 0.044749764 m | 接受，余量约 5.25 mm |
+
+1 m 总界分解为几何 0.000006680 m、Jolt 量化 0.003929138 m、水平坐标误差 0.040790621 m、数值余量 0.000023325 m。原始日志保存在本次 `builds/p2-evidence/mixed-production-float-engine.log`；四配置完整 CTest 中的 `smoke.TerrainCheck` 也已通过。
+
 ## 接口与设计决定
 
 - `ReadTerrainRenderMesh(handle, tile, optionalLayer)` 空 layer 选择唯一源层，显式 layer 必须存在且不细于源层。P2 的静态混合 LOD 由验收工具选择；P3 再引入每视口调度。
 - `MakeTerrainRenderMesh` 重新编码并核对 indexed payload checksum，拒绝把同尺寸法线数组换序或把相同拓扑平移到另一原点。返回的 `TerrainTileMesh::samples` 为空，因为连接环不是规则采样网格；顶点、索引和包围盒才是渲染输入。
 - 运行时渲染要求带 LOD/Normal 的 2.1 release；2.0 仍可被格式读取器读取，正常 sync 会重新烘焙当前派生格式。
 - GPU 抓取显式请求时才创建 RGBA32F 光追诊断图；光栅深度支持 transfer-src，只有诊断帧保留深度 store。抓取会同步等待提交完成，适用于验收，不用于正常帧性能测量。
-- `TerrainCheck` 从旧均匀 recipe 改为本次 1/8/2/4 m v2 partial-negative 原型，保持场景正常碰撞路径；最终验收依赖 #123。
+- `TerrainCheck` 从旧均匀 recipe 改为本次 1/8/2/4 m v2 partial-negative 原型，保持场景正常碰撞路径；已合入 #123 并完成生产 debug-float 加载验证。
 
 ## 风险和范围
 
