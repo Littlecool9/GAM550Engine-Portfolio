@@ -941,3 +941,10 @@ range and checks it. The module now reads files, through core FileIO and only
 in the release reader; it still writes none.
 
 *2026-09-30* — **Module created (#110).**
+
+
+## P2 #123：统一碰撞精度
+
+app 从唯一 resident 最终 source 采样整实例规则 HeightField，按 TerrainCollisionPolicy 的严格递减 spacing 列表选择最粗满足误差门槛的档。默认 8/4/2/1 m、0.05 m 门槛；source→实际均匀 canonical 三角面的覆盖误差、真实 Jolt decoded Y/XZ 偏差、double→float scale drift 和 WorldReal 预算相加。解码 XY 矩形必须完整覆盖有效 bounds。失败候选立即销毁，全部失败拒绝实例；预算细化只记录 INFO。
+
+该 policy 可作为 World resource 覆盖原型配置。默认网格不适配某些 P1 decimal tileSize 时，烘焙仍合法但默认 app 碰撞明确拒绝，调用方必须提供能构成精确 tile 网格的候选；不会静默在 1 m 失败后生成更细原始细节。整实例内存、同步加载及多形状接触/替换仍由 P3 #128 处理。量化 metadata 只含通用数值，Jolt 不进入任何公共头文件。测量与验证见 docs/terrain-p2-123.md。
