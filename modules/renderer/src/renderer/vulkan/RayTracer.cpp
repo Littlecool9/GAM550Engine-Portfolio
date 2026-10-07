@@ -7,6 +7,7 @@
  *
  */
 #include "RayTracer.h"
+#include "RayFacing.h"
 #include "Device.h"
 #include "MaterialStore.h"
 #include "ResourceStore.h"
@@ -165,6 +166,7 @@ namespace mir::vk
 
     bool RayTracer::CreateOutputImages(VkExtent2D extent)
     {
+        mExtent = extent;
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
             const VkImageCreateInfo imageInfo{
@@ -214,10 +216,70 @@ namespace mir::vk
         return true;
     }
 
+    bool RayTracer::PrepareDiagnostics()
+    {
+        if (mDiagnosticViews[kFramesInFlight - 1] != VK_NULL_HANDLE)
+            return true;
+        vkDeviceWaitIdle(mDevice->Handle());
+        VkFormatProperties properties{};
+        vkGetPhysicalDeviceFormatProperties(mDevice->Physical(), VK_FORMAT_R32G32B32A32_SFLOAT, &properties);
+        const VkFormatFeatureFlags required = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT |
+            VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+        if ((properties.optimalTilingFeatures & required) != required)
+        {
+            MIR_LOG_ERROR("PrepareDiagnostics: RGBA32F storage/readback unavailable");
+            return false;
+        }
+        for (uint32_t i = 0; i < kFramesInFlight; ++i)
+        {
+            if (mDiagnosticViews[i] != VK_NULL_HANDLE)
+                continue;
+            const VkImageCreateInfo info{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+                .imageType = VK_IMAGE_TYPE_2D,
+                .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+                .extent{mExtent.width, mExtent.height, 1},
+                .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+                .tiling = VK_IMAGE_TILING_OPTIMAL,
+                .usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+                .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+            const VmaAllocationCreateInfo allocation{.usage = VMA_MEMORY_USAGE_AUTO};
+            if (mDiagnosticImages[i] == VK_NULL_HANDLE &&
+                vmaCreateImage(mDevice->Allocator(), &info, &allocation, &mDiagnosticImages[i], &mDiagnosticAllocations[i], nullptr) != VK_SUCCESS)
+            {
+                MIR_LOG_ERROR("PrepareDiagnostics: image allocation failed");
+                return false;
+            }
+            const VkImageViewCreateInfo view{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = mDiagnosticImages[i],
+                .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+                .subresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+            if (vkCreateImageView(mDevice->Handle(), &view, nullptr, &mDiagnosticViews[i]) != VK_SUCCESS)
+            {
+                MIR_LOG_ERROR("PrepareDiagnostics: image view failed");
+                return false;
+            }
+        }
+        WriteDescriptorSets();
+        return true;
+    }
+
     void RayTracer::DestroyOutputImages()
     {
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
+            if (mDiagnosticViews[i] != VK_NULL_HANDLE)
+            {
+                vkDestroyImageView(mDevice->Handle(), mDiagnosticViews[i], nullptr);
+                mDiagnosticViews[i] = VK_NULL_HANDLE;
+            }
+            if (mDiagnosticImages[i] != VK_NULL_HANDLE)
+            {
+                vmaDestroyImage(mDevice->Allocator(), mDiagnosticImages[i], mDiagnosticAllocations[i]);
+                mDiagnosticImages[i] = VK_NULL_HANDLE;
+                mDiagnosticAllocations[i] = VK_NULL_HANDLE;
+            }
             if (mOutputViews[i] != VK_NULL_HANDLE)
             {
                 vkDestroyImageView(mDevice->Handle(), mOutputViews[i], nullptr);
@@ -253,7 +315,7 @@ namespace mir::vk
             return false;
         }
 
-        const std::array<VkDescriptorSetLayoutBinding, 3> setBindings{ {
+        const std::array<VkDescriptorSetLayoutBinding, 4> setBindings{ {
             { .binding = 0,
              .descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
              .descriptorCount = 1,
@@ -265,7 +327,11 @@ namespace mir::vk
             { .binding = 2,
              .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
              .descriptorCount = 1,
-             .stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR } } };
+             .stageFlags = VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR },
+            { .binding = 3,
+             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+             .descriptorCount = 1,
+             .stageFlags = VK_SHADER_STAGE_RAYGEN_BIT_KHR } } };
 
         const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
@@ -284,7 +350,7 @@ namespace mir::vk
 
         const std::array<VkDescriptorPoolSize, 3> poolSizes{ {
             { .type = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, .descriptorCount = kFramesInFlight },
-            { .type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = kFramesInFlight },
+            { .type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 2 * kFramesInFlight },
             { .type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = kFramesInFlight } } };
 
         const VkDescriptorPoolCreateInfo poolInfo{
@@ -471,13 +537,16 @@ namespace mir::vk
             const VkDescriptorImageInfo imageInfo{
                 .imageView = mOutputViews[i],
                 .imageLayout = VK_IMAGE_LAYOUT_GENERAL };
+            const VkDescriptorImageInfo diagnosticInfo{
+                .imageView = mDiagnosticViews[i] ? mDiagnosticViews[i] : mOutputViews[i],
+                .imageLayout = VK_IMAGE_LAYOUT_GENERAL };
 
             const VkDescriptorBufferInfo instanceInfoBufferInfo{
                 .buffer = mInstanceInfoBuffers[i],
                 .offset = 0,
                 .range = VK_WHOLE_SIZE };
 
-            const std::array<VkWriteDescriptorSet, 3> writes{ {
+            const std::array<VkWriteDescriptorSet, 4> writes{ {
                 { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                  .pNext = &accelWrite,
                  .dstSet = mSets[i],
@@ -495,7 +564,13 @@ namespace mir::vk
                  .dstBinding = 2,
                  .descriptorCount = 1,
                  .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                 .pBufferInfo = &instanceInfoBufferInfo } } };
+                 .pBufferInfo = &instanceInfoBufferInfo },
+                { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                 .dstSet = mSets[i],
+                 .dstBinding = 3,
+                 .descriptorCount = 1,
+                 .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                 .pImageInfo = &diagnosticInfo } } };
 
             vkUpdateDescriptorSets(mDevice->Handle(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
         }
@@ -635,15 +710,17 @@ namespace mir::vk
             if (mesh == nullptr || item.mesh.mIndex >= mBlases.size() || mBlases[item.mesh.mIndex].mBlas == VK_NULL_HANDLE)
                 continue;
 
+            const GpuMaterial *const material = materials.FindOrDefault(item.material);
+            const auto facing = RtTriangleFacingFlags(material ? material->mCullMode : VK_CULL_MODE_BACK_BIT,
+                material ? material->mFrontFace : VK_FRONT_FACE_COUNTER_CLOCKWISE, item.model);
+            if (!facing)continue;
             instances[instanceCount] = VkAccelerationStructureInstanceKHR{
                 .transform = ToTransformMatrixKHR(item.model),
                 .instanceCustomIndex = instanceCount,
                 .mask = 0xFF,
                 .instanceShaderBindingTableRecordOffset = 0,
-                .flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR,
+                .flags = *facing,
                 .accelerationStructureReference = mBlases[item.mesh.mIndex].mAddress };
-
-            const GpuMaterial *const material = materials.FindOrDefault(item.material);
 
             instanceInfos[instanceCount] = RtInstanceInfo{
                 .vertexAddress = GetBufferAddress(mDevice->Handle(), mesh->mVertexBuffer),
@@ -652,7 +729,7 @@ namespace mir::vk
                 .normalCol0 = glm::vec4(item.normalMatrix[0], 0.0f),
                 .normalCol1 = glm::vec4(item.normalMatrix[1], 0.0f),
                 .normalCol2 = glm::vec4(item.normalMatrix[2], 0.0f),
-                .unlit = (material != nullptr && material->mUnlit) ? 1u : 0u };
+                .unlit = material && material->mWireframe ? 2u : (material && material->mUnlit ? 1u : 0u) };
 
             ++instanceCount;
         }
@@ -824,12 +901,25 @@ namespace mir::vk
 
     void RayTracer::Record(VkCommandBuffer cmd, uint32_t frame, std::span<const DrawItem> items, const VkRect2D &rect,
         VkDescriptorSet cameraSet, uint32_t cameraOffset, const ResourceStore &resources,
-        const MaterialStore &materials)
+        const MaterialStore &materials, bool diagnostics)
     {
         ImageBarrier(cmd, mOutputImages[frame], VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
             VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        if (diagnostics)
+        {
+            ImageBarrier(cmd, mDiagnosticImages[frame], VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, 0,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+            const VkClearColorValue clear{};
+            const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(cmd, mDiagnosticImages[frame], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+            ImageBarrier(cmd, mDiagnosticImages[frame], VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        }
 
         RecordTlasBuild(cmd, frame, items, resources, materials);
 
@@ -854,7 +944,8 @@ namespace mir::vk
                 0, static_cast<uint32_t>(sets.size()), sets.data(), 1, &cameraOffset);
 
             const RtPushConstants pushConstants{
-                .outputOffset{ static_cast<uint32_t>(rect.offset.x), static_cast<uint32_t>(rect.offset.y) } };
+                .outputOffset{ static_cast<uint32_t>(rect.offset.x), static_cast<uint32_t>(rect.offset.y) },
+                .diagnostics = diagnostics ? 1u : 0u };
             vkCmdPushConstants(cmd, mPipelineLayout, VK_SHADER_STAGE_RAYGEN_BIT_KHR,
                 0, sizeof(RtPushConstants), &pushConstants);
 

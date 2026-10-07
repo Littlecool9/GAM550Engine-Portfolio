@@ -7,6 +7,9 @@ RaytracingAccelerationStructure gTlas;
 [[vk::binding(1, 0)]]
 RWTexture2D<float4> gOutput;
 
+[[vk::binding(3, 0)]]
+RWTexture2D<float4> gDiagnostics;
+
 struct RtInstanceInfo
 {
     float *vertexAddress;
@@ -45,6 +48,7 @@ cbuffer CameraData
 struct RtPushConstants
 {
     uint2 outputOffset;
+    uint diagnostics;
 };
 
 [[vk::push_constant]]
@@ -53,6 +57,8 @@ RtPushConstants pushData;
 struct RayPayload
 {
     float3 color;
+    float distance;
+    float3 normal;
 };
 
 struct ShadowPayload
@@ -110,10 +116,14 @@ void rayGenMain()
 
     RayPayload payload;
     payload.color = float3(0.0, 0.0, 0.0);
+    payload.distance = 0.0;
+    payload.normal = float3(0.0, 0.0, 0.0);
 
-    TraceRay(gTlas, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
+    TraceRay(gTlas, RAY_FLAG_CULL_BACK_FACING_TRIANGLES, 0xFF, 0, 0, 0, ray, payload);
 
     gOutput[pixel + pushData.outputOffset] = float4(payload.color, 1.0);
+    if (pushData.diagnostics != 0)
+        gDiagnostics[pixel + pushData.outputOffset] = float4(payload.distance, payload.normal);
 }
 
 [shader("miss")]
@@ -157,7 +167,22 @@ void closestHitMain(inout RayPayload payload, in BuiltInTriangleIntersectionAttr
 
     float3 color;
 
-    if (info.unlit != 0)
+    const uint nb0 = i0 * kVertexStrideFloats + 6;
+    const uint nb1 = i1 * kVertexStrideFloats + 6;
+    const uint nb2 = i2 * kVertexStrideFloats + 6;
+    const float3 dn0 = float3(info.vertexAddress[nb0], info.vertexAddress[nb0 + 1], info.vertexAddress[nb0 + 2]);
+    const float3 dn1 = float3(info.vertexAddress[nb1], info.vertexAddress[nb1 + 1], info.vertexAddress[nb1 + 2]);
+    const float3 dn2 = float3(info.vertexAddress[nb2], info.vertexAddress[nb2 + 1], info.vertexAddress[nb2 + 2]);
+    const float3 dn = dn0 * barycentrics.x + dn1 * barycentrics.y + dn2 * barycentrics.z;
+    payload.distance = RayTCurrent();
+    payload.normal = normalize(info.normalCol0.xyz * dn.x + info.normalCol1.xyz * dn.y + info.normalCol2.xyz * dn.z);
+
+    if (info.unlit == 2)
+    {
+        const float edge = min(barycentrics.x, min(barycentrics.y, barycentrics.z));
+        color = lerp(float3(0.015, 0.025, 0.03), float3(0.85, 1.0, 0.95), 1.0 - smoothstep(0.0, 0.025, edge));
+    }
+    else if (info.unlit != 0)
     {
         const uint b0 = i0 * kVertexStrideFloats + 3;
         const uint b1 = i1 * kVertexStrideFloats + 3;

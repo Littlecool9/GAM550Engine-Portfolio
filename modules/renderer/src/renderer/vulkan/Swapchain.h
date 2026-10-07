@@ -63,6 +63,7 @@ namespace mir::vk
         VkImageView DepthView(uint32_t frame) const { return mDepthViews[frame]; }
 
         bool SupportsCapture() const { return mCanCapture; }
+        bool SupportsDepthCapture() const { return mCanCaptureDepth; }
 
     private:
         bool Create(const ISurfaceProvider &window);
@@ -90,6 +91,7 @@ namespace mir::vk
         VkImageView mDepthViews[kFramesInFlight]{};
 
         bool mCanCapture = false;
+        bool mCanCaptureDepth = false;
         bool mOutOfDate = false;
     };
 }

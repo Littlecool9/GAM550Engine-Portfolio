@@ -35,12 +35,13 @@ if(BUILD_TESTING)
         tests/TerrainPrecision.tests.cpp
         tests/TerrainPublish.tests.cpp
         tests/TerrainRecipe.tests.cpp
+        tests/TerrainRenderMesh.tests.cpp
         tests/TerrainSeams.tests.cpp
         tests/TerrainSync.tests.cpp
         tests/TerrainToolCli.tests.cpp
         tests/TerrainValidate.tests.cpp
     )
-    target_link_libraries(terrain_tool_tests PRIVATE terrain_bake nlohmann_json::nlohmann_json Catch2::Catch2WithMain)
+    target_link_libraries(terrain_tool_tests PRIVATE terrain_bake mir::renderer nlohmann_json::nlohmann_json Catch2::Catch2WithMain)
     target_compile_definitions(terrain_tool_tests PRIVATE TERRAIN_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     target_compile_definitions(terrain_tool_tests PRIVATE TERRAIN_TOOL_EXE="$<TARGET_FILE:TerrainTool>")
     add_dependencies(terrain_tool_tests TerrainTool)

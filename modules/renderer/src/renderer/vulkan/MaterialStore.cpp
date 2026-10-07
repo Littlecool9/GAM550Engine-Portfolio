@@ -452,7 +452,8 @@ namespace mir::vk
         const bool modelShader = desc.shaderName == kModelShaderName;
 
         const uint32_t index = PlaceSlot(mMaterials, mFreeIndices,
-            GpuMaterial{ pipeline, descriptorSet, parameters, modelShader, 0, unlit });
+            GpuMaterial{ pipeline, descriptorSet, parameters, modelShader, 0, unlit, desc.shaderName == "terrainwire",
+                desc.cullMode, desc.frontFace });
 
         MIR_LOG_INFO("Material created: {} (index {})", desc.shaderName, index);
         return MaterialHandle{ index, mMaterials[index].mGeneration };

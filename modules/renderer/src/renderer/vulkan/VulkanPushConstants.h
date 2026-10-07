@@ -30,6 +30,7 @@ namespace mir::vk
     struct RtPushConstants
     {
         glm::uvec2 outputOffset;
+        uint32_t diagnostics = 0;
     };
 
     // Shadow depth passes have no camera UBO, so the light's viewProj rides along.

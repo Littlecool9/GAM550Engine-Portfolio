@@ -173,7 +173,7 @@ namespace mir
 
         MaterialHandle ErrorMaterial() const;
 
-        void CaptureNextFrame(const std::filesystem::path &path);
+        void CaptureNextFrame(const std::filesystem::path &path, bool diagnostics = false);
 
         void ReleaseSceneResources();
 

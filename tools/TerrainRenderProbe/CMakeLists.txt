@@ -1,0 +1,7 @@
+if(BUILD_TESTING)
+    find_package(nlohmann_json CONFIG REQUIRED)
+    add_executable(TerrainRenderProbe main.cpp RasterDepthEnvelope.cpp CullProbe.cpp)
+    target_link_libraries(TerrainRenderProbe PRIVATE terrain_bake mir::renderer mir::window nlohmann_json::nlohmann_json)
+    target_compile_definitions(TerrainRenderProbe PRIVATE TERRAIN_PROBE_RECIPE="${CMAKE_SOURCE_DIR}/tools/TerrainTool/tests/fixtures/mixed-2x2.terrain.json")
+    set_target_properties(TerrainRenderProbe PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+endif()

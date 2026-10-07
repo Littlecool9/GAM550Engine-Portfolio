@@ -67,6 +67,7 @@ add_subdirectory(modules/window)
 
 add_subdirectory(tools/AssetCooker)
 add_subdirectory(tools/TerrainTool)
+add_subdirectory(tools/TerrainRenderProbe)
 
 add_executable(MjolnirEngine WIN32)
 target_sources(MjolnirEngine PRIVATE main.cpp)
@@ -94,6 +95,10 @@ engine_add_shaders(MjolnirEngine
 
 engine_add_shaders(MjolnirEngine
     SOURCE assets/shaders/error.slang
+    ENTRIES vertexMain:vertex fragmentMain:fragment)
+
+engine_add_shaders(MjolnirEngine
+    SOURCE assets/shaders/terrainwire.slang
     ENTRIES vertexMain:vertex fragmentMain:fragment)
 
 engine_add_shaders(MjolnirEngine
@@ -240,6 +245,9 @@ target_link_libraries(MjolnirEngine PRIVATE
 # Smoke tests run each game for a few frames and fail on any logged error.
 # They need a GPU; skip them with `ctest -LE smoke`.
 if(BUILD_TESTING)
+    add_test(NAME smoke.terrain-render
+        COMMAND TerrainRenderProbe --smoke --out "${CMAKE_BINARY_DIR}/p2-evidence/gpu-smoke")
+    set_tests_properties(smoke.terrain-render PROPERTIES LABELS smoke TIMEOUT 120)
     foreach(game_name IN LISTS game_names)
         add_test(NAME smoke.${game_name}
             COMMAND MjolnirEngine --game games/${game_name} --frames 120)

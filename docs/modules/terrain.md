@@ -941,3 +941,7 @@ range and checks it. The module now reads files, through core FileIO and only
 in the release reader; it still writes none.
 
 *2026-09-30* — **Module created (#110).**
+
+### P2 #122：混合精度渲染
+
+运行时 `ReadTerrainRenderMesh` 按 tile 的唯一源层读取烘焙 LOD 与法线，校验索引 provenance、精度、origin 和顶点顺序；显式 layer 用于静态混合 LOD 验收。连接环 mesh 的 samples 为空，顶点和索引不是规则网格。独立 TerrainRenderProbe 保存真实光栅/光追 PNG、线框、D32F 深度及 RGBA32F 命中距离/法线矩阵；P3 再做每视口选择。

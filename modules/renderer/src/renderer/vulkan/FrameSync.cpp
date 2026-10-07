@@ -153,7 +153,7 @@ namespace mir::vk
         const VkSemaphoreSubmitInfo waitSem{
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
             .semaphore = mImageAcquired[mFrameIndex],
-            .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT };
+            .stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT };
 
         const VkSemaphoreSubmitInfo signalSems[]{
             { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,

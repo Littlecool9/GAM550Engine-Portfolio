@@ -14,12 +14,14 @@
 #include "Swapchain.h"
 
 #include <core/log/Log.h>
+#include <core/fs/FileIO.h>
 
 #include <vk_mem_alloc.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
 #include <utility>
+#include <format>
 #include <vector>
 
 namespace mir::vk
@@ -36,7 +38,7 @@ namespace mir::vk
             DestroyBuffer();
     }
 
-    bool FrameCapture::Record(VkCommandBuffer cmd, const Swapchain &swapchain, uint32_t imageIndex)
+    bool FrameCapture::Record(VkCommandBuffer cmd, const Swapchain &swapchain, uint32_t imageIndex, VkImageLayout from)
     {
         if (mPath.empty())
             return false;
@@ -61,11 +63,13 @@ namespace mir::vk
             return false;
         }
         VkImageMemoryBarrier2 barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2 };
-        barrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-        barrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        barrier.srcStageMask = from == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL ? VK_PIPELINE_STAGE_2_TRANSFER_BIT :
+            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        barrier.srcAccessMask = from == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL ? VK_ACCESS_2_TRANSFER_WRITE_BIT :
+            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
         barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
         barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
-        barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        barrier.oldLayout = from;
         barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = swapchain.Image(imageIndex);
@@ -93,9 +97,75 @@ namespace mir::vk
         vkCmdPipelineBarrier2(cmd, &dep);
         return true;
     }
+
+    void FrameCapture::Request(const std::filesystem::path &path, bool diagnostics)
+    {
+        if (mBuffer != VK_NULL_HANDLE || mDepthBuffer != VK_NULL_HANDLE)
+        {
+            MIR_LOG_ERROR("Request: capture already recorded; submit and finish it first");
+            return;
+        }
+        mPath = path;
+        mDiagnostics = diagnostics;
+    }
+
+    void FrameCapture::RecordDepth(VkCommandBuffer cmd, VkImage image, VkImageAspectFlags aspect,
+        VkExtent2D extent, VkImageLayout from, VkPipelineStageFlags2 stage, VkAccessFlags2 access,
+        uint32_t components, const char *semantic)
+    {
+        if (!WantsDiagnostics() || mDepthBuffer != VK_NULL_HANDLE)
+            return;
+        VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        info.size = uint64_t(extent.width) * extent.height * components * sizeof(float);
+        info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        VmaAllocationCreateInfo allocation{};
+        allocation.usage = VMA_MEMORY_USAGE_AUTO;
+        allocation.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        if (vmaCreateBuffer(mDevice->Allocator(), &info, &allocation, &mDepthBuffer, &mDepthAllocation, nullptr) != VK_SUCCESS)
+        {
+            MIR_LOG_ERROR("RecordDepth: readback allocation failed");
+            return;
+        }
+        VkImageMemoryBarrier2 barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        barrier.srcStageMask = stage;
+        barrier.srcAccessMask = access;
+        barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
+        barrier.oldLayout = from;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.srcQueueFamilyIndex = barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image;
+        barrier.subresourceRange = {aspect, 0, 1, 0, 1};
+        VkDependencyInfo dep{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dep.imageMemoryBarrierCount = 1;
+        dep.pImageMemoryBarriers = &barrier;
+        vkCmdPipelineBarrier2(cmd, &dep);
+        VkBufferImageCopy copy{};
+        copy.imageSubresource = {aspect, 0, 0, 1};
+        copy.imageExtent = {extent.width, extent.height, 1};
+        vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, mDepthBuffer, 1, &copy);
+        VkBufferMemoryBarrier2 host{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2};
+        host.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        host.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        host.dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT;
+        host.dstAccessMask = VK_ACCESS_2_HOST_READ_BIT;
+        host.srcQueueFamilyIndex = host.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        host.buffer = mDepthBuffer;
+        host.size = VK_WHOLE_SIZE;
+        dep.imageMemoryBarrierCount = 0;
+        dep.bufferMemoryBarrierCount = 1;
+        dep.pBufferMemoryBarriers = &host;
+        vkCmdPipelineBarrier2(cmd, &dep);
+        mDepthComponents = components;
+        mDepthSemantic = semantic;
+        mDepthPath = mPath;
+        mDepthFrom = from;
+        mDepthStage = stage;
+        mDepthAccess = access;
+    }
     void FrameCapture::Finish(bool submitted, const Swapchain &swapchain)
     {
-        if (mBuffer == VK_NULL_HANDLE)
+        if (mBuffer == VK_NULL_HANDLE && mDepthBuffer == VK_NULL_HANDLE)
             return;
 
         // Unsubmitted: no GPU work references the buffer, so it can be freed without a wait.
@@ -106,27 +176,55 @@ namespace mir::vk
         else
         {
             vkQueueWaitIdle(mDevice->Queue());
-            vmaInvalidateAllocation(mDevice->Allocator(), mAllocation, 0, VK_WHOLE_SIZE);
-            VmaAllocationInfo info{};
-            vmaGetAllocationInfo(mDevice->Allocator(), mAllocation, &info);
-            const auto size = size_t(swapchain.Extent().width) * swapchain.Extent().height * 4;
-            const auto *begin = static_cast<const uint8_t *>(info.pMappedData);
-            std::vector<uint8_t> pixels(begin, begin + size);
-            if (swapchain.Format() == VK_FORMAT_B8G8R8A8_SRGB)
-                for (size_t i = 0; i < size; i += 4)
-                    std::swap(pixels[i], pixels[i + 2]);
-            if (!stbi_write_png(mPath.string().c_str(), int(swapchain.Extent().width), int(swapchain.Extent().height), 4,
-                pixels.data(), int(swapchain.Extent().width * 4)))
-                MIR_LOG_ERROR("Finish: cannot write frame capture: {}", mPath.string());
-            else
-                MIR_LOG_INFO("Captured frame: {}", mPath.string());
+            if (mBuffer != VK_NULL_HANDLE)
+            {
+                vmaInvalidateAllocation(mDevice->Allocator(), mAllocation, 0, VK_WHOLE_SIZE);
+                VmaAllocationInfo info{};
+                vmaGetAllocationInfo(mDevice->Allocator(), mAllocation, &info);
+                const auto size = size_t(swapchain.Extent().width) * swapchain.Extent().height * 4;
+                const auto *begin = static_cast<const uint8_t *>(info.pMappedData);
+                std::vector<uint8_t> pixels(begin, begin + size);
+                if (swapchain.Format() == VK_FORMAT_B8G8R8A8_SRGB)
+                    for (size_t i = 0; i < size; i += 4)
+                        std::swap(pixels[i], pixels[i + 2]);
+                if (!stbi_write_png(mPath.string().c_str(), int(swapchain.Extent().width), int(swapchain.Extent().height), 4,
+                    pixels.data(), int(swapchain.Extent().width * 4)))
+                    MIR_LOG_ERROR("Finish: cannot write frame capture: {}", mPath.string());
+                else
+                    MIR_LOG_INFO("Captured frame: {}", mPath.string());
+            }
+            if (mDepthBuffer != VK_NULL_HANDLE)
+            {
+                vmaInvalidateAllocation(mDevice->Allocator(), mDepthAllocation, 0, VK_WHOLE_SIZE);
+                VmaAllocationInfo depthInfo{};
+                vmaGetAllocationInfo(mDevice->Allocator(), mDepthAllocation, &depthInfo);
+                const size_t bytes = size_t(swapchain.Extent().width) * swapchain.Extent().height * mDepthComponents * sizeof(float);
+                const auto *data = static_cast<const std::byte *>(depthInfo.pMappedData);
+                const bool dataWritten = WriteBytes(mDepthPath.string() + ".depth.f32", {data, bytes});
+                const bool metadataWritten = WriteText(mDepthPath.string() + ".depth.json", std::format(
+                    "{{\"width\":{},\"height\":{},\"components\":{},\"type\":\"float32-le\",\"rowOrder\":\"top-to-bottom\",\"semantic\":\"{}\",\"origin\":\"GPU-image-readback\",\"sourceLayout\":{},\"sourceStageMask\":{},\"sourceAccessMask\":{},\"readbackLayout\":{},\"rasterSubPixelPrecisionBits\":{},\"deviceName\":\"{}\",\"driverVersion\":{},\"apiVersion\":{}}}\n",
+                    swapchain.Extent().width, swapchain.Extent().height, mDepthComponents, mDepthSemantic,
+                    int(mDepthFrom), uint64_t(mDepthStage), uint64_t(mDepthAccess), int(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL),
+                    mDevice->Properties().limits.subPixelPrecisionBits, mDevice->Properties().deviceName,
+                    mDevice->Properties().driverVersion, mDevice->Properties().apiVersion));
+                if (!dataWritten || !metadataWritten)
+                    MIR_LOG_ERROR("Finish: incomplete GPU diagnostic capture: {}", mDepthPath.string());
+            }
         }
         DestroyBuffer();
         mPath.clear();
+        mDepthPath.clear();
+        mDiagnostics = false;
     }
 
     void FrameCapture::DestroyBuffer()
     {
+        if (mDepthBuffer != VK_NULL_HANDLE)
+        {
+            vmaDestroyBuffer(mDevice->Allocator(), mDepthBuffer, mDepthAllocation);
+            mDepthBuffer = VK_NULL_HANDLE;
+            mDepthAllocation = VK_NULL_HANDLE;
+        }
         if (mBuffer == VK_NULL_HANDLE)
             return;
         vmaDestroyBuffer(mDevice->Allocator(), mBuffer, mAllocation);

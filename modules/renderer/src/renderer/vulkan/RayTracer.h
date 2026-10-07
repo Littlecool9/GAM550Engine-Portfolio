@@ -37,6 +37,8 @@ namespace mir::vk
 
         // Recreates the output images at the swapchain's new extent; the caller idles the device first.
         bool Resize(VkExtent2D extent);
+        bool PrepareDiagnostics();
+        VkImage DiagnosticImage(uint32_t frame) const { return mDiagnosticImages[frame]; }
 
         // Indexed by mesh slot, so the resource store never sees ray tracing. False leaves the mesh raster-only.
         bool BuildMeshBlas(uint32_t meshIndex, const GpuMesh &mesh, uint32_t vertexCount);
@@ -48,7 +50,7 @@ namespace mir::vk
         // which ends in TRANSFER_SRC for the caller to blit.
         void Record(VkCommandBuffer cmd, uint32_t frame, std::span<const DrawItem> items, const VkRect2D &rect,
             VkDescriptorSet cameraSet, uint32_t cameraOffset, const ResourceStore &resources,
-            const MaterialStore &materials);
+            const MaterialStore &materials, bool diagnostics = false);
 
         VkImage OutputImage(uint32_t frame) const { return mOutputImages[frame]; }
 
@@ -96,6 +98,10 @@ namespace mir::vk
         VkImage mOutputImages[kFramesInFlight]{};
         VmaAllocation mOutputAllocations[kFramesInFlight]{};
         VkImageView mOutputViews[kFramesInFlight]{};
+        VkExtent2D mExtent{};
+        VkImage mDiagnosticImages[kFramesInFlight]{};
+        VmaAllocation mDiagnosticAllocations[kFramesInFlight]{};
+        VkImageView mDiagnosticViews[kFramesInFlight]{};
 
         VkAccelerationStructureKHR mTlas[kFramesInFlight]{};
         VkBuffer mTlasBuffers[kFramesInFlight]{};

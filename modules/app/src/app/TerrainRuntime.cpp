@@ -15,6 +15,7 @@
 #include <renderer/VulkanRenderer.h>
 #include <terrain/TerrainAreaSamples.h>
 #include <terrain/TerrainAssetPath.h>
+#include <terrain/TerrainRenderMesh.h>
 #include <terrain/TerrainTileMesh.h>
 
 #include <glm/vec3.hpp>
@@ -28,24 +29,6 @@ namespace mir
 {
     namespace
     {
-        const char *Describe(TerrainMeshStatus status)
-        {
-            switch (status)
-            {
-            case TerrainMeshStatus::Ok:
-                return "ok";
-            case TerrainMeshStatus::InvalidInput:
-                return "invalid input";
-            case TerrainMeshStatus::MissingTile:
-                return "missing tile";
-            case TerrainMeshStatus::MissingNeighbour:
-                return "missing neighbour";
-            case TerrainMeshStatus::InvalidSamples:
-                return "invalid samples";
-            }
-            return "?";
-        }
-
         bool SamePlacement(const TerrainPlacement &a, const TerrainPlacement &b)
         {
             return a.asset == b.asset && a.translation.Meters() == b.translation.Meters();
@@ -242,20 +225,19 @@ namespace mir
     {
         const TerrainResidentRelease &release = *instance.release;
         const TerrainLayout &layout = release.Layout();
-        const TileSampleLookup lookup = release.Lookup();
         const TileRange range = layout.Tiles();
         for (int32_t z = range.min.z; z <= range.max.z; ++z)
             for (int32_t x = range.min.x; x <= range.max.x; ++x)
             {
-                const TerrainMeshResult built = BuildTerrainTileMesh(layout, release.Info(), {x, z}, lookup);
-                if (!built.IsOk())
+                const auto built = ReadTerrainRenderMesh(release.Handle(), {x, z});
+                if (!built)
                 {
-                    Report(std::format("Terrain '{}': no mesh for tile ({}, {}) ({} at tile ({}, {})); the instance "
+                    Report(std::format("Terrain '{}': no mesh for tile ({}, {}) ({}); the instance "
                                        "is not loaded",
-                                       instance.recipePath, x, z, Describe(built.status), built.tile.x, built.tile.z));
+                                       instance.recipePath, x, z, built.error.message));
                     return false;
                 }
-                if (!tiles.Add(*mRenderer, *built.mesh, instance.placement))
+                if (!tiles.Add(*mRenderer, *built.value, instance.placement))
                     return false; // Add logged why
             }
         return true;

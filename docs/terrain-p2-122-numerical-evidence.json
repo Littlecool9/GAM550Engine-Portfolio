@@ -1,0 +1,551 @@
+{
+  "origin": "GPU-image-readback; CPU projection explains these recorded failures",
+  "cases": [
+    {
+      "case": "pair-1-2-sourceLOD-plus150km-oblique-lit",
+      "pixel": [
+        125,
+        66
+      ],
+      "gpuReadbackDirectory": "gpu-early-debug",
+      "cameraMatrixSource": "gpu-numeric-release/matrix.json",
+      "device": "NVIDIA GeForce RTX 3070 Laptop GPU",
+      "driverVersion": 2585198592,
+      "rasterSubPixelPrecisionBits": 8,
+      "rasterReverseZ": 0.0005917820381000638,
+      "rasterUnprojectedDistanceMeters": 172.0296013979631,
+      "rtHitDistanceMeters": 172.0277862548828,
+      "rawDistanceDifferenceMeters": 0.0018151430802788582,
+      "triangles": [
+        {
+          "primitiveIndex": 258,
+          "cameraRelativeVertices": [
+            [
+              -118.0,
+              -51.11318588256836,
+              -115.0
+            ],
+            [
+              -118.0,
+              -51.140541076660156,
+              -114.0
+            ],
+            [
+              -117.0,
+              -51.09287643432617,
+              -114.0
+            ]
+          ],
+          "geometricNormal": [
+            -0.047664642333984375,
+            1.0,
+            0.027355194091796875
+          ],
+          "normalDotCameraRelativeFirstVertex": -48.634605407714844,
+          "predictions": [
+            {
+              "mode": "unquantized",
+              "screenVertices": [
+                [
+                  125.77450752258301,
+                  66.3291084766388,
+                  0.000589962990488857
+                ],
+                [
+                  125.11140823364258,
+                  66.59574151039124,
+                  0.0005926409503445029
+                ],
+                [
+                  125.79535484313965,
+                  66.71025037765503,
+                  0.0005944922449998558
+                ]
+              ],
+              "screenCross": -0.258293507874896,
+              "predictedReverseZ": 0.0005917882663197815,
+              "predictedDistanceMeters": 172.02782097445234,
+              "predictedZMinusActualRaster": 6.2282197177410126e-09
+            },
+            {
+              "mode": "rounded",
+              "screenVertices": [
+                [
+                  125.7734375,
+                  66.328125,
+                  0.000589962990488857
+                ],
+                [
+                  125.11328125,
+                  66.59765625,
+                  0.0005926409503445029
+                ],
+                [
+                  125.796875,
+                  66.7109375,
+                  0.0005944922449998558
+                ]
+              ],
+              "screenCross": -0.259033203125,
+              "predictedReverseZ": 0.0005917820963077247,
+              "predictedDistanceMeters": 172.0295847583204,
+              "predictedZMinusActualRaster": 5.820766091346741e-11
+            }
+          ]
+        }
+      ],
+      "sha256": {
+        "chunk_-1_-1.tpack": "abee6b1ed2ba5fa1c14e2a329d17aabc77ee7be275a6468d387d2cb3825a5f98",
+        "pair-1-2-sourceLOD-plus150km-oblique-lit-raster.png.depth.f32": "735b3aea2919b3754c39e04b465652b7b4312a8b1e3201239c605f09360f7266",
+        "pair-1-2-sourceLOD-plus150km-oblique-lit-rt.png.depth.f32": "3eff681e5ce0ca1f12334737ed98b762048f1ba542c02e19b2a0c3317b3d6959"
+      }
+    },
+    {
+      "case": "pair-1-2-sourceLOD-plus150km-grazing-lit",
+      "pixel": [
+        184,
+        194
+      ],
+      "gpuReadbackDirectory": "gpu-matrix-prelim-release",
+      "cameraMatrixSource": "gpu-matrix-prelim-release/matrix.json",
+      "device": "NVIDIA GeForce RTX 3070 Laptop GPU",
+      "driverVersion": 2585198592,
+      "rasterSubPixelPrecisionBits": 8,
+      "rasterReverseZ": 0.001605956582352519,
+      "rasterUnprojectedDistanceMeters": 67.53679497257929,
+      "rtHitDistanceMeters": 61.109275817871094,
+      "rawDistanceDifferenceMeters": 6.427519154708193,
+      "triangles": [
+        {
+          "primitiveIndex": 3277,
+          "cameraRelativeVertices": [
+            [
+              -31.0,
+              -8.715652465820312,
+              -60.0
+            ],
+            [
+              -30.0,
+              -8.581106185913086,
+              -59.0
+            ],
+            [
+              -30.0,
+              -8.64098072052002,
+              -60.0
+            ]
+          ],
+          "geometricNormal": [
+            -0.07467174530029297,
+            1.0,
+            -0.059874534606933594
+          ],
+          "normalDotCameraRelativeFirstVertex": -2.808356285095215,
+          "predictions": [
+            {
+              "mode": "unquantized",
+              "screenVertices": [
+                [
+                  182.68077850341797,
+                  194.5427441596985,
+                  0.001596144400537014
+                ],
+                [
+                  185.07774353027344,
+                  194.6170949935913,
+                  0.0016240947879850864
+                ],
+                [
+                  187.54032135009766,
+                  194.21291828155518,
+                  0.0015978345181792974
+                ]
+              ],
+              "screenCross": -1.151892157849943,
+              "predictedReverseZ": 0.001606012461706996,
+              "predictedDistanceMeters": 67.5344596488346,
+              "predictedZMinusActualRaster": 5.587935447692871e-08
+            },
+            {
+              "mode": "rounded",
+              "screenVertices": [
+                [
+                  182.6796875,
+                  194.54296875,
+                  0.001596144400537014
+                ],
+                [
+                  185.078125,
+                  194.6171875,
+                  0.0016240947879850864
+                ],
+                [
+                  187.5390625,
+                  194.21484375,
+                  0.0015978345181792974
+                ]
+              ],
+              "screenCross": -1.14764404296875,
+              "predictedReverseZ": 0.001605956582352519,
+              "predictedDistanceMeters": 67.53679497257929,
+              "predictedZMinusActualRaster": 0.0
+            }
+          ]
+        },
+        {
+          "primitiveIndex": 4051,
+          "cameraRelativeVertices": [
+            [
+              -28.0,
+              -7.886852264404297,
+              -54.0
+            ],
+            [
+              -27.0,
+              -7.66452693939209,
+              -53.0
+            ],
+            [
+              -27.0,
+              -7.765568256378174,
+              -54.0
+            ]
+          ],
+          "geometricNormal": [
+            -0.12128400802612305,
+            1.0,
+            -0.10104131698608398
+          ],
+          "normalDotCameraRelativeFirstVertex": 0.9653310775756836,
+          "predictions": [
+            {
+              "mode": "unquantized",
+              "screenVertices": [
+                [
+                  182.1495819091797,
+                  194.77397203445435,
+                  0.0017742913914844394
+                ],
+                [
+                  184.7870635986328,
+                  194.367778301239,
+                  0.0018091241363435984
+                ],
+                [
+                  187.53780364990234,
+                  194.15043354034424,
+                  0.0017765165539458394
+                ]
+              ],
+              "screenCross": 0.544090543371567,
+              "predictedReverseZ": 0.001775922253727913,
+              "predictedDistanceMeters": 61.109339334527604,
+              "predictedZMinusActualRaster": 0.00016996567137539387
+            },
+            {
+              "mode": "rounded",
+              "screenVertices": [
+                [
+                  182.1484375,
+                  194.7734375,
+                  0.0017742913914844394
+                ],
+                [
+                  184.78515625,
+                  194.3671875,
+                  0.0018091241363435984
+                ],
+                [
+                  187.5390625,
+                  194.15234375,
+                  0.0017765165539458394
+                ]
+              ],
+              "screenCross": 0.5522918701171875,
+              "predictedReverseZ": 0.001776084303855896,
+              "predictedDistanceMeters": 61.10379492898883,
+              "predictedZMinusActualRaster": 0.00017012772150337696
+            }
+          ]
+        }
+      ],
+      "sha256": {
+        "chunk_-1_0.tpack": "ddf3a5fe57dbbf0f8cec68b551916a5a4cf2d7c699477aea5d1e16de116a00e5",
+        "pair-1-2-sourceLOD-plus150km-grazing-lit-raster.png.depth.f32": "0ff64a63009c671c65d3a1cf0ac27b17043fcef9f96ac7e273e3420a353f7bf9",
+        "pair-1-2-sourceLOD-plus150km-grazing-lit-rt.png.depth.f32": "7ea65846beb5e376c28413513f1d8e03236e569a8dd5f5e8d7b19f9bb57db356"
+      }
+    },
+    {
+      "case": "pair-1-2-sourceLOD-plus150km-close-ground-lit",
+      "pixel": [
+        20,
+        165
+      ],
+      "gpuReadbackDirectory": "gpu-full-culling-release",
+      "cameraMatrixSource": "gpu-full-culling-release/matrix.json",
+      "device": "NVIDIA GeForce RTX 3070 Laptop GPU",
+      "rasterSubPixelPrecisionBits": 8,
+      "rasterReverseZ": 0.001754365162923932,
+      "rasterUnprojectedDistanceMeters": 78.6378724616309,
+      "rtHitDistanceMeters": 71.82240295410156,
+      "rawDistanceDifferenceMeters": 6.815469507529343,
+      "triangles": [
+        {
+          "tile": [
+            -1,
+            -1
+          ],
+          "primitiveIndex": 790,
+          "predictions": [
+            {
+              "mode": "unquantized",
+              "screenVertices": [
+                [
+                  24.49405589681909,
+                  165.27597775372,
+                  0.0018991816309332243
+                ],
+                [
+                  17.917113949226113,
+                  165.64346564435743,
+                  0.0019357140555255326
+                ],
+                [
+                  22.999245361234912,
+                  165.42884082542116,
+                  0.0019417164957065403
+                ]
+              ],
+              "barycentricWeights": [
+                0.38320587980732534,
+                0.6044836897388334,
+                0.012310430453841305
+              ],
+              "coversPixelCenter": true,
+              "predictedReverseZ": 0.001921788508240544,
+              "predictedDistanceMeters": 71.82252236452717
+            },
+            {
+              "mode": "rounded",
+              "screenVertices": [
+                [
+                  24.4921875,
+                  165.27734375,
+                  0.0018991816309332243
+                ],
+                [
+                  17.91796875,
+                  165.64453125,
+                  0.0019357140555255326
+                ],
+                [
+                  23.0,
+                  165.4296875,
+                  0.0019417164957065403
+                ]
+              ],
+              "barycentricWeights": [
+                0.3963133640552995,
+                0.6082949308755761,
+                -0.004608294930875576
+              ],
+              "coversPixelCenter": false,
+              "predictedReverseZ": 0.0019212081064235993,
+              "predictedDistanceMeters": 71.84410777533255
+            }
+          ]
+        },
+        {
+          "tile": [
+            -1,
+            -1
+          ],
+          "primitiveIndex": 267,
+          "predictions": [
+            {
+              "mode": "unquantized",
+              "screenVertices": [
+                [
+                  20.737554136164498,
+                  165.28555067757844,
+                  0.001736256770871671
+                ],
+                [
+                  19.341538409262746,
+                  165.7344369218223,
+                  0.001771507387295169
+                ],
+                [
+                  25.31875723306669,
+                  165.18777785897086,
+                  0.0017410089058897452
+                ]
+              ],
+              "barycentricWeights": [
+                0.40000968288892425,
+                0.49960219343695167,
+                0.10038812367412409
+              ],
+              "coversPixelCenter": true,
+              "predictedReverseZ": 0.001754345114074766,
+              "predictedDistanceMeters": 78.63876605027303
+            },
+            {
+              "mode": "rounded",
+              "screenVertices": [
+                [
+                  20.73828125,
+                  165.28515625,
+                  0.001736256770871671
+                ],
+                [
+                  19.33984375,
+                  165.734375,
+                  0.001771507387295169
+                ],
+                [
+                  25.3203125,
+                  165.1875,
+                  0.0017410089058897452
+                ]
+              ],
+              "barycentricWeights": [
+                0.3992218825677875,
+                0.5001389495414665,
+                0.10063916789074596
+              ],
+              "coversPixelCenter": true,
+              "predictedReverseZ": 0.0017543652280543323,
+              "predictedDistanceMeters": 78.63786955876492
+            }
+          ]
+        }
+      ],
+      "viewProjColumnMajor": [
+        0.9629493951797485,
+        0.03959232568740845,
+        1.5033072031656047e-06,
+        -0.15032921731472015,
+        -1.8147351399377953e-09,
+        -1.7123677730560303,
+        1.5033069757919293e-06,
+        -0.15032920241355896,
+        -0.14814607799053192,
+        0.2573500871658325,
+        9.771495570021216e-06,
+        -0.9771398305892944,
+        0.0,
+        0.0,
+        0.10000099241733551,
+        0.0
+      ],
+      "sha256": {
+        "matrix.json": "9ad3fc851c08ad7c6890560b3d4905c64bc63b630eef33f2bd64e30a4afdfb96",
+        "pair-1-2-sourceLOD-plus150km-close-ground-lit-raster.png.depth.f32": "36469fb082a4121682ae2652445464e2647e91977fc8e3e503712f44d14d61c7",
+        "pair-1-2-sourceLOD-plus150km-close-ground-lit-rt.png.depth.f32": "fe5031f33f9ce440cfb098a6885259e993d54232ababf7ca2c177b8e947d08f2",
+        "chunk_-1_-1.tpack": "abee6b1ed2ba5fa1c14e2a329d17aabc77ee7be275a6468d387d2cb3825a5f98",
+        "chunk_-1_0.tpack": "ddf3a5fe57dbbf0f8cec68b551916a5a4cf2d7c699477aea5d1e16de116a00e5",
+        "chunk_0_-1.tpack": "8ba8e8ce23ff0613cabdf347874891d801e6190417595b3f8b9f3ec83ef1223d",
+        "chunk_0_0.tpack": "3b58b833b943f8c59479f8c1f587f785253e0f7f9c05b546482b9d22246f1166"
+      }
+    },
+    {
+      "case": "pair-1-2-mixedLOD-plus150km-grazing-lit",
+      "pixel": [
+        175,
+        195
+      ],
+      "origin": "unchanged real GPU readback vs independent full nearest-triangle projection",
+      "triangle": {
+        "tile": [
+          -1,
+          0
+        ],
+        "primitive": 297,
+        "screenUnquantized": [
+          [
+            175.59863688088114,
+            194.78666496768219,
+            0.0015675075818686864
+          ],
+          [
+            164.63165897487664,
+            196.19644135264082,
+            0.001673845103201814
+          ],
+          [
+            185.00205031464395,
+            194.8922278365374,
+            0.0016812617630593042
+          ]
+        ]
+      },
+      "predictions": [
+        {
+          "mode": "ideal",
+          "screen": [
+            [
+              175.59863688088114,
+              194.78666496768219,
+              0.0015675075818686864
+            ],
+            [
+              164.63165897487664,
+              196.19644135264082,
+              0.001673845103201814
+            ],
+            [
+              185.00205031464395,
+              194.8922278365374,
+              0.0016812617630593042
+            ]
+          ],
+          "weights": [
+            0.0008426034070109223,
+            0.46607484402681015,
+            0.533082552566179
+          ],
+          "covers": true,
+          "predictedReverseZ": 0.0016777091948123918
+        },
+        {
+          "mode": "quantized",
+          "screen": [
+            [
+              175.59765625,
+              194.78515625,
+              0.0015675075818686864
+            ],
+            [
+              164.6328125,
+              196.1953125,
+              0.001673845103201814
+            ],
+            [
+              185.00390625,
+              194.890625,
+              0.0016812617630593042
+            ]
+          ],
+          "weights": [
+            -0.0009713494244384391,
+            0.4669873460046113,
+            0.5339840034198272
+          ],
+          "covers": false,
+          "predictedReverseZ": 0.001677908771814663
+        }
+      ],
+      "oracleIdealReverseZ": 0.0016777091948123918,
+      "oracleQuantizedReverseZ": 0.0,
+      "idealMaskPixels": 12444,
+      "quantizedMaskPixels": 12442,
+      "hashes": {
+        "matrix.json": "d31b7138ada923c3ff1cca4c4055d38064c6aa44c3cf47145f337b85dcdbb9fe",
+        "pair-1-2-mixedLOD-plus150km-grazing-lit-raster.png.depth.f32": "1a26dcd7fcb17e969cbbc0cc47c5056f36eaea2ad89be1d12c480ce172a9def8",
+        "pair-1-2-mixedLOD-plus150km-grazing-lit-rt.png.depth.f32": "276d9f16cb8e9f74ffe05d3f7186139c9d84a0fca888748f09d33978389332de",
+        "prove_depth_oracles.py": "6849d8b2e7f7b27624be6eab950b64a98e3cfdf13c7d79b00b4742d5f8a4452a"
+      }
+    }
+  ]
+}

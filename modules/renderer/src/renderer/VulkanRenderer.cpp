@@ -262,9 +262,9 @@ namespace mir
         mImGuiOverlay->SetDrawData(drawData);
     }
 
-    void VulkanRenderer::CaptureNextFrame(const std::filesystem::path &path)
+    void VulkanRenderer::CaptureNextFrame(const std::filesystem::path &path, bool diagnostics)
     {
-        mCapture->Request(path);
+        mCapture->Request(path, diagnostics);
     }
 
     void VulkanRenderer::SetDirectionalLight(const glm::vec3 &direction, const glm::vec3 &color)

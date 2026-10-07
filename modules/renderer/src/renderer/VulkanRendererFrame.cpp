@@ -148,7 +148,7 @@ namespace mir
             .imageView = mSwapchain->DepthView(mFrameSync->Index()),
             .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
             .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .storeOp = mCapture->WantsDiagnostics() ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_DONT_CARE,
             .clearValue{ .depthStencil{ .depth = 0.0f } } }; // reverse-Z: 0 is the far end
 
         const VkRenderingInfo renderingInfo{
@@ -177,6 +177,14 @@ namespace mir
 
         mDevice->EndLabel(cmd);
         vkCmdEndRendering(cmd);
+
+        if (mCapture->WantsDiagnostics() && !mSwapchain->SupportsDepthCapture())
+            MIR_LOG_ERROR("RecordCommands: GPU depth readback unavailable");
+        else
+            mCapture->RecordDepth(cmd, mSwapchain->DepthImage(mFrameSync->Index()), VK_IMAGE_ASPECT_DEPTH_BIT,
+                mSwapchain->Extent(), VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+                VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, 1, "reverse-Z-depth;0=background");
 
         const bool captured = mCapture->Record(cmd, *mSwapchain, imageIndex);
         mSwapchain->RecordPresentTransition(cmd, imageIndex,
@@ -222,7 +230,11 @@ namespace mir
         mDevice->BeginLabel(cmd, "Ray Trace Pass", { 0.0f, 1.0f, 1.0f, 1.0f });
 
         mRayTracer->Record(cmd, mFrameSync->Index(), view.items, rect, mCameraBuffer->Set(mFrameSync->Index()),
-            cameraOffset, *mResources, *mMaterialStore);
+            cameraOffset, *mResources, *mMaterialStore, mCapture->WantsDiagnostics());
+        if (mCapture->WantsDiagnostics())
+            mCapture->RecordDepth(cmd, mRayTracer->DiagnosticImage(mFrameSync->Index()), VK_IMAGE_ASPECT_COLOR_BIT,
+                mSwapchain->Extent(), VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, 4, "hit-distance-meters,normal-x,normal-y,normal-z;distance0=miss");
 
         vk::ImageBarrier(cmd, mSwapchain->Image(imageIndex), VK_IMAGE_ASPECT_COLOR_BIT,
             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -260,7 +272,8 @@ namespace mir
 
         const VkImageLayout layout =
             mImGuiOverlay->RecordOver(cmd, *mSwapchain, imageIndex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        mSwapchain->RecordPresentTransition(cmd, imageIndex, layout);
+        const bool captured = mCapture->Record(cmd, *mSwapchain, imageIndex, layout);
+        mSwapchain->RecordPresentTransition(cmd, imageIndex, captured ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : layout);
 
         mDevice->EndLabel(cmd);
     }
@@ -276,12 +289,15 @@ namespace mir
         if (views.empty())
             return;
 
+        if (mCapture->WantsDiagnostics() && !mRayTracer->PrepareDiagnostics())
+            return;
         const std::optional<vk::FrameContext> frame = BeginFrame();
         if (!frame)
             return;
 
         RecordRtFrame(frame->cmd, frame->imageIndex, views);
-        mFrameSync->End(*mSwapchain, *frame);
+        const bool submitted = mFrameSync->End(*mSwapchain, *frame);
+        mCapture->Finish(submitted, *mSwapchain);
     }
 
     uint32_t VulkanRenderer::WriteCameraData(const RenderView &view, uint32_t viewIndex)

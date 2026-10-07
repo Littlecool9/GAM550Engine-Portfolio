@@ -266,6 +266,7 @@ namespace mir::vk
             MIR_LOG_CRITICAL("CreateDepthResources: VK_FORMAT_D32_SFLOAT unsupported as an optimal-tiling depth attachment");
             return false;
         }
+        mCanCaptureDepth = (formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT) != 0;
 
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
@@ -278,7 +279,8 @@ namespace mir::vk
                 .arrayLayers = 1,
                 .samples = VK_SAMPLE_COUNT_1_BIT,
                 .tiling = VK_IMAGE_TILING_OPTIMAL,
-                .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                    (mCanCaptureDepth ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0u),
                 .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
 

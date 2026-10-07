@@ -34,6 +34,9 @@ namespace mir::vk
         bool mModelShader = false;
         uint32_t mGeneration = 0;
         bool mUnlit = false;
+        bool mWireframe = false;
+        VkCullModeFlags mCullMode = VK_CULL_MODE_BACK_BIT;
+        VkFrontFace mFrontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     };
 
     // Destroy* and Release* do not wait: the caller idles the device first,
