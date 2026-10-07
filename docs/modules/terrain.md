@@ -945,3 +945,22 @@ in the release reader; it still writes none.
 ### P2 #122：混合精度渲染
 
 运行时 `ReadTerrainRenderMesh` 按 tile 的唯一源层读取烘焙 LOD 与法线，校验索引 provenance、精度、origin 和顶点顺序；显式 layer 用于静态混合 LOD 验收。连接环 mesh 的 samples 为空，顶点和索引不是规则网格。独立 TerrainRenderProbe 保存真实光栅/光追 PNG、线框、D32F 深度及 RGBA32F 命中距离/法线矩阵；P3 再做每视口选择。
+
+## P2 #144: Lua height queries
+
+`world:terrain_height_at(position, requiredSpacing)` exposes the resident
+`TerrainWorld::HeightAt` result, including all statuses, failure, local/world
+height, spacing, source spacing, optional error, full release identity, tile
+and layer. See [script.md](script.md#terrain-height-query-144) for the result
+shape. The binding performs no IO and resolves the World resource per call;
+Play retains its pinned release. Invalid arguments return `Failed/InvalidInput`
+with a script error log; no terrain or no covering instance gives `OutsideMap`.
+The old Backlog item 2's script query is complete; per-instance mesh uploads
+remain as described there. Verification: [#144 handoff](../terrain-p2-144.md).
+
+
+## P2 #123：统一碰撞精度
+
+app 从唯一 resident 最终 source 采样整实例规则 HeightField，按 TerrainCollisionPolicy 的严格递减 spacing 列表选择最粗满足误差门槛的档。默认 8/4/2/1 m、0.05 m 门槛；source→实际均匀 canonical 三角面的覆盖误差、真实 Jolt decoded Y/XZ 偏差、double→float scale drift 和 WorldReal 预算相加。解码 XY 矩形必须完整覆盖有效 bounds。失败候选立即销毁，全部失败拒绝实例；预算细化只记录 INFO。
+
+该 policy 可作为 World resource 覆盖原型配置。默认网格不适配某些 P1 decimal tileSize 时，烘焙仍合法但默认 app 碰撞明确拒绝，调用方必须提供能构成精确 tile 网格的候选；不会静默在 1 m 失败后生成更细原始细节。整实例内存、同步加载及多形状接触/替换仍由 P3 #128 处理。量化 metadata 只含通用数值，Jolt 不进入任何公共头文件。测量与验证见 docs/terrain-p2-123.md。
