@@ -15,7 +15,6 @@
 #include <serial/JsonFile.h>
 
 #include <algorithm>
-#include <charconv>
 #include <optional>
 #include <string>
 #include <utility>
@@ -35,36 +34,15 @@ namespace mir
             return sceneDir / kEntitiesDirName / (std::to_string(id) + ".json");
         }
 
-        std::optional<StableId> EntityFileId(const fs::path &file)
+        void RemoveDeletedEntityFiles(const fs::path &sceneDir, const LoadedScene &scene)
         {
-            if (file.extension() != ".json")
-                return std::nullopt;
-
-            const std::string stem = file.stem().string();
-            StableId id = kNullStableId;
-            const auto [end, err] = std::from_chars(stem.data(), stem.data() + stem.size(), id);
-            if (err != std::errc{} || end != stem.data() + stem.size())
-                return std::nullopt;
-            return id;
-        }
-
-        void RemoveStaleEntityFiles(const fs::path &sceneDir, const LoadedScene &scene)
-        {
-            std::vector<fs::path> stale;
-            std::error_code ec;
-            for (fs::directory_iterator it(sceneDir / kEntitiesDirName, ec), end; !ec && it != end; it.increment(ec))
+            for (StableId id : scene.mDeletedIds)
             {
-                const std::optional<StableId> id = EntityFileId(it->path());
-                if (id && !scene.mEntities.contains(*id))
-                    stale.push_back(it->path());
-            }
-
-            for (const fs::path &file : stale)
-            {
-                std::error_code removeEc;
-                fs::remove(file, removeEc);
-                if (removeEc)
-                    MIR_LOG_WARN("SaveScene: could not remove stale '{}': {}", file.string(), removeEc.message());
+                const fs::path file = EntityFilePath(sceneDir, id);
+                std::error_code ec;
+                fs::remove(file, ec);
+                if (ec)
+                    MIR_LOG_WARN("SaveScene: could not remove deleted '{}': {}", file.string(), ec.message());
             }
         }
     }
@@ -113,7 +91,7 @@ namespace mir
             return false;
         }
 
-        RemoveStaleEntityFiles(sceneDir, scene);
+        RemoveDeletedEntityFiles(sceneDir, scene);
         return true;
     }
 

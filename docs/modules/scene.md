@@ -142,14 +142,17 @@ that another loaded scene owns.
 **An entity file is named by its `StableId`, and `LoadScene` finds it by that
 name.** The manifest lists ids, and each id maps to `entities/<id>.json`.
 
-**`SaveScene` deletes the file of every entity no longer in the scene.** A deleted
-entity's file would otherwise stay on disk and in version control. `LoadScene`
-would never read it, but a reader of the directory would take it for a live
-entity. The sweep runs after the manifest is written, so the manifest on disk
-never lists a file the sweep removed. A crash before the sweep leaves stale
-files, which load ignores. Only names of the
-form `<number>.json` are touched, so anything else put in `entities/` survives. A
-file that cannot be deleted logs a warning, and the save still succeeds.
+**`SaveScene` deletes the files of entities deleted since the scene was loaded.**
+A deleted entity's file would otherwise stay on disk and in version control.
+`LoadScene` would never read it, but a reader of the directory would take it for
+a live entity. `DestroySceneEntity` records each removed id in
+`LoadedScene::mDeletedIds`, and `SaveScene` deletes only those files. A sweep of
+every file not in the scene would also delete a file `LoadScene` skipped as
+unreadable, and every file of an old scene when a new scene is saved over it.
+The deletes run after the manifest is written, so the manifest on disk never
+lists a removed file. A crash before them leaves stale files, which load
+ignores. A file that cannot be deleted logs a warning, and the save still
+succeeds.
 
 ## State
 
@@ -200,9 +203,9 @@ module does not link (see [app.md](app.md)). Scripts resolve in
 files are named `<id>.json`.** Was: save wrote one file per entity still in the
 scene and never removed any. A deleted entity's file stayed in `entities/` and in
 version control. This doc also still described the old `<id>-<name>.json` naming.
-Now: after the manifest is written, `SaveScene` deletes every `<number>.json`
-whose id is not in the scene, and the Model and Rules describe the naming the
-code uses. `DestroySceneEntity` and `DuplicateSceneEntity` were added for the
+Now: `DestroySceneEntity` records the ids it removes, and after the manifest is
+written `SaveScene` deletes those files only. The Model and Rules describe the
+naming the code uses. `DestroySceneEntity` and `DuplicateSceneEntity` were added for the
 editor's Delete and Duplicate.
 
 *2026-10-07* — **A non-integer `EntityRef` in a scene file loads null.** Was:
