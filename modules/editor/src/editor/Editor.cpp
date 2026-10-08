@@ -268,24 +268,32 @@ namespace mir
 
         const char *primaryLabel = playing ? (paused ? ICON_FA_PLAY " Resume" : ICON_FA_PAUSE " Pause") : ICON_FA_PLAY " Play";
         const ImGuiStyle &style = ImGui::GetStyle();
-        float rowWidth = ImGui::CalcTextSize(primaryLabel).x + style.FramePadding.x * 2.0f;
+
+        const float buttonWidth = std::max({ ImGui::CalcTextSize(ICON_FA_PLAY " Play").x,
+                                              ImGui::CalcTextSize(ICON_FA_PLAY " Resume").x,
+                                              ImGui::CalcTextSize(ICON_FA_PAUSE " Pause").x,
+                                              ImGui::CalcTextSize(ICON_FA_STOP " Stop").x }) +
+            style.FramePadding.x * 2.0f;
+
+        float rowWidth = buttonWidth;
         if (playing)
-            rowWidth += style.ItemSpacing.x + ImGui::CalcTextSize(ICON_FA_STOP " Stop").x + style.FramePadding.x * 2.0f;
+            rowWidth += style.ItemSpacing.x + buttonWidth;
 
         ImGui::SetCursorPosY((height - ImGui::GetFrameHeight()) * 0.5f);
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - rowWidth) * 0.5f);
 
+        const ImVec2 buttonSize(buttonWidth, 0.0f);
         if (!playing)
         {
-            if (ImGui::Button(primaryLabel))
+            if (ImGui::Button(primaryLabel, buttonSize))
                 action = SceneMenuAction::Play;
         }
         else
         {
-            if (ImGui::Button(primaryLabel))
+            if (ImGui::Button(primaryLabel, buttonSize))
                 action = SceneMenuAction::TogglePause;
             ImGui::SameLine();
-            if (ImGui::Button(ICON_FA_STOP " Stop"))
+            if (ImGui::Button(ICON_FA_STOP " Stop", buttonSize))
                 action = SceneMenuAction::Stop;
         }
 
