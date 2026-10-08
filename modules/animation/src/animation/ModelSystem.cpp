@@ -22,33 +22,63 @@ namespace mir
 {
     namespace
     {
-        // glTF stores sampler state as raw GL enums; the renderer only speaks
-        // Vulkan, so the translation stops here.
         SamplerDesc ToSamplerDesc(const MaterialAsset &material)
         {
-            const auto wrap = [](uint32_t gl) {
-                return gl == 33071   ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
-                       : gl == 33648 ? VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT
-                                     : VK_SAMPLER_ADDRESS_MODE_REPEAT;
-            };
+            const auto wrap = [](uint32_t gl)
+                {
+                    return gl == 33071 ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE
+                        : gl == 33648 ? VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT
+                        : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+                };
 
             SamplerDesc sampler;
             sampler.magFilter = material.magFilter == 9728 ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
             // NEAREST, NEAREST_MIPMAP_NEAREST, NEAREST_MIPMAP_LINEAR.
             sampler.minFilter = (material.minFilter == 9728 || material.minFilter == 9984 ||
-                                 material.minFilter == 9986)
-                                    ? VK_FILTER_NEAREST
-                                    : VK_FILTER_LINEAR;
-            // *_MIPMAP_LINEAR.
+                material.minFilter == 9986)
+                ? VK_FILTER_NEAREST
+                : VK_FILTER_LINEAR;
+// *_MIPMAP_LINEAR.
             sampler.mipmapMode = (material.minFilter == 9986 || material.minFilter == 9987)
-                                     ? VK_SAMPLER_MIPMAP_MODE_LINEAR
-                                     : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+                ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+                : VK_SAMPLER_MIPMAP_MODE_NEAREST;
             sampler.addressModeU = wrap(material.wrapS);
             sampler.addressModeV = wrap(material.wrapT);
             // Only the four *_MIPMAP_* minFilters sample past level 0.
             sampler.useMips = material.minFilter >= 9984;
             return sampler;
         }
+
+        TextureHandle UploadTexture(VulkanRenderer &renderer, AssetCache &assets, AssetId model, AssetId texture)
+        {
+            const auto *blob = assets.Load(texture);
+            if (!blob)
+            {
+                MIR_LOG_ERROR("Model {:016x}: texture {:016x} has no cooked blob, using error texture", model.value, texture.value);
+                return renderer.ErrorTexture();
+            }
+            TextureAsset tex;
+            std::string error;
+            if (!ReadTypedAsset(*blob, tex, error))
+            {
+                MIR_LOG_ERROR("Model {:016x}: texture {:016x} is not a cooked texture ({}), using error texture", model.value, texture.value, error);
+                return renderer.ErrorTexture();
+            }
+
+            const TextureHandle handle = renderer.CreateTexture(
+                TextureDesc{ .width = tex.width,
+                    .height = tex.height, .pixels = std::as_bytes(std::span(tex.rgba)),
+                    .srgb = true, .generateMips = true });
+
+            if (handle.IsNull())
+            {
+                MIR_LOG_ERROR("Model {:016x}: texture {:016x} GPU upload failed, using error texture", model.value, texture.value);
+                return renderer.ErrorTexture();
+            }
+
+            return handle;
+        }
+
     } // namespace
     void ModelSystem::Reset()
     {
@@ -59,17 +89,18 @@ namespace mir
         mDeformations.clear();
     }
     ModelSystem::Loaded ModelSystem::LoadInto(AssetCache &assets, AssetId id,
-                                              std::unordered_map<uint64_t, TextureHandle> &textures)
+        std::unordered_map<uint64_t, TextureHandle> &textures)
     {
         Loaded loaded;
         std::string error;
         if (!LoadModelResources(assets, id, loaded.resources, error))
             throw std::runtime_error(error);
-        auto read = [&](AssetId key, auto &out) {
-            const auto *blob = assets.Load(key);
-            if (!blob || !ReadTypedAsset(*blob, out, error))
-                throw std::runtime_error("model dependency: " + error);
-        };
+        auto read = [&](AssetId key, auto &out)
+            {
+                const auto *blob = assets.Load(key);
+                if (!blob || !ReadTypedAsset(*blob, out, error))
+                    throw std::runtime_error("model dependency: " + error);
+            };
         std::unordered_set<uint64_t> existingTextures;
         for (const auto &[textureId, handle] : textures)
             existingTextures.insert(textureId);
@@ -83,7 +114,7 @@ namespace mir
                     std::vector<Vertex> vertices;
                     vertices.reserve(p.vertices.size());
                     for (const auto &v : p.vertices)
-                        vertices.push_back({v.position, glm::vec3(v.color), v.normal, v.uv, v.color.a, v.tangent});
+                        vertices.push_back({ v.position, glm::vec3(v.color), v.normal, v.uv, v.color.a, v.tangent });
                     MaterialAsset material;
                     if (!p.material.IsNull())
                         read(p.material, material);
@@ -93,8 +124,8 @@ namespace mir
                     desc.shaderName = "model";
                     desc.cullMode = material.doubleSided ? VK_CULL_MODE_NONE : VK_CULL_MODE_BACK_BIT;
                     desc.topology = p.topology == MeshTopology::Triangles ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
-                                    : p.topology == MeshTopology::Lines   ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
-                                                                          : VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+                        : p.topology == MeshTopology::Lines ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST
+                        : VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
                     desc.sampler = ToSamplerDesc(material);
                     desc.alphaMode = static_cast<MaterialAlphaMode>(material.alpha);
                     desc.alphaCutoff = material.alphaCutoff;
@@ -103,17 +134,8 @@ namespace mir
                         const auto texId = material.baseColorTexture.value;
                         if (!textures.contains(texId))
                         {
-                            TextureAsset tex;
-                            read(material.baseColorTexture, tex);
-                            const TextureHandle handle = mRenderer.CreateTexture(
-                                TextureDesc{.width = tex.width,
-                                            .height = tex.height,
-                                            .pixels = std::as_bytes(std::span(tex.rgba)),
-                                            .srgb = true,
-                                            .generateMips = true});
-                            if (handle.IsNull())
-                                throw std::runtime_error("GPU texture upload failed");
-                            textures.emplace(texId, handle);
+                            textures.emplace(texId, UploadTexture(mRenderer, assets, id, material.baseColorTexture));
+                            desc.baseColorTexture = textures.at(texId);
                         }
                         desc.baseColorTexture = textures.at(texId);
                     }
@@ -122,7 +144,7 @@ namespace mir
                     gpu.material = mRenderer.CreateMaterial(desc);
                     desc.frontFace = VK_FRONT_FACE_CLOCKWISE;
                     gpu.mirrored = mRenderer.CreateMaterial(desc);
-                    gpu.factor = material.baseColor;
+                    gpu.factor = desc.baseColorTexture == mRenderer.ErrorTexture() ? glm::vec4(1) : material.baseColor;
                     gpu.transparent = material.alpha == MaterialAlpha::Blend;
                     primitives.push_back(gpu);
                     if (gpu.mesh.IsNull() || gpu.material.IsNull() || gpu.mirrored.IsNull())
@@ -155,11 +177,12 @@ namespace mir
             return it->second;
         if (!mAssets)
             throw std::runtime_error("model asset cache unavailable");
+
         return mModels.emplace(id.value, LoadInto(*mAssets, id, mTextures)).first->second;
     }
 
     void ModelSystem::Release(std::unordered_map<uint64_t, Loaded> &models,
-                              std::unordered_map<uint64_t, TextureHandle> &textures)
+        std::unordered_map<uint64_t, TextureHandle> &textures)
     {
         std::vector<MeshHandle> meshes;
         std::vector<MaterialHandle> materials;
@@ -185,7 +208,7 @@ namespace mir
         try
         {
             for (const auto &[id, loaded] : mModels)
-                mPreparedModels.emplace(id, LoadInto(assets, AssetId{id}, mPreparedTextures));
+                mPreparedModels.emplace(id, LoadInto(assets, AssetId{ id }, mPreparedTextures));
             return true;
         }
         catch (const std::exception &exception)
@@ -215,7 +238,8 @@ namespace mir
         auto *overrides = context.world.TryResource<ModelMorphOverrides>();
         std::unordered_set<uint64_t> alive;
         context.world.GetOrCreateQuery<ModelPlayer, const WorldTransform>().ForEach(
-            [&](Entity entity, ModelPlayer &player, const WorldTransform &transform) {
+            [&](Entity entity, ModelPlayer &player, const WorldTransform &transform)
+            {
                 const auto packed = PackEntity(entity);
                 alive.insert(packed);
                 if (player.ModelName().empty() && player.ModelAsset().IsNull())
@@ -276,8 +300,8 @@ namespace mir
                                     if (w->second.size() != pose[i].weights.size())
                                     {
                                         MIR_LOG_WARN("Model '{}': cleared invalid morph override "
-                                                     "for node '{}'",
-                                                     path, data.resources.model.nodes[i].key);
+                                            "for node '{}'",
+                                            path, data.resources.model.nodes[i].key);
                                         it->second.erase(w);
                                         continue;
                                     }
@@ -295,7 +319,7 @@ namespace mir
                         // The node pose is model-local and bounded; only the
                         // entity's world position needs world precision.
                         const auto world = TryComposePose(transform.Pose(), glm::mat3(pose[i].world),
-                                                          glm::vec3(pose[i].world[3]));
+                            glm::vec3(pose[i].world[3]));
                         if (!world)
                             continue;
                         const auto det = glm::determinant(world->linear);
@@ -308,12 +332,12 @@ namespace mir
                         {
                             mDeformations.push_back(
                                 BuildDeformationData(mesh.primitives[p], pose[i].weights, matrices));
-                            WorldDrawItem item{gpu[p].mesh,
+                            WorldDrawItem item{ gpu[p].mesh,
                                                *world,
                                                glm::inverseTranspose(world->linear),
                                                gpu[p].factor,
                                                det < 0 ? gpu[p].mirrored : gpu[p].material,
-                                               mDeformations.back()};
+                                               mDeformations.back() };
                             item.transparent = gpu[p].transparent;
                             draws.items.push_back(item);
                         }
