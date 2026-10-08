@@ -29,17 +29,15 @@
 #include <cstdio>
 #include <cstring>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace mir
 {
     namespace
     {
-        // Largest FieldKind is Mat4 at 64 bytes (see FieldSize)
-        struct alignas(16) FieldBuffer
-        {
-            std::byte mBytes[64];
-        };
+        using FieldBuffer = InspectorPanel::FieldBuffer;
+        using Clipboard = InspectorPanel::Clipboard;
 
         bool DrawFieldWidget(const FieldDesc &field, void *bytes)
         {
@@ -182,11 +180,52 @@ namespace mir
                     field->Write(component, empty.mBytes);
         }
 
+        Clipboard CopyValues(World &world, const ComponentOps &ops, Entity entity)
+        {
+            Clipboard clipboard{ &ops,{} };
+            if (const void *component = ops.GetComponent(world, entity))
+            {
+                for (const FieldDesc &field : ops.mFields)
+                {
+                    FieldBuffer value{};
+                    field.Read(component, value.mBytes);
+                    clipboard.mValues.push_back(value);
+                }
+            }
+            return clipboard;
+        }
+
+        void PasteValues(World &world, const Clipboard &clipboard, Entity entity)
+        {
+            const ComponentOps &ops = *clipboard.mOps;
+            if (!ops.Has(world, entity))
+                ops.AddDefault(world, entity);
+
+            void *component = ops.GetComponent(world, entity);
+            if (component == nullptr)
+                return; // a tag: adding it was the whole paste
+
+            for (std::size_t i = 0; i < ops.mFields.size() && i < clipboard.mValues.size(); ++i)
+            {
+                if (!ops.mFields[i].ReadOnly())
+                    ops.mFields[i].Write(component, clipboard.mValues[i].mBytes);
+            }
+        }
+
         // right-click menu on a component header
-        void DrawComponentMenu(const ComponentOps &ops, const ComponentOps *&removeRequested)
+        void DrawComponentMenu(World &world, const ComponentOps &ops, Entity entity, Clipboard &clipboard,
+            const ComponentOps *&removeRequested)
         {
             if (!ImGui::BeginPopupContextItem("ComponentMenu"))
                 return;
+
+            if (ImGui::MenuItem("Copy Values"))
+                clipboard = CopyValues(world, ops, entity);
+            // pasting into a component of the same type changes no archetype, so it is safe mid-loop
+            if (ImGui::MenuItem("Paste Values", nullptr, false, clipboard.mOps == &ops))
+                PasteValues(world, clipboard, entity);
+
+            ImGui::Separator();
 
             // shown disabled rather than hidden, so the baseline's protection is visible
             if (ImGui::MenuItem("Remove Component", nullptr, false, !IsBaselineComponent(ops.mType)))
@@ -196,12 +235,12 @@ namespace mir
         }
 
         void DrawComponent(World &world, const ComponentOps &ops, Entity entity, const AssetImportView &assets,
-            const ComponentOps *&removeRequested)
+            Clipboard &clipboard, const ComponentOps *&removeRequested)
         {
             ImGui::PushID(static_cast<int>(ops.mType.seq));
 
             const bool open = ImGui::CollapsingHeader(ops.mType.name.data(), ImGuiTreeNodeFlags_DefaultOpen);
-            DrawComponentMenu(ops, removeRequested);
+            DrawComponentMenu(world, ops, entity, clipboard, removeRequested);
 
             if (open)
             {
@@ -259,7 +298,7 @@ namespace mir
         }
 
         // drawn after the component loop
-        void DrawAddComponent(World &world, Entity entity)
+        void DrawAddComponent(World &world, Entity entity, const Clipboard &clipboard)
         {
             ImGui::Separator();
             if (ImGui::Button("Add Component", ImVec2(-FLT_MIN, 0.0f)))
@@ -267,6 +306,15 @@ namespace mir
 
             if (!ImGui::BeginPopup("AddComponent"))
                 return;
+
+            // the copied component, when this entity lacks it, added with the copied values
+            if (clipboard.mOps != nullptr && !clipboard.mOps->Has(world, entity))
+            {
+                const std::string label = "Paste " + std::string(clipboard.mOps->mType.name);
+                if (ImGui::Selectable(label.c_str()))
+                    PasteValues(world, clipboard, entity);
+                ImGui::Separator();
+            }
 
             bool any = false;
             for (const ComponentOps *ops : ComponentRegistry::Instance().All())
@@ -316,12 +364,12 @@ namespace mir
             if (!ops->Has(world, entity))
                 continue;
 
-            DrawComponent(world, *ops, entity, assets, removeRequested);
+            DrawComponent(world, *ops, entity, assets, mClipboard, removeRequested);
         }
 
         if (removeRequested != nullptr)
             removeRequested->Remove(world, entity);
 
-        DrawAddComponent(world, entity);
+        DrawAddComponent(world, entity, mClipboard);
     }
 } // namespace mir
