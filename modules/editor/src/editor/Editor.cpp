@@ -762,7 +762,8 @@ namespace mir
 
     EditorActions Editor::DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
         const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-        std::string_view currentProject, World &world, const AssetImportView &assetImport)
+        std::string_view currentProject, World &world, const AssetImportView &assetImport,
+        const VulkanRenderer &renderer)
     {
         EditorActions actions;
 
@@ -850,6 +851,7 @@ namespace mir
                 if (ImGui::BeginMenu("Debug"))
                 {
                     ImGui::MenuItem("Style Editor", nullptr, &mShowStyleEditor);
+                    ImGui::MenuItem("Profiler", nullptr, &mShowProfiler);
                     ImGui::EndMenu();
                 }
                 ImGui::EndMainMenuBar();
@@ -862,6 +864,16 @@ namespace mir
             {
                 if (ImGui::Begin("Style Editor", &mShowStyleEditor))
                     ImGui::ShowStyleEditor();
+                ImGui::End();
+            }
+
+            if (mShowProfiler)
+            {
+                if (ImGui::Begin("Profiler", &mShowProfiler))
+                {
+                    const VulkanRenderer::GpuMemoryUsage gpuMemory = renderer.GetGpuMemoryUsage();
+                    mProfilerPanel.Draw(gpuMemory.mUsageBytes, gpuMemory.mBudgetBytes);
+                }
                 ImGui::End();
             }
 

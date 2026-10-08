@@ -12,9 +12,11 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <psapi.h>
 #elif defined(__linux__)
 #include <csignal>
 #include <spawn.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 extern char **environ;
@@ -75,6 +77,24 @@ namespace mir
         return static_cast<uint64_t>(GetCurrentProcessId());
 #elif defined(__linux__)
         return static_cast<uint64_t>(getpid());
+#else
+        return 0;
+#endif
+    }
+
+    uint64_t CurrentProcessMemoryUsageBytes()
+    {
+#if defined(_WIN32)
+        PROCESS_MEMORY_COUNTERS counters{};
+        if (!GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)))
+            return 0;
+        return static_cast<uint64_t>(counters.WorkingSetSize);
+#elif defined(__linux__)
+        // ru_maxrss is kilobytes on Linux
+        rusage usage{};
+        if (getrusage(RUSAGE_SELF, &usage) != 0)
+            return 0;
+        return static_cast<uint64_t>(usage.ru_maxrss) * 1024;
 #else
         return 0;
 #endif

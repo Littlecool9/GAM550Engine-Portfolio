@@ -189,6 +189,14 @@ namespace mir
 
         bool RayTracingSupported() const;
 
+        struct GpuMemoryUsage
+        {
+            uint64_t mUsageBytes = 0;
+            uint64_t mBudgetBytes = 0;
+        };
+
+        GpuMemoryUsage GetGpuMemoryUsage() const;
+
         constexpr static uint32_t kMaxSpotShadows = 4;
         constexpr static uint32_t kMaxPointShadows = 2;
 
