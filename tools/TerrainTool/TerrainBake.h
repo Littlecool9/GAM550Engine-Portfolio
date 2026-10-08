@@ -13,6 +13,7 @@
 #include "TerrainReport.h"
 
 #include <assets/AssetId.h>
+#include <terrain/TerrainAssetPath.h>
 #include <terrain/TerrainIdentity.h>
 #include <terrain/TerrainLayout.h>
 #include <terrain/TerrainPackWriter.h>
@@ -22,6 +23,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace mir::terrainbake
@@ -65,5 +67,16 @@ namespace mir::terrainbake
     };
 
     // Builds a .partial sibling, then renames it, so candidateDir is absent or complete.
+    bool BakeTerrainCandidate(const TerrainBakeRequest &request, TerrainReport &report);
+
     TerrainReport RunTerrainBake(const TerrainBakeRequest &request);
+
+    // Set when the file on disk differs from sourcePath only in case; ids keep case.
+    std::optional<std::string> RecipeSpellingMismatch(const std::filesystem::path &recipePath,
+                                                      std::string_view sourcePath);
+
+    // Problems go to the "arguments" check; nullopt when any argument is wrong.
+    std::optional<TerrainAssetPath> CheckRecipeArguments(const std::filesystem::path &recipePath,
+                                                         std::string_view idRoot, std::string_view sourcePath,
+                                                         TerrainReport &report);
 }

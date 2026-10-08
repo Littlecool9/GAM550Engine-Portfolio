@@ -22,9 +22,9 @@
 
 namespace mir::terrainbake
 {
-    // Bump when a command's behaviour or output changes.
-    inline constexpr uint32_t kTerrainToolVersion = 1;
-    inline constexpr uint32_t kTerrainReportVersion = 1;
+    // Bump when a command's behaviour or output changes. 2: publish, sync.
+    inline constexpr uint32_t kTerrainToolVersion = 2;
+    inline constexpr uint32_t kTerrainReportVersion = 2;
 
     // In report order.
     namespace check
@@ -44,6 +44,13 @@ namespace mir::terrainbake
         inline constexpr std::string_view kEdges = "edges";
         inline constexpr std::string_view kCorners = "corners";
         inline constexpr std::string_view kIdentity = "identity";
+        inline constexpr std::string_view kLock = "lock";
+        inline constexpr std::string_view kCurrent = "current";
+        inline constexpr std::string_view kTarget = "target";
+        inline constexpr std::string_view kCopy = "copy";
+        inline constexpr std::string_view kVerify = "verify";
+        inline constexpr std::string_view kRename = "rename";
+        inline constexpr std::string_view kPointer = "pointer";
     }
 
     enum class CheckStatus : uint8_t
@@ -86,6 +93,17 @@ namespace mir::terrainbake
         uint64_t checksum = 0; // Fnv1a64 of the whole file
     };
 
+    struct TerrainPublishSummary
+    {
+        std::filesystem::path releasesRoot;
+        // nullopt if current named no release before the command.
+        std::optional<TerrainReleaseId> previous;
+        // Read back from disk.
+        std::optional<TerrainReleaseId> current;
+        // Added a release and moved current to it.
+        bool published = false;
+    };
+
     class TerrainReport
     {
     public:
@@ -112,6 +130,8 @@ namespace mir::terrainbake
         std::optional<TerrainLayout> layout;
         std::vector<TerrainTileSummary> tiles;
         std::vector<TerrainFileSummary> files;
+        // Publish and sync only.
+        std::optional<TerrainPublishSummary> publish;
         std::vector<TerrainCheck> checks;
         std::vector<TerrainDiagnostic> diagnostics;
 

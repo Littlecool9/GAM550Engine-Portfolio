@@ -5,15 +5,16 @@ the shared sample grid, finite map bounds, placement in the Scene world, the
 identities of a terrain's source, baked format and release, the versioned files
 a baked release is stored in, with a reader that fetches one tile by byte
 range, the canonical surface over a release's final samples, a resident height
-query over one release, and a tile's fixed-LOD triangle mesh built from those
-samples on the CPU (plain data; `app` uploads it). It does not bake, publish,
-stream or collide terrain itself; collision is built by physics from these
-samples, publishing is a later P1 issue, streaming is P3. Generating and baking
+query over one release, a tile's fixed-LOD triangle mesh built from those
+samples on the CPU (plain data; `app` uploads it), and the one rule from a
+recipe path to its asset id and from a game to its published releases. It does
+not bake, publish, stream or collide terrain itself; collision is built by
+physics from these samples, streaming is P3. Generating, baking and publishing
 heights is offline work: the `terrain_bake` library and the headless
 `TerrainTool` executable in `tools/TerrainTool/` read a source recipe, produce
 heights on this module's grid, encode a candidate release with this module's
-writer and validate it with its reader (see [TerrainTool CLI](#terraintool-cli));
-the engine never links them.
+writer, validate it with its reader and publish it as an immutable release
+(see [TerrainTool CLI](#terraintool-cli)); the engine never links them.
 
 `mir::terrain` · depends `mir::assets`, `mir::core` (public) · API `modules/terrain/include/terrain/` · maintainer Jackey Cen · reviewed 2026-10-02
 
@@ -131,24 +132,56 @@ The mesh has no renderer types. `app` converts it to renderer vertices,
 uploads it (traced like any mesh when ray tracing is on) and places the draw at placement plus
 origin in double (see [renderer.md](renderer.md) and [app.md](app.md)).
 
+### Source, candidates and published releases
+
+A game's terrain has three places with separate lifetimes:
+
+| What | Where | Lifetime |
+|---|---|---|
+| source recipe | `games/<G>/<assetsRoot>/terrain/<name>.terrain.json` | tracked in git; its path is the asset's identity |
+| candidate | the build directory (`builds/<preset>/terrain/<G>/<name>/`) | replaced by the next bake |
+| published releases | `games/<G>/terrain/releases/<assetIdHex16>/<releaseIdHex16>/` plus `<assetIdHex16>/current` | git-ignored; only ever added to; never cooked, copied or watched |
+
+`terrain/TerrainAssetPath.h` holds the rule both TerrainTool and the engine
+use: `ResolveTerrainAssetPath(idRoot, "terrain/hills.terrain.json")` gives the
+logical path and asset id (`idRoot` is the `GameProject::mAssetIdRoot`
+`LoadGameProject` builds), and `TerrainReleasesRoot(gameDir)` gives
+`<gameDir>/terrain/releases`. In a development build the engine's game
+directory is in the source tree (through `asset_workspace.json`, as
+`app/GameProject.cpp`'s project root), so it reads the releases the build just
+published; a packaged build reads them next to the executable.
+
+```cpp
+const TerrainAssetPath source = ResolveTerrainAssetPath(project.mAssetIdRoot, "terrain/hills.terrain.json");
+const auto release = OpenCurrentTerrainRelease(TerrainReleasesRoot(gameDir), source.asset);
+```
+
 ### TerrainTool CLI
 
 Releases are made offline by `TerrainTool` (`tools/TerrainTool/`), built with
-the engine and run without the editor, a window or a GPU. It has two commands.
-Neither reads or writes a published release tree or a `current` pointer, and
-neither takes a releases path; publishing is a separate step (#116).
+the engine and run without the editor, a window or a GPU. `bake` and
+`validate` never read or write a published release tree or a `current`
+pointer; `publish` and `sync` are the only commands that do, and they only add
+releases and move `current`.
 
 ```text
 TerrainTool bake --recipe <file> --id-root <logical root> --source-path <relative path>
                  --out <candidate dir> --report <json> [--nonce <hex>] [--chunk-tiles <n>]
 TerrainTool validate --candidate <dir> [--recipe <file>] --report <json>
+TerrainTool publish --candidate <dir> --releases <root> --report <json> [--recipe <file>]
+TerrainTool sync --recipe <file> --id-root <logical root> --source-path <relative path>
+                 --game-dir <dir> --candidate <dir> --report <json>
 ```
 
-- **Asset id.** `MakeAssetId(MakeLogicalAssetPath(idRoot, sourcePath))`, the
-  path a cooked asset at that place would get. For
-  `games/G/assets/terrain/hills.terrain.json` pass `--id-root games/G/assets
-  --source-path terrain/hills.terrain.json`. `--recipe` is the file to read and
-  may live anywhere (tests use fixtures).
+- **Asset id.** `ResolveTerrainAssetPath(idRoot, sourcePath)`: the
+  `MakeAssetId(MakeLogicalAssetPath(idRoot, sourcePath))` a cooked asset at
+  that place would get, for a path ending in `.terrain.json` (spelled exactly
+  so). For `games/G/assets/terrain/hills.terrain.json` pass `--id-root
+  games/G/assets --source-path terrain/hills.terrain.json`. `--recipe` is the
+  file to read and may live anywhere (tests use fixtures), but when its name
+  on disk differs from `--source-path`'s only in case, the command refuses:
+  ids keep case, so it would publish an asset no reference spelled like the
+  file finds.
 - **bake** checks the recipe (every bad field by path), generates every layout
   tile (P1: final heights are the generator's float32 source heights), mints
   the release id once from the asset, recipe fingerprint, final-height hash and
@@ -167,6 +200,24 @@ TerrainTool validate --candidate <dir> [--recipe <file>] --report <json>
   four-tile corners (shared samples bit-identical, and `EvaluateSurfaceInCell`
   from each side within `SurfaceTolerance` at four probes per cell), and
   identity (manifest against index; with `--recipe`, fingerprint and layout).
+- **publish** validates the candidate (with `candidate.json`), takes the
+  asset's lock (`<asset>/.publish.lock`, opened exclusively; the OS drops it
+  if the process dies), removes `.partial` directories earlier publishes left,
+  copies only the files `candidate.json` lists into
+  `<asset>/<releaseIdHex16>.partial/` (each checked against its recorded size
+  and Fnv1a64, then flushed to disk), validates the copy again and compares
+  checksums, renames it to `<asset>/<releaseIdHex16>/` (failing if that
+  exists), and only then replaces `current` (`current.tmp`, flushed, renamed
+  over it). Until that last rename the old `current` and every release are
+  untouched; a release that is renamed but never made current stays as an
+  unused directory. Another publisher of the same asset makes it fail at once.
+- **sync** is what the build runs for every recipe. Under the same lock it
+  compares the recipe with the current release (pointer, index, source
+  fingerprint, format and minor, content version, pack sizes) and stops there
+  when they match. Otherwise it deletes its own old candidate (only a
+  directory holding nothing but candidate files), bakes, validates and
+  publishes. It waits up to 10 minutes for the lock, so Debug and Release
+  builds of one tree can run at once: the second finds the asset current.
 - **Exit codes.** 0: every check passed. 1: a check failed. 2: a bad command
   line (a report is still written when `--report` was given). Every diagnostic
   is printed to stderr and written to the report.
@@ -180,7 +231,26 @@ tile's pack, stored height range and whether it read back), `files`, `checks`
 cover every tile is `skipped`, never `passed`) and `diagnostics` (`check`,
 `field`, `tiles`, `sample`, `message`). `field` is a dotted recipe or
 `candidate.json` path, a release file name, or `payload`, `samples` or
-`surface`; `sample` is a global sample index.
+`surface`; `sample` is a global sample index. `publish` and `sync` add the
+checks `lock`, `target`, `copy`, `verify`, `rename`, `pointer` (and `current`
+for sync) and a `publish` object: `releases`, `previous` and `current` (the
+release ids `current` named before and after, or null) and `published`.
+
+**The build publishes.** The root `CMakeLists.txt` globs every game's
+`<assetsRoot>/terrain/*.terrain.json` (a new recipe needs a reconfigure) and
+runs `TerrainTool sync` for each in the always-run target
+`MjolnirEngine_sync_terrain`, which `MjolnirEngine` depends on. An unchanged
+recipe costs one process start; a deleted releases tree or an edited recipe
+is published again by the next build. A recipe that fails to bake or
+validate fails the build. Nothing in the build deletes a release.
+
+**Packaging.** A packaged game needs, per terrain asset, only
+`games/<G>/terrain/releases/<assetIdHex16>/current` and the one release
+directory it names, at the same path next to the executable. Older releases,
+`.partial` directories, lock files, recipes and candidates stay behind. No
+packaging step exists yet; `MjolnirEngine_copy_games` deliberately does not
+copy releases into the build directory, since development builds read them
+from the source tree.
 
 Fixture: `tools/TerrainTool/tests/fixtures/relief-2x2.terrain.json` is 2 x 2
 tiles of 256 m at 4 m (65 x 65 samples, one pack per tile since the tiles
@@ -196,7 +266,12 @@ tools\TerrainTool\TerrainTool.exe validate --candidate terrain-candidates\relief
 
 Bake again only after removing the old candidate (or with another `--out`).
 Its heights hash is `47af51a1d3ecb46e` in Debug and Release; without
-`--nonce` every bake is a new release id.
+`--nonce` every bake is a new release id. Publishing it into a scratch tree:
+
+```text
+tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-2x2 ^
+    --releases terrain-releases --report terrain-candidates\relief-2x2.publish.json
+```
 
 ## API
 
@@ -212,6 +287,7 @@ Its heights hash is `47af51a1d3ecb46e` in Debug and Release; without
 | `EncodeTerrainRelease`, `MintTerrainReleaseId` | `terrain/TerrainPackWriter.h` | index and pack bytes from `TileHeights`, in memory; `TerrainHeightsHash`, `MakeTerrainReleaseNonce` |
 | `TerrainByteSource`, `TerrainFileSource`, `TerrainMemorySource` | `terrain/TerrainByteSource.h` | where a release's files come from, with read and byte counters |
 | `TerrainReleaseHandle`, `OpenTerrainRelease`, `OpenCurrentTerrainRelease` | `terrain/TerrainRelease.h` | one opened release; `ReadTile`, `VerifyAllPacks`; release directory and `current` pointer naming |
+| `TerrainAssetPath`, `ResolveTerrainAssetPath`, `TerrainReleasesRoot` | `terrain/TerrainAssetPath.h` | recipe path to logical path and asset id (`kTerrainRecipeSuffix`), game directory to its releases root, `IsTerrainFileExcludedFromCook` for AssetCooker |
 | `TileSamplesView`, `TileSampleLookup` | `terrain/TerrainSurface.h` | one tile's final float32 samples, not owned, in the release block layout |
 | `CellTriangulation`, `TriangulateCell` | `terrain/TerrainSurface.h` | a cell's diagonal and two triangles as global sample indices, counter-clockwise from +Y |
 | `SurfaceSample`, `SurfaceStatus` | `terrain/TerrainSurface.h` | `EvaluateSurface` (owner tile), `EvaluateSurfaceInCell` (a chosen cell): status, height, normal, tile, cell, triangle |
@@ -256,7 +332,20 @@ and 4 m samples do not).
 **The asset id follows the logical path.** A terrain asset is identified by
 `MakeLogicalAssetPath(idRoot, relative)` like any other asset (see
 [assets.md](assets.md)); case counts, and moving or renaming the source is a
-reference change that scenes must pick up explicitly.
+reference change that scenes must pick up explicitly. TerrainTool and the
+engine both go through `ResolveTerrainAssetPath`, which also requires the
+`.terrain.json` suffix spelled exactly so. AssetCooker skips that suffix in
+any case, so a terrain id is never also a cooked raw asset's id. `Hills` and
+`hills` are two assets with two release directories; a reference spelled
+unlike the recipe finds no release rather than a merged one.
+
+**Published releases are only ever added.** Nothing in the build, the editor
+or TerrainTool deletes or rewrites a directory named as a release, so a handle
+opened on any release keeps working. `current` is the only file that changes,
+and only by an atomic rename after the release it names is complete and
+verified. Readers ignore everything else in an asset's directory (`.partial`
+directories, `current.tmp`, the lock). Removing old releases needs a
+cross-process use protocol first.
 
 **Source, format and release are separate identities.** A rebake of the same
 source is a new release; a format bump changes the format version, not the
@@ -303,9 +392,8 @@ own IO failures once.
 **Only the release reader touches disk, and only to read.** It goes through
 core `ReadBytes`, `ReadByteRange`, `FileSize` and `ReadText`, opening a file
 per read. Nothing here writes a release or the `current` pointer: TerrainTool's
-bake writes the encoded bytes itself, into a candidate directory only, and
-publishing (copy, verify, switch the pointer atomically, never delete a
-release that may be open) belongs to #116.
+bake writes the encoded bytes itself, into a candidate directory only, and its
+publish copies, verifies and switches the pointer.
 
 **A candidate is validated before anyone may call it usable.** The bake
 validates its own output from disk before the directory gets its final name,
@@ -436,12 +524,19 @@ preload work; nothing takes the query's payload requests yet (P3). No scene
 loads terrain yet: app's private `TerrainRender` uploads tile meshes but has no
 caller until the `TerrainInstance` work (#118). Its other non-test callers are
 offline: the `terrain_bake` library (#113: recipe, fingerprint, "mir.relief"
-generator; #115: bake, candidate directory, validation) and the `TerrainTool`
-executable over it, tested by `terrain_tool_tests` (the CLI through
-`LaunchProcess`). Bakes hold every tile in memory, as the encoder takes the
-whole set; that is fine for P1's small maps, not for a 150 km map.
+generator; #115: bake, candidate directory, validation; #116: publish, sync,
+the per-asset lock) and the `TerrainTool` executable over it, tested by
+`terrain_tool_tests` (the CLI through `LaunchProcess`), plus AssetCooker, which
+only asks `IsTerrainFileExcludedFromCook`. Every build runs `TerrainTool sync`
+for each game recipe; no game has one yet (#118 adds `games/TerrainCheck/`).
+Bakes hold every tile in memory, as the encoder takes the whole set; that is
+fine for P1's small maps, not for a 150 km map. Old releases accumulate until a
+cleanup with a cross-process use protocol exists.
 
-Tests in `modules/terrain/tests/`: `TerrainLayout` (validation, clipped edge
+Tests in `modules/terrain/tests/`: `TerrainAssetPath` (slash, `.` and `..`
+spellings of one recipe give the cooker's id, escapes and missing suffixes are
+refused, case gives distinct ids, releases root, cook exclusions),
+`TerrainLayout` (validation, clipped edge
 tiles, shared edge samples, padding), `TileAddressing` (floor on both sides of
 the origin, tile edges and their neighbouring doubles, four-tile corners,
 closed and non-aligned max edges, 0.1 m and 100 m grids, far placements at
@@ -494,12 +589,26 @@ camera-relative narrowing, sizes for 65 and 257 samples a side).
 7. Colliders over more than one shape (maps past Jolt's 32768 samples a side,
    P3 residency) bring the per-tile seam back; measure overlap or a compound
    shape before choosing.
-8. Publishing a validated candidate and moving `current` (#116), reusing
-   `ValidateTerrainCandidate` (without `candidate.json` on the copied release).
+8. Removing old releases (and renamed-but-never-current ones) once a
+   cross-process use protocol says which ones no running engine holds.
 9. Bake and validate in bounded memory (per chunk or tile row) before maps grow
    past a few hundred tiles.
+10. A packaging step that copies each asset's `current` and the one release it
+    names next to the executable.
+11. A P2 change in how final heights follow from a recipe (the border band)
+    must change what sync compares, e.g. by folding a bake version into the
+    fingerprint, or sync keeps the old release current.
 
 ## Changed
+
+*2026-10-02* — **Published releases and the shared path rule (#116).**
+`terrain/TerrainAssetPath.h` adds `ResolveTerrainAssetPath`,
+`TerrainReleasesRoot` and `IsTerrainFileExcludedFromCook`, used by TerrainTool,
+AssetCooker and (with #118) the engine. TerrainTool gains `publish` (copy,
+verify, rename, then switch `current`; per-asset lock; never deletes a
+release) and `sync`, which every build runs per game recipe. AssetCooker no
+longer cooks `.terrain.json`, `.tindex`, `.tpack` or anything under
+`terrain/releases`; `games/*/terrain/releases/` is git-ignored.
 
 *2026-10-02* — **TerrainTool bake and validate (#115).** `tools/TerrainTool/`
 adds the headless `TerrainTool` executable and, in `terrain_bake`, the bake

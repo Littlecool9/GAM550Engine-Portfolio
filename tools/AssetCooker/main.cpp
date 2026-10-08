@@ -27,6 +27,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <terrain/TerrainAssetPath.h>
 #include <unordered_map>
 #include <unordered_set>
 #ifdef _WIN32
@@ -733,10 +734,13 @@ namespace
                     if (ext == ".gltf" || ext == ".glb" || ext == ".slang" || ext == ".bnk" || ext == ".wem" ||
                         filename.ends_with(".import.json") || filename.ends_with(".pending") || filename == ".gitkeep")
                         continue;
+                    // TerrainTool owns recipes and releases.
+                    const std::string logical = LogicalPath(root, path);
+                    if (mir::IsTerrainFileExcludedFromCook(logical))
+                        continue;
                     auto bytes = mir::ReadBytes(path);
                     if (!bytes)
                         throw std::runtime_error("cannot read " + path.string());
-                    const std::string logical = LogicalPath(root, path);
                     //any other image is a texture of its own, decoded here so
                     //runtime never parses an image format
                     if (mir::cook::IsImagePath(path) &&

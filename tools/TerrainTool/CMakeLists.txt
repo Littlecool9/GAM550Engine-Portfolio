@@ -7,8 +7,10 @@ add_library(terrain_bake STATIC
     TerrainContinuity.cpp
     TerrainGenerator.cpp
     TerrainNoise.cpp
+    TerrainPublish.cpp
     TerrainRecipe.cpp
     TerrainReport.cpp
+    TerrainSync.cpp
     TerrainValidate.cpp
 )
 target_include_directories(terrain_bake PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -16,6 +18,7 @@ target_link_libraries(terrain_bake
     PUBLIC mir::terrain mir::assets mir::core
     PRIVATE nlohmann_json::nlohmann_json)
 
+# The root CMakeLists runs its sync on every build.
 add_executable(TerrainTool main.cpp)
 target_link_libraries(TerrainTool PRIVATE terrain_bake)
 
@@ -23,7 +26,9 @@ if(BUILD_TESTING)
     add_executable(terrain_tool_tests
         tests/TerrainBake.tests.cpp
         tests/TerrainGenerator.tests.cpp
+        tests/TerrainPublish.tests.cpp
         tests/TerrainRecipe.tests.cpp
+        tests/TerrainSync.tests.cpp
         tests/TerrainToolCli.tests.cpp
         tests/TerrainValidate.tests.cpp
     )

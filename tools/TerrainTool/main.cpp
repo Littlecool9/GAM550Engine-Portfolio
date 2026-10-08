@@ -1,15 +1,18 @@
 /**
  * @file main.cpp
  * @author Jackey Cen
- * @brief TerrainTool command line: headless bake and validate of terrain candidates.
+ * @brief TerrainTool command line: headless bake, validate, publish and sync of terrain releases.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
  */
 #include "TerrainBake.h"
+#include "TerrainPublish.h"
 #include "TerrainReport.h"
+#include "TerrainSync.h"
 #include "TerrainValidate.h"
 
+#include <terrain/TerrainAssetPath.h>
 #include <terrain/TerrainRelease.h>
 
 #include <algorithm>
@@ -39,9 +42,14 @@ namespace
         "  TerrainTool bake --recipe <file> --id-root <logical root> --source-path <relative path>\n"
         "                   --out <candidate dir> --report <json> [--nonce <hex>] [--chunk-tiles <n>]\n"
         "  TerrainTool validate --candidate <dir> [--recipe <file>] --report <json>\n"
+        "  TerrainTool publish --candidate <dir> --releases <root> --report <json> [--recipe <file>]\n"
+        "  TerrainTool sync --recipe <file> --id-root <logical root> --source-path <relative path>\n"
+        "                   --game-dir <dir> --candidate <dir> --report <json>\n"
         "The asset id is MakeAssetId(<id-root>/<source-path>), e.g. --id-root games/G/assets\n"
-        "--source-path terrain/x.terrain.json. Neither command reads or writes a published\n"
-        "release or its current pointer. Exit 0: valid; 1: a check failed; 2: bad arguments.\n";
+        "--source-path terrain/x.terrain.json. bake and validate never touch a published release.\n"
+        "publish adds <releases>/<asset>/<release>/ and then moves <asset>/current to it; sync\n"
+        "publishes into <game-dir>/terrain/releases only when current does not match the recipe.\n"
+        "Exit 0: ok; 1: a check failed; 2: bad arguments.\n";
 
     struct UsageError : std::runtime_error
     {
@@ -111,6 +119,21 @@ namespace
         if (!written)
             std::fprintf(stderr, "TerrainTool: error: report: %s\n", error.c_str());
 
+        auto id = [](const std::optional<mir::TerrainReleaseId> &v) {
+            return v ? mir::TerrainIdHex(v->value) : std::string("none");
+        };
+        if (report.Ok() && written && report.publish)
+        {
+            if (report.publish->published)
+                std::printf("TerrainTool: %s ok: published release %s of %s (current was %s); report %s\n",
+                            report.command.c_str(), id(report.publish->current).c_str(), report.assetPath.c_str(),
+                            id(report.publish->previous).c_str(), PathUtf8(reportPath).c_str());
+            else
+                std::printf("TerrainTool: %s ok: %s is up to date, release %s; report %s\n", report.command.c_str(),
+                            report.assetPath.c_str(), id(report.publish->current).c_str(),
+                            PathUtf8(reportPath).c_str());
+            return 0;
+        }
         if (report.Ok() && written)
         {
             std::printf("TerrainTool: %s ok: %s, release %s, %zu tiles, heights hash %s; report %s\n",
@@ -154,22 +177,61 @@ namespace
         return Finish(RunTerrainValidate({line.Get("--candidate"), line.Get("--recipe")}), line.Get("--report"));
     }
 
-    // Still writes a requested report, unless it would land in a candidate directory.
+    int Publish(int argc, char **argv)
+    {
+        const CommandLine line = Parse(argc, argv, {"--candidate", "--releases", "--recipe", "--report"});
+        Require(line, {"--candidate", "--releases", "--report"});
+        if (IsInside(line.Get("--report"), line.Get("--candidate")))
+            throw UsageError("--report must not be inside --candidate");
+        if (IsInside(line.Get("--report"), line.Get("--releases")))
+            throw UsageError("--report must not be inside --releases");
+
+        TerrainPublishRequest request;
+        request.candidateDir = line.Get("--candidate");
+        request.releasesRoot = line.Get("--releases");
+        request.recipePath = line.Get("--recipe");
+        return Finish(RunTerrainPublish(request), line.Get("--report"));
+    }
+
+    int Sync(int argc, char **argv)
+    {
+        const CommandLine line = Parse(
+            argc, argv, {"--recipe", "--id-root", "--source-path", "--game-dir", "--candidate", "--report"});
+        Require(line, {"--recipe", "--id-root", "--source-path", "--game-dir", "--candidate", "--report"});
+        if (IsInside(line.Get("--report"), line.Get("--candidate")))
+            throw UsageError("--report must not be inside --candidate");
+        if (IsInside(line.Get("--report"), mir::TerrainReleasesRoot(line.Get("--game-dir"))))
+            throw UsageError("--report must not be inside the game's terrain/releases");
+
+        TerrainSyncRequest request;
+        request.recipePath = line.Get("--recipe");
+        request.idRoot = line.Get("--id-root");
+        request.sourcePath = line.Get("--source-path");
+        request.gameDir = line.Get("--game-dir");
+        request.candidateDir = line.Get("--candidate");
+        return Finish(RunTerrainSync(request), line.Get("--report"));
+    }
+
+    // Still writes a requested report, unless it would land in a candidate or a release tree.
     int Usage(int argc, char **argv, const std::string &command, const std::string &message)
     {
         std::fprintf(stderr, "TerrainTool: error: %s\n%s", message.c_str(), kUsage);
         std::optional<fs::path> reportPath;
-        std::vector<fs::path> candidates;
+        std::vector<fs::path> guarded;
         for (int i = 2; i + 1 < argc; ++i)
         {
             const std::string_view arg = argv[i];
             if (arg == "--report" && !reportPath)
                 reportPath = argv[i + 1];
-            else if ((arg == "--out" || arg == "--candidate") && *argv[i + 1] != '\0')
-                candidates.push_back(argv[i + 1]);
+            else if (*argv[i + 1] == '\0')
+                continue;
+            else if (arg == "--out" || arg == "--candidate" || arg == "--releases")
+                guarded.push_back(argv[i + 1]);
+            else if (arg == "--game-dir")
+                guarded.push_back(mir::TerrainReleasesRoot(argv[i + 1]));
         }
         const auto holdsReport = [&](const fs::path &dir) { return IsInside(*reportPath, dir); };
-        if (!reportPath || std::any_of(candidates.begin(), candidates.end(), holdsReport))
+        if (!reportPath || std::any_of(guarded.begin(), guarded.end(), holdsReport))
             return kExitUsage;
 
         TerrainReport report(command, {check::kArguments});
@@ -195,6 +257,10 @@ int main(int argc, char **argv)
             return Bake(argc, argv);
         if (command == "validate")
             return Validate(argc, argv);
+        if (command == "publish")
+            return Publish(argc, argv);
+        if (command == "sync")
+            return Sync(argc, argv);
         return Usage(argc, argv, command, "unknown command \"" + command + "\"");
     }
     catch (const UsageError &error)
