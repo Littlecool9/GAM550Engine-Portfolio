@@ -20,6 +20,7 @@ target_link_libraries(engine_editor
 target_sources(engine_editor PRIVATE
     src/editor/Editor.cpp
     src/editor/EditorCamera.cpp
+    src/editor/EntityBaseline.cpp
     src/editor/panels/HierarchyPanel.cpp
     src/editor/panels/AssetImportPanel.cpp
     src/editor/panels/InputSettingsPanel.cpp

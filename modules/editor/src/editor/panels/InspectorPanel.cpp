@@ -13,9 +13,8 @@
 #include <core/ecs/ComponentFields.h>
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/components/Name.h>
-#include <core/ecs/components/Transform.h>
-#include <core/ecs/components/WorldTransform.h>
 #include <core/math/WorldReal.h>
+#include <editor/EntityBaseline.h>
 #include <editor/Selection.h>
 
 #include <glm/gtc/quaternion.hpp>
@@ -242,13 +241,6 @@ namespace mir
             ImGui::PopID();
         }
 
-        // Refering to Transform, WorldTransform, and Name
-        bool IsBaseline(const ComponentOps &ops)
-        {
-            return ops.mType == TypeIdOf<Transform>() || ops.mType == TypeIdOf<WorldTransform>() ||
-                ops.mType == TypeIdOf<Name>();
-        }
-
         // drawn after the component loop
         void DrawAddComponent(World &world, Entity entity)
         {
@@ -262,7 +254,7 @@ namespace mir
             bool any = false;
             for (const ComponentOps *ops : ComponentRegistry::Instance().All())
             {
-                if (IsBaseline(*ops) || ops->Has(world, entity))
+                if (IsBaselineComponent(ops->mType) || ops->Has(world, entity))
                     continue;
 
                 any = true;
