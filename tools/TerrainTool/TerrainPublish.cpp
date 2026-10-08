@@ -49,6 +49,8 @@ namespace mir::terrainbake
 
         constexpr std::initializer_list<std::string_view> kPublishChecks{
             check::kLock, check::kTarget, check::kCopy, check::kVerify, check::kRename, check::kPointer};
+        constexpr std::initializer_list<std::string_view> kInstallChecks{
+            check::kTarget, check::kCopy, check::kVerify, check::kRename, check::kPointer};
 
         void Fail(TerrainReport &report, std::string_view check, std::string field, std::string message)
         {
@@ -183,11 +185,7 @@ namespace mir::terrainbake
                 SkipNotRun(report, kPublishChecks, "the candidate did not validate; the release tree was not touched");
                 return false;
             }
-            const TerrainReleaseId release = manifest->release.release;
-            const std::string releaseHex = TerrainIdHex(release.value);
             const fs::path assetDir = TerrainAssetReleasesDir(root, *asset);
-            const fs::path finalDir = TerrainReleaseDir(root, *asset, release);
-            const fs::path partial = assetDir / (releaseHex + ".partial");
 
             std::optional<TerrainPublishLock> ownLock;
             std::string error;
@@ -215,161 +213,199 @@ namespace mir::terrainbake
             }
             report.publish->previous = PeekTerrainCurrent(root, *asset);
 
-            std::error_code ec;
-            if (fs::exists(finalDir, ec))
+            TerrainReleaseInstall install;
+            install.sourceDir = candidate;
+            install.files = manifest->files;
+            install.release = manifest->release;
+            install.releasesRoot = root;
+            install.recordedBy = std::string(kCandidateManifestFileName);
+            install.fault = request.fault;
+            return InstallTerrainRelease(install, recipe, report);
+        }
+    }
+
+    bool InstallTerrainRelease(const TerrainReleaseInstall &install, const TerrainRecipe *recipe,
+                               TerrainReport &report)
+    {
+        const Faults faults{install.fault};
+        const fs::path &root = install.releasesRoot;
+        const AssetId asset = install.release.asset;
+        const TerrainReleaseId release = install.release.release;
+        const std::string releaseHex = TerrainIdHex(release.value);
+        const fs::path assetDir = TerrainAssetReleasesDir(root, asset);
+        const fs::path finalDir = TerrainReleaseDir(root, asset, release);
+        const fs::path partial = assetDir / (releaseHex + ".partial");
+        std::string error;
+
+        std::error_code ec;
+        std::string replaced;
+        if (fs::exists(finalDir, ec))
+        {
+            if (!install.replaceExisting)
             {
                 Fail(report, check::kTarget, releaseHex,
                      std::format("{} already exists; a published release is never replaced or changed (bake a new "
                                  "candidate: every bake without --nonce mints a new release id)",
                                  PathUtf8(finalDir)));
-                SkipNotRun(report, kPublishChecks, "nothing to publish into");
+                SkipNotRun(report, kInstallChecks, "nothing to publish into");
                 return false;
             }
-            // Under the lock, every .partial is left from a dead writer.
-            size_t stale = 0;
-            for (const fs::directory_entry &entry : fs::directory_iterator(assetDir, ec))
-                if (IsPartialReleaseDir(entry))
-                {
-                    std::error_code removeEc;
-                    fs::remove_all(entry.path(), removeEc);
-                    stale += removeEc ? 0 : 1;
-                }
-            fs::remove(assetDir / "current.tmp", ec);
-            report.Ran(check::kTarget, std::format("{} is free; removed {} stale .partial directories",
-                                                   PathUtf8(finalDir), stale));
-
-            if (!fs::create_directory(partial, ec))
+            fs::remove_all(finalDir, ec);
+            if (ec)
             {
-                Fail(report, check::kCopy, "", std::format("cannot create {} ({})", PathUtf8(partial),
-                                                           ec ? ec.message() : "it exists"));
-                SkipNotRun(report, kPublishChecks, "nothing was copied");
+                Fail(report, check::kTarget, releaseHex,
+                     std::format("cannot remove the old copy {} ({})", PathUtf8(finalDir), ec.message()));
+                SkipNotRun(report, kInstallChecks, "nothing to copy into");
                 return false;
             }
-            auto abandon = [&](const std::string &why) {
-                std::error_code ignored;
-                fs::remove_all(partial, ignored);
-                SkipNotRun(report, kPublishChecks, why);
-                return false;
-            };
-            uint64_t copied = 0;
-            for (size_t i = 0; i < manifest->files.size(); ++i)
-            {
-                const TerrainFileSummary &file = manifest->files[i];
-                const std::optional<std::vector<std::byte>> bytes = ReadBytes(candidate / file.name);
-                if (!bytes || bytes->size() != file.bytes || Fnv1a64(*bytes) != file.checksum)
-                {
-                    Fail(report, check::kCopy, file.name,
-                         std::format("{} is not the {} bytes with Fnv1a64 {} that candidate.json records (changed "
-                                     "after it validated?)",
-                                     PathUtf8(candidate / file.name), file.bytes, TerrainIdHex(file.checksum)));
-                    return abandon("the copy was abandoned and its .partial directory removed");
-                }
-                if (i == 1 && faults.At(TerrainPublishStep::Copy))
-                {
-                    const std::span<const std::byte> half = std::span(*bytes).first(bytes->size() / 2);
-                    WriteBytes(partial / file.name, half);
-                    Fail(report, check::kCopy, file.name,
-                         std::format("test fault: the copy stopped after {} of {} bytes", half.size(), bytes->size()));
-                    if (faults.Interrupt(TerrainPublishStep::Copy))
-                        return false;
-                    return abandon("the copy was abandoned and its .partial directory removed");
-                }
-                if (!WriteBytes(partial / file.name, *bytes) || !FlushToDisk(partial / file.name))
-                {
-                    Fail(report, check::kCopy, file.name, std::format("cannot write {} ({})",
-                                                                      PathUtf8(partial / file.name),
-                                                                      LastErrorMessage()));
-                    return abandon("the copy was abandoned and its .partial directory removed");
-                }
-                copied += bytes->size();
-            }
-            report.Ran(check::kCopy, std::format("{} files, {} bytes, into {}", manifest->files.size(), copied,
-                                                 PathUtf8(partial)));
-
-            if (faults.Interrupt(TerrainPublishStep::Verify))
-            {
-                Fail(report, check::kVerify, "", "test fault: stopped before verifying the copy");
-                return false;
-            }
-            if (faults.At(TerrainPublishStep::Verify) && manifest->files.size() > 1)
-                FlipMiddleByte(partial / manifest->files[1].name);
-            // The copy has no candidate.json.
-            TerrainReport copy("verify", {});
-            ValidateTerrainCandidate(partial, {recipe, false}, copy);
-            for (const TerrainDiagnostic &d : copy.diagnostics)
-                report.Add({std::string(check::kVerify), d.field, d.tiles, d.sample,
-                            std::format("[{}] {}", d.check, d.message)});
-            const bool sameFiles = std::equal(
-                copy.files.begin(), copy.files.end(), manifest->files.begin(), manifest->files.end(),
-                [](const TerrainFileSummary &a, const TerrainFileSummary &b) {
-                    return a.name == b.name && a.bytes == b.bytes && a.checksum == b.checksum;
-                });
-            if (!sameFiles)
-                Fail(report, check::kVerify, "files", "the copied files' sizes or checksums differ from candidate.json");
-            if (!copy.release || !(*copy.release == manifest->release))
-                Fail(report, check::kVerify, "release.tindex", "the copied index names another asset or release");
-            if (report.Status(check::kVerify) == CheckStatus::Failed)
-                return abandon("the copy did not verify; its .partial directory was removed");
-            report.Ran(check::kVerify, std::format("{} tiles read back; {} files match candidate.json",
-                                                   copy.tiles.size(), copy.files.size()));
-
-            if (faults.At(TerrainPublishStep::Rename))
-            {
-                Fail(report, check::kRename, "", "test fault before the rename");
-                if (faults.Interrupt(TerrainPublishStep::Rename))
-                    return false;
-                return abandon("the .partial directory was removed");
-            }
-            if (!Move(partial, finalDir, false, error))
-            {
-                Fail(report, check::kRename, releaseHex, std::format("cannot rename {} to {} ({})",
-                                                                     PathUtf8(partial),
-                                                                     PathUtf8(finalDir), error));
-                return abandon("the .partial directory was removed");
-            }
-            report.Ran(check::kRename, PathUtf8(finalDir));
-
-            const fs::path pointer = TerrainCurrentPointerPath(root, *asset);
-            const fs::path pending = assetDir / "current.tmp";
-            const std::string previousText =
-                report.publish->previous ? TerrainIdHex(report.publish->previous->value) : std::string("none");
-            auto pointerFailed = [&](std::string why) {
-                Fail(report, check::kPointer, std::string(kTerrainCurrentPointerFileName),
-                     std::format("{}; release {} is complete at {} but not current, and current still names {}", why,
-                                 releaseHex, PathUtf8(finalDir), previousText));
-                return false;
-            };
-            if (!WriteText(pending, EncodeTerrainCurrentPointer(release)) || !FlushToDisk(pending))
-                return pointerFailed(std::format("cannot write {}", PathUtf8(pending)));
-            if (faults.At(TerrainPublishStep::Pointer))
-            {
-                if (faults.Interrupt(TerrainPublishStep::Pointer))
-                {
-                    Fail(report, check::kPointer, "", "test fault: stopped before replacing current");
-                    return false;
-                }
-                fs::remove(pending, ec);
-                return pointerFailed("test fault before replacing current");
-            }
-            if (!Move(pending, pointer, true, error))
-            {
-                fs::remove(pending, ec);
-                return pointerFailed(std::format("cannot replace {} ({})", PathUtf8(pointer), error));
-            }
-
-            const std::optional<TerrainReleaseId> readBack = PeekTerrainCurrent(root, *asset);
-            const TerrainResult<TerrainReleaseHandle> opened = OpenCurrentTerrainRelease(root, *asset);
-            if (readBack != release || !opened || opened.value->Info().release != release)
-            {
-                Fail(report, check::kPointer, std::string(kTerrainCurrentPointerFileName),
-                     std::format("current was replaced but does not open release {}{}", releaseHex,
-                                 opened ? "" : ": " + opened.error.message));
-                return false;
-            }
-            report.publish->published = true;
-            report.Ran(check::kPointer, std::format("current: {} -> {}", previousText, releaseHex));
-            return true;
+            replaced = " (an old copy was removed)";
         }
+        // Under the lock, every .partial is left from a dead writer.
+        size_t stale = 0;
+        for (const fs::directory_entry &entry : fs::directory_iterator(assetDir, ec))
+            if (IsPartialReleaseDir(entry))
+            {
+                std::error_code removeEc;
+                fs::remove_all(entry.path(), removeEc);
+                stale += removeEc ? 0 : 1;
+            }
+        fs::remove(assetDir / "current.tmp", ec);
+        report.Ran(check::kTarget, std::format("{} is free{}; removed {} stale .partial directories",
+                                               PathUtf8(finalDir), replaced, stale));
+
+        if (!fs::create_directory(partial, ec))
+        {
+            Fail(report, check::kCopy, "", std::format("cannot create {} ({})", PathUtf8(partial),
+                                                       ec ? ec.message() : "it exists"));
+            SkipNotRun(report, kInstallChecks, "nothing was copied");
+            return false;
+        }
+        auto abandon = [&](const std::string &why) {
+            std::error_code ignored;
+            fs::remove_all(partial, ignored);
+            SkipNotRun(report, kInstallChecks, why);
+            return false;
+        };
+        uint64_t copied = 0;
+        for (size_t i = 0; i < install.files.size(); ++i)
+        {
+            const TerrainFileSummary &file = install.files[i];
+            const std::optional<std::vector<std::byte>> bytes = ReadBytes(install.sourceDir / file.name);
+            if (!bytes || bytes->size() != file.bytes || Fnv1a64(*bytes) != file.checksum)
+            {
+                Fail(report, check::kCopy, file.name,
+                     std::format("{} is not the {} bytes with Fnv1a64 {} that {} records (changed after it "
+                                 "validated?)",
+                                 PathUtf8(install.sourceDir / file.name), file.bytes,
+                                 TerrainIdHex(file.checksum), install.recordedBy));
+                return abandon("the copy was abandoned and its .partial directory removed");
+            }
+            if (i == 1 && faults.At(TerrainPublishStep::Copy))
+            {
+                const std::span<const std::byte> half = std::span(*bytes).first(bytes->size() / 2);
+                WriteBytes(partial / file.name, half);
+                Fail(report, check::kCopy, file.name,
+                     std::format("test fault: the copy stopped after {} of {} bytes", half.size(), bytes->size()));
+                if (faults.Interrupt(TerrainPublishStep::Copy))
+                    return false;
+                return abandon("the copy was abandoned and its .partial directory removed");
+            }
+            if (!WriteBytes(partial / file.name, *bytes) || !FlushToDisk(partial / file.name))
+            {
+                Fail(report, check::kCopy, file.name, std::format("cannot write {} ({})",
+                                                                  PathUtf8(partial / file.name),
+                                                                  LastErrorMessage()));
+                return abandon("the copy was abandoned and its .partial directory removed");
+            }
+            copied += bytes->size();
+        }
+        report.Ran(check::kCopy, std::format("{} files, {} bytes, into {}", install.files.size(), copied,
+                                             PathUtf8(partial)));
+
+        if (faults.Interrupt(TerrainPublishStep::Verify))
+        {
+            Fail(report, check::kVerify, "", "test fault: stopped before verifying the copy");
+            return false;
+        }
+        if (faults.At(TerrainPublishStep::Verify) && install.files.size() > 1)
+            FlipMiddleByte(partial / install.files[1].name);
+        // The copy has no candidate.json.
+        TerrainReport copy("verify", {});
+        ValidateTerrainCandidate(partial, {recipe, false}, copy);
+        for (const TerrainDiagnostic &d : copy.diagnostics)
+            report.Add({std::string(check::kVerify), d.field, d.tiles, d.sample,
+                        std::format("[{}] {}", d.check, d.message)});
+        const bool sameFiles = std::equal(
+            copy.files.begin(), copy.files.end(), install.files.begin(), install.files.end(),
+            [](const TerrainFileSummary &a, const TerrainFileSummary &b) {
+                return a.name == b.name && a.bytes == b.bytes && a.checksum == b.checksum;
+            });
+        if (!sameFiles)
+            Fail(report, check::kVerify, "files",
+                 std::format("the copied files' sizes or checksums differ from {}", install.recordedBy));
+        if (!copy.release || !(*copy.release == install.release))
+            Fail(report, check::kVerify, "release.tindex", "the copied index names another asset or release");
+        if (report.Status(check::kVerify) == CheckStatus::Failed)
+            return abandon("the copy did not verify; its .partial directory was removed");
+        report.Ran(check::kVerify, std::format("{} tiles read back; {} files match {}", copy.tiles.size(),
+                                               copy.files.size(), install.recordedBy));
+
+        if (faults.At(TerrainPublishStep::Rename))
+        {
+            Fail(report, check::kRename, "", "test fault before the rename");
+            if (faults.Interrupt(TerrainPublishStep::Rename))
+                return false;
+            return abandon("the .partial directory was removed");
+        }
+        if (!Move(partial, finalDir, false, error))
+        {
+            Fail(report, check::kRename, releaseHex, std::format("cannot rename {} to {} ({})",
+                                                                 PathUtf8(partial),
+                                                                 PathUtf8(finalDir), error));
+            return abandon("the .partial directory was removed");
+        }
+        report.Ran(check::kRename, PathUtf8(finalDir));
+
+        const fs::path pointer = TerrainCurrentPointerPath(root, asset);
+        const fs::path pending = assetDir / "current.tmp";
+        const std::string previousText =
+            report.publish->previous ? TerrainIdHex(report.publish->previous->value) : std::string("none");
+        auto pointerFailed = [&](std::string why) {
+            Fail(report, check::kPointer, std::string(kTerrainCurrentPointerFileName),
+                 std::format("{}; release {} is complete at {} but not current, and current still names {}", why,
+                             releaseHex, PathUtf8(finalDir), previousText));
+            return false;
+        };
+        if (!WriteText(pending, EncodeTerrainCurrentPointer(release)) || !FlushToDisk(pending))
+            return pointerFailed(std::format("cannot write {}", PathUtf8(pending)));
+        if (faults.At(TerrainPublishStep::Pointer))
+        {
+            if (faults.Interrupt(TerrainPublishStep::Pointer))
+            {
+                Fail(report, check::kPointer, "", "test fault: stopped before replacing current");
+                return false;
+            }
+            fs::remove(pending, ec);
+            return pointerFailed("test fault before replacing current");
+        }
+        if (!Move(pending, pointer, true, error))
+        {
+            fs::remove(pending, ec);
+            return pointerFailed(std::format("cannot replace {} ({})", PathUtf8(pointer), error));
+        }
+
+        const std::optional<TerrainReleaseId> readBack = PeekTerrainCurrent(root, asset);
+        const TerrainResult<TerrainReleaseHandle> opened = OpenCurrentTerrainRelease(root, asset);
+        if (readBack != release || !opened || opened.value->Info().release != release)
+        {
+            Fail(report, check::kPointer, std::string(kTerrainCurrentPointerFileName),
+                 std::format("current was replaced but does not open release {}{}", releaseHex,
+                             opened ? "" : ": " + opened.error.message));
+            return false;
+        }
+        report.publish->published = true;
+        report.Ran(check::kPointer, std::format("current: {} -> {}", previousText, releaseHex));
+        return true;
     }
 
     TerrainPublishLock::TerrainPublishLock(fs::path assetDir, intptr_t handle)

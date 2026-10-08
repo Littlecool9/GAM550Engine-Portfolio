@@ -22,8 +22,8 @@
 
 namespace mir::terrainbake
 {
-    // Bump when a command's behaviour or output changes. 2: publish, sync.
-    inline constexpr uint32_t kTerrainToolVersion = 2;
+    // Bump when a command's behaviour or output changes. 2: publish, sync. 3: package.
+    inline constexpr uint32_t kTerrainToolVersion = 3;
     inline constexpr uint32_t kTerrainReportVersion = 2;
 
     // In report order.
@@ -51,6 +51,7 @@ namespace mir::terrainbake
         inline constexpr std::string_view kVerify = "verify";
         inline constexpr std::string_view kRename = "rename";
         inline constexpr std::string_view kPointer = "pointer";
+        inline constexpr std::string_view kPrune = "prune";
     }
 
     enum class CheckStatus : uint8_t

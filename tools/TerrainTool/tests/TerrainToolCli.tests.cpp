@@ -514,3 +514,64 @@ TEST_CASE("TerrainTool sync publishes into the game's releases once per recipe c
     CHECK(Run(missing) == 2);
     CHECK(ReleaseDirNames(assetDir).size() == 2);
 }
+
+TEST_CASE("TerrainTool package copies the game's current release into another game directory",
+          "[terraintool][cli][package]")
+{
+    ScratchDir scratch("cli_package");
+    const fs::path gameDir = scratch.path / "games" / "G";
+    const fs::path recipe = gameDir / "assets" / "terrain" / "relief-2x2.terrain.json";
+    fs::create_directories(recipe.parent_path());
+    fs::copy_file(ExampleRecipePath(), recipe);
+    const fs::path build = scratch.path / "build";
+    const fs::path outDir = build / "games" / "G";
+    const fs::path reportPath = build / "terrain" / "relief-2x2.package.json";
+    const AssetId asset = MakeAssetId(ExampleAssetPath());
+    const std::vector<std::string> package{"package",          "--id-root",   std::string(kIdRoot),
+                                           "--source-path",    std::string(kSourcePath), "--game-dir",
+                                           gameDir.string(),   "--out",       outDir.string(),
+                                           "--report",         reportPath.string()};
+
+    CHECK(Run(package) == 1);
+    CHECK(CheckStatusOf(ReadJson(reportPath), "current") == "failed");
+
+    REQUIRE(Run({"sync", "--recipe", recipe.string(), "--id-root", std::string(kIdRoot), "--source-path",
+                 std::string(kSourcePath), "--game-dir", gameDir.string(), "--candidate",
+                 (build / "terrain" / "relief-2x2").string(), "--report",
+                 (build / "terrain" / "relief-2x2.sync.json").string()}) == 0);
+    const std::optional<TerrainReleaseId> published = PeekTerrainCurrent(TerrainReleasesRoot(gameDir), asset);
+    REQUIRE(published);
+    const std::string id = TerrainIdHex(published->value);
+
+    REQUIRE(Run(package) == 0);
+    const Json first = ReadJson(reportPath);
+    CHECK(first.at("command") == "package");
+    CHECK(first.at("ok") == true);
+    CHECK(first.at("tool").at("version") == kTerrainToolVersion);
+    CHECK(first.at("asset").at("logicalPath") == ExampleAssetPath());
+    CHECK(first.at("publish").at("releases") == TerrainReleasesRoot(outDir).generic_string());
+    CHECK(first.at("publish").at("current") == id);
+    CHECK(first.at("publish").at("published") == true);
+    for (const char *name : {"current", "lock", "identity", "copy", "verify", "rename", "pointer", "prune"})
+    {
+        INFO(name);
+        CHECK(CheckStatusOf(first, name) == "passed");
+    }
+    CHECK(ReadText(TerrainCurrentPointerPath(TerrainReleasesRoot(outDir), asset)) == id);
+
+    const auto tree = Snapshot(TerrainReleasesRoot(outDir));
+    REQUIRE(Run(package) == 0);
+    const Json second = ReadJson(reportPath);
+    CHECK(second.at("publish").at("published") == false);
+    CHECK(CheckStatusOf(second, "copy") == "skipped");
+    CHECK(Snapshot(TerrainReleasesRoot(outDir)) == tree);
+
+    // Usage errors exit 2 and never leave a report inside either tree.
+    std::vector<std::string> noOut(package.begin(), package.begin() + 7);
+    noOut.insert(noOut.end(), {"--report", reportPath.string()});
+    CHECK(Run(noOut) == 2);
+    std::vector<std::string> inside = package;
+    inside.back() = (TerrainReleasesRoot(outDir) / "report.json").string();
+    CHECK(Run(inside) == 2);
+    CHECK(Snapshot(TerrainReleasesRoot(outDir)) == tree);
+}

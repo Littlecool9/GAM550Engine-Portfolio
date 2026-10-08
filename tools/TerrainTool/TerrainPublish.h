@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace mir::terrainbake
 {
@@ -82,6 +83,25 @@ namespace mir::terrainbake
                                  TerrainPublishLock *heldLock, TerrainReport &report);
 
     TerrainReport RunTerrainPublish(const TerrainPublishRequest &request);
+
+    // Publish's candidate or package's published release.
+    struct TerrainReleaseInstall
+    {
+        std::filesystem::path sourceDir;
+        // Index first, then packs in index order.
+        std::vector<TerrainFileSummary> files;
+        TerrainReleaseInfo release;
+        std::filesystem::path releasesRoot;
+        // For messages.
+        std::string recordedBy;
+        // Publish refuses an existing release directory; package replaces its own damaged copy.
+        bool replaceExisting = false;
+        std::optional<TerrainPublishFault> fault;
+    };
+
+    // The caller holds the lock; report.publish must be set.
+    bool InstallTerrainRelease(const TerrainReleaseInstall &install, const TerrainRecipe *recipe,
+                               TerrainReport &report);
 
     // No log when absent; problem says why it is empty.
     std::optional<TerrainReleaseId> PeekTerrainCurrent(const std::filesystem::path &releasesRoot, AssetId asset,

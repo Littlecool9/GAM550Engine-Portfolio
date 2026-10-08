@@ -140,7 +140,7 @@ A game's terrain has three places with separate lifetimes:
 |---|---|---|
 | source recipe | `games/<G>/<assetsRoot>/terrain/<name>.terrain.json` | tracked in git; its path is the asset's identity |
 | candidate | the build directory (`builds/<preset>/terrain/<G>/<name>/`) | replaced by the next bake |
-| published releases | `games/<G>/terrain/releases/<assetIdHex16>/<releaseIdHex16>/` plus `<assetIdHex16>/current` | git-ignored; only ever added to; never cooked, copied or watched |
+| published releases | `games/<G>/terrain/releases/<assetIdHex16>/<releaseIdHex16>/` plus `<assetIdHex16>/current` | git-ignored; only ever added to; never cooked or watched; a build without the editor packages the current one next to the executable |
 
 `terrain/TerrainAssetPath.h` holds the rule both TerrainTool and the engine
 use: `ResolveTerrainAssetPath(idRoot, "terrain/hills.terrain.json")` gives the
@@ -149,7 +149,8 @@ logical path and asset id (`idRoot` is the `GameProject::mAssetIdRoot`
 `<gameDir>/terrain/releases`. In a development build the engine's game
 directory is in the source tree (through `asset_workspace.json`, as
 `app/GameProject.cpp`'s project root), so it reads the releases the build just
-published; a packaged build reads them next to the executable.
+published; a build without the editor reads the copy its package step put next
+to the executable.
 
 ```cpp
 const TerrainAssetPath source = ResolveTerrainAssetPath(project.mAssetIdRoot, "terrain/hills.terrain.json");
@@ -161,8 +162,9 @@ const auto release = OpenCurrentTerrainRelease(TerrainReleasesRoot(gameDir), sou
 Releases are made offline by `TerrainTool` (`tools/TerrainTool/`), built with
 the engine and run without the editor, a window or a GPU. `bake` and
 `validate` never read or write a published release tree or a `current`
-pointer; `publish` and `sync` are the only commands that do, and they only add
-releases and move `current`.
+pointer; `publish` and `sync` are the only commands that write one, and they
+only add releases and move `current`. `package` only reads a game's tree and
+writes a copy elsewhere.
 
 ```text
 TerrainTool bake --recipe <file> --id-root <logical root> --source-path <relative path>
@@ -171,6 +173,8 @@ TerrainTool validate --candidate <dir> [--recipe <file>] --report <json>
 TerrainTool publish --candidate <dir> --releases <root> --report <json> [--recipe <file>]
 TerrainTool sync --recipe <file> --id-root <logical root> --source-path <relative path>
                  --game-dir <dir> --candidate <dir> --report <json>
+TerrainTool package --id-root <logical root> --source-path <relative path>
+                    --game-dir <dir> --out <game dir> --report <json>
 ```
 
 - **Asset id.** `ResolveTerrainAssetPath(idRoot, sourcePath)`: the
@@ -218,6 +222,15 @@ TerrainTool sync --recipe <file> --id-root <logical root> --source-path <relativ
   directory holding nothing but candidate files), bakes, validates and
   publishes. It waits up to 10 minutes for the lock, so Debug and Release
   builds of one tree can run at once: the second finds the asset current.
+- **package** copies one asset from `--game-dir`'s releases to `--out`'s
+  (`TerrainReleasesRoot` of each; neither may contain the other). Under the
+  output asset's lock it stops when the output's `current` already names the
+  game's current release and passes sync's comparison. Otherwise it validates
+  the game's release (no `candidate.json`), then installs it and a `current`
+  naming it by the publish steps, replacing a damaged copy of the same id in
+  the output. Last it removes everything else in the output's asset directory;
+  a file a reader still holds stays, is listed in the `prune` check, and goes
+  next time. It never writes the game's tree.
 - **Exit codes.** 0: every check passed. 1: a check failed. 2: a bad command
   line (a report is still written when `--report` was given). Every diagnostic
   is printed to stderr and written to the report.
@@ -231,10 +244,11 @@ tile's pack, stored height range and whether it read back), `files`, `checks`
 cover every tile is `skipped`, never `passed`) and `diagnostics` (`check`,
 `field`, `tiles`, `sample`, `message`). `field` is a dotted recipe or
 `candidate.json` path, a release file name, or `payload`, `samples` or
-`surface`; `sample` is a global sample index. `publish` and `sync` add the
-checks `lock`, `target`, `copy`, `verify`, `rename`, `pointer` (and `current`
-for sync) and a `publish` object: `releases`, `previous` and `current` (the
-release ids `current` named before and after, or null) and `published`.
+`surface`; `sample` is a global sample index. `publish`, `sync` and `package`
+add the checks `lock`, `target`, `copy`, `verify`, `rename`, `pointer` (and
+`current` for sync and package, `prune` for package) and a `publish` object:
+`releases` (package: the output's), `previous` and `current` (the release ids
+`current` named before and after, or null) and `published` (package: copied).
 
 **The build publishes.** The root `CMakeLists.txt` globs every game's
 `<assetsRoot>/terrain/*.terrain.json` (a new recipe needs a reconfigure) and
@@ -242,15 +256,18 @@ runs `TerrainTool sync` for each in the always-run target
 `MjolnirEngine_sync_terrain`, which `MjolnirEngine` depends on. An unchanged
 recipe costs one process start; a deleted releases tree or an edited recipe
 is published again by the next build. A recipe that fails to bake or
-validate fails the build. Nothing in the build deletes a release.
+validate fails the build. Nothing in the build deletes a published release.
 
 **Packaging.** A packaged game needs, per terrain asset, only
 `games/<G>/terrain/releases/<assetIdHex16>/current` and the one release
 directory it names, at the same path next to the executable. Older releases,
-`.partial` directories, lock files, recipes and candidates stay behind. No
-packaging step exists yet; `MjolnirEngine_copy_games` deliberately does not
-copy releases into the build directory, since development builds read them
-from the source tree.
+`.partial` directories, lock files, recipes and candidates stay behind. A
+build without the editor (`MJOLNIR_WITH_EDITOR` OFF, the
+`windows-msvc-game-*` presets) runs `TerrainTool package` for every recipe in
+the same target, after all syncs, with `--out` the game's directory next to
+the executable. A build with the editor does not: `asset_workspace.json`
+points it at the source tree. `MjolnirEngine_copy_games` never copies
+releases.
 
 Fixture: `tools/TerrainTool/tests/fixtures/relief-2x2.terrain.json` is 2 x 2
 tiles of 256 m at 4 m (65 x 65 samples, one pack per tile since the tiles
@@ -593,13 +610,18 @@ camera-relative narrowing, sizes for 65 and 257 samples a side).
    cross-process use protocol says which ones no running engine holds.
 9. Bake and validate in bounded memory (per chunk or tile row) before maps grow
    past a few hundred tiles.
-10. A packaging step that copies each asset's `current` and the one release it
-    names next to the executable.
-11. A P2 change in how final heights follow from a recipe (the border band)
+10. A P2 change in how final heights follow from a recipe (the border band)
     must change what sync compares, e.g. by folding a bake version into the
     fingerprint, or sync keeps the old release current.
 
 ## Changed
+
+*2026-10-03* — **A build without the editor packages terrain (#116).** Was: no
+packaging step, so the `windows-msvc-game-*` builds, which read `games/` next
+to the executable, would find no release. Now: `TerrainTool package` copies
+each recipe's current release and a `current` naming it there, and removes
+older copies; publish and package share `InstallTerrainRelease`.
+
 
 *2026-10-02* — **Published releases and the shared path rule (#116).**
 `terrain/TerrainAssetPath.h` adds `ResolveTerrainAssetPath`,
