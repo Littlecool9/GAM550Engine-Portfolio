@@ -171,6 +171,8 @@ namespace mir
 
         bool DestroyMaterial(MaterialHandle handle);
 
+        MaterialHandle ErrorMaterial() const;
+
         void CaptureNextFrame(const std::filesystem::path &path);
 
         void ReleaseSceneResources();

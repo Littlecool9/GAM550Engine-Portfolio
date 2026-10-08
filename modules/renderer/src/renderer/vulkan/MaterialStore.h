@@ -42,22 +42,24 @@ namespace mir::vk
     {
     public:
         // sharedLayouts are sets 1-3, borrowed for the pipeline layouts; their owners destroy them.
-        // Also creates the default material and the sky pipeline, which reads set 1 alone.
+        // Also creates the default and error materials and the sky pipeline, which reads set 1 alone.
         bool Initialize(Device &device, ResourceStore &resources, VkFormat colorFormat,
             const std::array<VkDescriptorSetLayout, 3> &sharedLayouts);
         void Shutdown();
 
         MaterialHandle CreateMaterial(const MaterialDesc &desc, ResourceStore &resources, VkFormat colorFormat);
-        // False when the handle is null, stale or the default material.
+        // False when the handle is null, stale, the default or the error material.
         bool DestroyMaterial(MaterialHandle handle);
-        // Every material but the default, which moves to slot 0; returns how many were released.
+        // Every material but the default and error ones, which move to slots 0 and 1; returns how many were released.
         std::size_t ReleaseMaterials();
 
         const GpuMaterial *FindMaterial(MaterialHandle handle) const;
-        // What a draw with `handle` uses: the material, else the default; null only when the default is gone too.
+        // What a draw with `handle` uses: the material; else the default for a null handle and the error
+        // material for a stale one; null only when both are gone.
         const GpuMaterial *FindOrDefault(MaterialHandle handle) const;
 
         MaterialHandle DefaultMaterial() const { return mDefaultMaterial; }
+        MaterialHandle ErrorMaterial() const { return mErrorMaterial; }
         VkPipelineLayout PipelineLayout() const { return mPipelineLayout; }
 
         VkPipeline SkyPipeline() const { return mSkyPipeline; }
@@ -99,5 +101,6 @@ namespace mir::vk
         std::vector<uint32_t> mFreeIndices;
 
         MaterialHandle mDefaultMaterial;
+        MaterialHandle mErrorMaterial;
     };
 }

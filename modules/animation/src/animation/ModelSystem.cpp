@@ -158,13 +158,24 @@ namespace mir
                     gpu.material = mRenderer.CreateMaterial(desc);
                     desc.frontFace = VK_FRONT_FACE_CLOCKWISE;
                     gpu.mirrored = mRenderer.CreateMaterial(desc);
+                    const bool materialFailed = gpu.material.IsNull() || gpu.mirrored.IsNull();
+                    if (materialFailed)
+                    {
+                        MIR_LOG_ERROR("Model {:016x}: '{}' material creation failed, using error material", id.value,
+                                      desc.shaderName);
+                        if (gpu.material.IsNull())
+                            gpu.material = mRenderer.ErrorMaterial();
+                        if (gpu.mirrored.IsNull())
+                            gpu.mirrored = mRenderer.ErrorMaterial();
+                    }
                     // Magenta, not white: the ray tracer reads only the tint, never the texture.
-                    gpu.factor = desc.baseColorTexture == mRenderer.ErrorTexture() ? glm::vec4(1, 0, 1, 1)
-                        : material.baseColor;
-                    gpu.transparent = material.alpha == MaterialAlpha::Blend;
+                    gpu.factor = materialFailed || desc.baseColorTexture == mRenderer.ErrorTexture()
+                                     ? glm::vec4(1, 0, 1, 1)
+                                     : material.baseColor;
+                    gpu.transparent = !materialFailed && material.alpha == MaterialAlpha::Blend;
                     primitives.push_back(gpu);
-                    if (gpu.mesh.IsNull() || gpu.material.IsNull() || gpu.mirrored.IsNull())
-                        throw std::runtime_error("GPU model creation failed");
+                    if (gpu.mesh.IsNull())
+                        throw std::runtime_error("GPU mesh creation failed");
                 }
             }
         }
