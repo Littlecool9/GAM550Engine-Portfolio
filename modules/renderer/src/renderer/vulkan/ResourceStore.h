@@ -72,6 +72,7 @@ namespace mir::vk
 
         TextureHandle DefaultWhiteTexture() const { return mDefaultWhiteTexture; }
         TextureHandle DefaultNormalTexture() const { return mDefaultNormalTexture; }
+        TextureHandle ErrorTexture() const { return mErrorTexture; }
 
         // One VkSampler per distinct SamplerDesc, shared by every material that
         // asks for it; VK_NULL_HANDLE on failure.
@@ -93,6 +94,7 @@ namespace mir::vk
         std::vector<GpuTexture> mTextures;
         TextureHandle mDefaultWhiteTexture;
         TextureHandle mDefaultNormalTexture;
+        TextureHandle mErrorTexture;
 
         // Keyed by a packed SamplerDesc. The store owns them all; a material only borrows one.
         std::unordered_map<uint64_t, VkSampler> mSamplers;

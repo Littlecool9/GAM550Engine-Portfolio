@@ -30,11 +30,6 @@ namespace mir::vk
 {
     namespace
     {
-        // Level 0, then every smaller level if desc asks for them, packed back
-        // to back into one staging blob with a copy region each. Returns the
-        // level count. The box filter averages in linear light, so an sRGB
-        // image is decoded and re-encoded around the average; alpha is already
-        // linear and is averaged as is.
         uint32_t BuildMipChain(const TextureDesc &desc, std::vector<std::byte> &bytes,
             std::vector<VkBufferImageCopy> &regions)
         {
@@ -305,7 +300,29 @@ namespace mir::vk
         mDefaultNormalTexture = CreateTexture(TextureDesc{
             .width = 1, .height = 1, .pixels = flatNormal, .srgb = false });
 
-        if (mDefaultWhiteTexture.IsNull() || mDefaultNormalTexture.IsNull())
+        constexpr uint32_t checkerSize = 32;
+        constexpr uint32_t cell = 16;
+
+        std::vector<std::byte> checker(static_cast<size_t>(checkerSize) * checkerSize * 4);
+        for (int y = 0; y < checkerSize; ++y)
+        {
+            for (int x = 0; x < checkerSize; ++x)
+            {
+                // start with black
+                bool magenta = (x / cell + y / cell) % 2;
+                size_t i = (static_cast<size_t>(y) * checkerSize + x) * 4;
+                checker[i + 0] = magenta ? std::byte{ 255 } : std::byte{ 0 };
+                checker[i + 1] = std::byte{ 0 };
+                checker[i + 2] = magenta ? std::byte{ 255 } : std::byte{ 0 };
+                checker[i + 3] = std::byte{ 255 };
+            }
+        }
+
+        mErrorTexture = CreateTexture(TextureDesc{
+            .width = checkerSize, .height = checkerSize, .pixels = checker, .srgb = true
+            });
+
+        if (mDefaultWhiteTexture.IsNull() || mDefaultNormalTexture.IsNull() || mErrorTexture.IsNull())
         {
             MIR_LOG_CRITICAL("CreateDefaultTextures: default texture upload failed");
             return false;
@@ -313,6 +330,7 @@ namespace mir::vk
 
         mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mDefaultWhiteTexture.mIndex].mImage), "Default white texture");
         mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mDefaultNormalTexture.mIndex].mImage), "Default normal texture");
+        mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mErrorTexture.mIndex].mImage), "Error Texture");
 
         return true;
     }
@@ -444,7 +462,7 @@ namespace mir::vk
 
     bool ResourceStore::DestroyTexture(TextureHandle handle)
     {
-        if (handle == mDefaultWhiteTexture || handle == mDefaultNormalTexture || FindTexture(handle) == nullptr)
+        if (handle == mDefaultWhiteTexture || handle == mDefaultNormalTexture || handle == mErrorTexture || FindTexture(handle) == nullptr)
             return false;
 
         GpuTexture &texture = mTextures[handle.mIndex];
@@ -455,8 +473,9 @@ namespace mir::vk
 
     std::size_t ResourceStore::ReleaseTextures()
     {
-        // The defaults are created first, so they hold the first two slots.
-        const std::size_t kept = std::min<std::size_t>(mTextures.size(), 2);
+        // defaults hold the first few slots
+        // update slot if new default texture added
+        const std::size_t kept = std::min<std::size_t>(mTextures.size(), 3);
         for (std::size_t i = kept; i < mTextures.size(); ++i)
             FreeTexture(mTextures[i]);
         const std::size_t released = mTextures.size() - kept;

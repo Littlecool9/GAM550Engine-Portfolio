@@ -168,6 +168,11 @@ namespace mir
         return mResources->CreateTexture(desc);
     }
 
+    TextureHandle VulkanRenderer::ErrorTexture() const
+    {
+        return mResources->ErrorTexture();
+    }
+
     MaterialHandle VulkanRenderer::CreateMaterial(const MaterialDesc &desc)
     {
         return mMaterialStore->CreateMaterial(desc, *mResources, mSwapchain->Format());
