@@ -1,0 +1,16 @@
+{
+  "aliases": [
+    "games/HelloWorld/assets/Duck.glb"
+  ],
+  "identityPath": "games/HelloWorld/assets/Duck.glb",
+  "next": 7,
+  "objects": {
+    "image:hash/10150623493202187125": "1",
+    "material:name/blinn3-fx": "2",
+    "mesh:name/LOD3spShape": "3",
+    "node:hash/11825216134594410966": "6",
+    "node:hash/11852724107597246557": "4",
+    "node:hash/7247795064536981599": "5"
+  },
+  "version": 2
+}

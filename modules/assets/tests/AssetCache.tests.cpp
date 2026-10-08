@@ -12,6 +12,7 @@
 
 #include <assets/AssetBlob.h>
 #include <assets/AssetManifest.h>
+#include <assets/ModelAsset.h>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -151,4 +152,60 @@ TEST_CASE("AssetCache and its entries are move-only", "[assets][cache]")
     STATIC_REQUIRE_FALSE(std::is_copy_constructible_v<mir::AssetCache>);
     STATIC_REQUIRE_FALSE(std::is_copy_assignable_v<mir::AssetCache>);
     STATIC_REQUIRE(std::is_move_constructible_v<mir::AssetCache>);
+}
+
+TEST_CASE("LoadTypedAsset reads a cooked typed asset through the cache", "[assets][cache]")
+{
+    ScratchDir dir;
+    const mir::AssetId id = mir::MakeAssetId("red.texture");
+    const mir::TextureAsset red{1, 1, {255, 0, 0, 255}};
+    WriteFile(dir.path / "red.blob", mir::BuildTypedAsset(red));
+
+    const mir::AssetManifestSourceEntry sourceEntry{
+        {id, mir::kTextureAssetTypeTag, mir::kTextureAssetContentVersion}, "red.blob"};
+    const std::optional<mir::AssetManifest> manifest =
+        mir::AssetManifest::Parse(mir::BuildAssetManifestBlob({&sourceEntry, 1}));
+    REQUIRE(manifest.has_value());
+
+    mir::AssetCache cache(&*manifest, dir.path);
+    mir::TextureAsset loaded;
+    std::string error;
+    REQUIRE(mir::LoadTypedAsset(cache, id, loaded, error));
+    CHECK(error.empty());
+    CHECK(loaded.width == 1);
+    CHECK(loaded.height == 1);
+    CHECK(loaded.rgba == red.rgba);
+}
+
+TEST_CASE("LoadTypedAsset reports a missing blob", "[assets][cache]")
+{
+    ScratchDir dir;
+    const std::optional<mir::AssetManifest> manifest = mir::AssetManifest::Parse(mir::BuildAssetManifestBlob({}));
+    REQUIRE(manifest.has_value());
+
+    mir::AssetCache cache(&*manifest, dir.path);
+    mir::TextureAsset loaded;
+    std::string error;
+    CHECK_FALSE(mir::LoadTypedAsset(cache, mir::MakeAssetId("missing"), loaded, error));
+    CHECK(error == "no cooked blob");
+}
+
+TEST_CASE("LoadTypedAsset rejects a blob of another type and leaves the output alone", "[assets][cache]")
+{
+    ScratchDir dir;
+    const mir::AssetId id = mir::MakeAssetId("plain.material");
+    WriteFile(dir.path / "plain.blob", mir::BuildTypedAsset(mir::MaterialAsset{}));
+
+    const mir::AssetManifestSourceEntry sourceEntry{
+        {id, mir::kMaterialAssetTypeTag, mir::kMaterialAssetContentVersion}, "plain.blob"};
+    const std::optional<mir::AssetManifest> manifest =
+        mir::AssetManifest::Parse(mir::BuildAssetManifestBlob({&sourceEntry, 1}));
+    REQUIRE(manifest.has_value());
+
+    mir::AssetCache cache(&*manifest, dir.path);
+    mir::TextureAsset loaded{2, 2, {}};
+    std::string error;
+    CHECK_FALSE(mir::LoadTypedAsset(cache, id, loaded, error));
+    CHECK_FALSE(error.empty());
+    CHECK(loaded.width == 2);
 }

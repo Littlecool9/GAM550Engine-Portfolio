@@ -45,8 +45,16 @@ namespace mir::vk
         if (mDefaultMaterial.IsNull())
             return false;
 
+        // No culling: one error material stands in for both a primitive and its mirrored twin.
+        mErrorMaterial = CreateMaterial(MaterialDesc{ .shaderName = "error", .cullMode = VK_CULL_MODE_NONE },
+            resources, colorFormat);
+        if (mErrorMaterial.IsNull())
+            return false;
+
         mDevice->NameObject(VK_OBJECT_TYPE_PIPELINE,
             reinterpret_cast<uint64_t>(mMaterials[mDefaultMaterial.mIndex].mPipeline), "Default material pipeline");
+        mDevice->NameObject(VK_OBJECT_TYPE_PIPELINE,
+            reinterpret_cast<uint64_t>(mMaterials[mErrorMaterial.mIndex].mPipeline), "Error material pipeline");
         return true;
     }
 
@@ -58,6 +66,7 @@ namespace mir::vk
         // Before the pool: frees each material's set into it.
         DestroyMaterials();
         mDefaultMaterial = kNullMaterial;
+        mErrorMaterial = kNullMaterial;
 
         if (mDescriptorPool != VK_NULL_HANDLE)
         {
@@ -460,7 +469,7 @@ namespace mir::vk
 
     bool MaterialStore::DestroyMaterial(MaterialHandle handle)
     {
-        if (handle == mDefaultMaterial || FindMaterial(handle) == nullptr)
+        if (handle == mDefaultMaterial || handle == mErrorMaterial || FindMaterial(handle) == nullptr)
             return false;
 
         GpuMaterial &material = mMaterials[handle.mIndex];
@@ -474,28 +483,32 @@ namespace mir::vk
     std::size_t MaterialStore::ReleaseMaterials()
     {
         const GpuMaterial *const defaultMaterial = FindMaterial(mDefaultMaterial);
-        if (defaultMaterial == nullptr)
+        const GpuMaterial *const errorMaterial = FindMaterial(mErrorMaterial);
+        if (defaultMaterial == nullptr || errorMaterial == nullptr)
         {
             const std::size_t count = mMaterials.size();
             DestroyMaterials();
             return count;
         }
 
-        // Kept: draws and CreateMaterial fall back to it.
-        const GpuMaterial kept = *defaultMaterial;
+        // Kept: draws fall back to them.
+        const GpuMaterial keptDefault = *defaultMaterial;
+        const GpuMaterial keptError = *errorMaterial;
         std::size_t released = 0;
         for (std::size_t i = 0; i < mMaterials.size(); ++i)
         {
-            if (i == mDefaultMaterial.mIndex)
+            if (i == mDefaultMaterial.mIndex || i == mErrorMaterial.mIndex)
                 continue;
             FreeMaterial(mMaterials[i]);
             ++released;
         }
 
         mMaterials.clear();
-        mMaterials.push_back(kept);
+        mMaterials.push_back(keptDefault);
+        mMaterials.push_back(keptError);
         mFreeIndices.clear();
-        mDefaultMaterial = MaterialHandle{ 0, kept.mGeneration };
+        mDefaultMaterial = MaterialHandle{ 0, keptDefault.mGeneration };
+        mErrorMaterial = MaterialHandle{ 1, keptError.mGeneration };
         return released;
     }
 
@@ -515,10 +528,15 @@ namespace mir::vk
     const GpuMaterial *MaterialStore::FindOrDefault(MaterialHandle handle) const
     {
         const GpuMaterial *material = FindMaterial(handle);
-        if (material == nullptr || material->mPipeline == VK_NULL_HANDLE)
-            material = FindMaterial(mDefaultMaterial);
-        if (material == nullptr || material->mPipeline == VK_NULL_HANDLE)
+        if (material != nullptr && material->mPipeline != VK_NULL_HANDLE)
+            return material;
+
+        // Null means nothing was authored; anything else that fails to resolve is a bug worth seeing.
+        const GpuMaterial *fallback = FindMaterial(handle.IsNull() ? mDefaultMaterial : mErrorMaterial);
+        if (fallback == nullptr || fallback->mPipeline == VK_NULL_HANDLE)
+            fallback = FindMaterial(mDefaultMaterial);
+        if (fallback == nullptr || fallback->mPipeline == VK_NULL_HANDLE)
             return nullptr;
-        return material;
+        return fallback;
     }
 }

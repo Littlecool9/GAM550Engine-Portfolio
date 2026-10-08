@@ -19,15 +19,7 @@ namespace mir
     bool LoadModelResources(AssetCache &cache, AssetId id, ModelResources &result, std::string &error)
     {
         ModelResources data;
-        auto read = [&](AssetId key, auto &out) {
-            const auto *blob = cache.Load(key);
-            if (!blob)
-            {
-                error = "missing model dependency";
-                return false;
-            }
-            return ReadTypedAsset(*blob, out, error);
-        };
+        auto read = [&](AssetId key, auto &out) { return LoadTypedAsset(cache, key, out, error); };
         if (!read(id, data.model))
             return false;
         for (const auto &node : data.model.nodes)

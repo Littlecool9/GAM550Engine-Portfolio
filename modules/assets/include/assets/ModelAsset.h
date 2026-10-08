@@ -169,11 +169,15 @@ namespace mir
         std::vector<uint8_t> rgba;
     };
 
+    class AssetCache;
+
     uint32_t TypedAssetVersion(uint32_t typeTag);
     // Explicit little-endian fields, no native struct/GLM padding on disk.
+    // LoadTypedAsset is cache.Load plus ReadTypedAsset; error says which one failed.
 #define MIR_TYPED_ASSET(Type)                                                                                          \
     std::vector<std::byte> BuildTypedAsset(const Type &asset);                                                         \
     bool ReadTypedAsset(const AssetBlobView &blob, Type &asset, std::string &error);                                   \
+    bool LoadTypedAsset(AssetCache &cache, AssetId id, Type &asset, std::string &error);                               \
     bool ValidateAsset(const Type &asset, std::string &error);
     MIR_TYPED_ASSET(ModelAsset)
     MIR_TYPED_ASSET(MeshAsset)

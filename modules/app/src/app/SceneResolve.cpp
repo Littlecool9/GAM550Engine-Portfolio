@@ -183,10 +183,16 @@ namespace mir
                     if (auto it = materialCache.find(shaderName); it != materialCache.end())
                         meshRenderer.material = it->second;
                     else
-                        meshRenderer.material = materialCache
-                        .emplace(shaderName, renderer.CreateMaterial(
-                            MaterialDesc{ .shaderName = shaderName }))
-                        .first->second;
+                    {
+                        // Null would draw the default grey, which hides that the authored shader failed.
+                        MaterialHandle material = renderer.CreateMaterial(MaterialDesc{ .shaderName = shaderName });
+                        if (material.IsNull())
+                        {
+                            MIR_LOG_ERROR("ResolveSceneMeshes: material '{}' failed, using error material", shaderName);
+                            material = renderer.ErrorMaterial();
+                        }
+                        meshRenderer.material = materialCache.emplace(shaderName, material).first->second;
+                    }
                 }
             });
 

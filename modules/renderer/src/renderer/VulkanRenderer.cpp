@@ -168,16 +168,26 @@ namespace mir
         return mResources->CreateTexture(desc);
     }
 
+    TextureHandle VulkanRenderer::ErrorTexture() const
+    {
+        return mResources->ErrorTexture();
+    }
+
     MaterialHandle VulkanRenderer::CreateMaterial(const MaterialDesc &desc)
     {
         return mMaterialStore->CreateMaterial(desc, *mResources, mSwapchain->Format());
     }
 
+    MaterialHandle VulkanRenderer::ErrorMaterial() const
+    {
+        return mMaterialStore->ErrorMaterial();
+    }
+
     bool VulkanRenderer::DestroyMaterial(MaterialHandle handle)
     {
-        if (handle == mMaterialStore->DefaultMaterial())
+        if (handle == mMaterialStore->DefaultMaterial() || handle == mMaterialStore->ErrorMaterial())
         {
-            MIR_LOG_ERROR("DestroyMaterial: refusing to destroy the default material");
+            MIR_LOG_ERROR("DestroyMaterial: refusing to destroy a built-in material");
             return false;
         }
 
@@ -204,7 +214,7 @@ namespace mir
         mRayTracer->DestroyBlases();
         const std::size_t meshCount = mResources->ReleaseMeshes();
         mModelDescriptors->ResetFrames();
-        // The default textures and material stay: CreateMaterial and draws fall back to them.
+        // The default textures and the default and error materials stay: CreateMaterial and draws fall back to them.
         const std::size_t textureCount = mResources->ReleaseTextures();
         const std::size_t materialCount = mMaterialStore->ReleaseMaterials();
 
@@ -220,7 +230,7 @@ namespace mir
 
         vkDeviceWaitIdle(mDevice->Handle());
 
-        // Stale handles, the default material and the default textures are skipped.
+        // Stale handles, the built-in materials and the default textures are skipped.
         for (const MeshHandle handle : meshes)
             DestroyMeshAndBlas(handle);
 

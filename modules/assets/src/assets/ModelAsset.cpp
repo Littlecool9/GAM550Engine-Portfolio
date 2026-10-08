@@ -7,6 +7,7 @@
  *
  */
 #include <algorithm>
+#include <assets/AssetCache.h>
 #include <assets/ModelAsset.h>
 #include <bit>
 #include <cmath>
@@ -465,6 +466,13 @@ namespace mir
             error = e.what();                                                                                          \
             return false;                                                                                              \
         }                                                                                                              \
+    }                                                                                                                  \
+    bool LoadTypedAsset(AssetCache &cache, AssetId id, Type &asset, std::string &error)                                \
+    {                                                                                                                  \
+        const AssetBlobView *blob = cache.Load(id);                                                                    \
+        if (blob == nullptr)                                                                                           \
+            return Fail(error, "no cooked blob");                                                                      \
+        return ReadTypedAsset(*blob, asset, error);                                                                    \
     }
     MIR_IMPL_TYPED(ModelAsset, kModelAssetTypeTag)
     MIR_IMPL_TYPED(MeshAsset, kMeshAssetTypeTag)

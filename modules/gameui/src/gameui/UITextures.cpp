@@ -30,10 +30,8 @@ namespace mir
         UISprite sprite;
         TextureAsset texture;
         std::string error;
-        if (const AssetBlobView *blob = assets.Load(id); blob == nullptr)
-            MIR_LOG_ERROR("gameui: no texture asset {:016x}", id.value);
-        else if (!ReadTypedAsset(*blob, texture, error))
-            MIR_LOG_ERROR("gameui: asset {:016x} is not a cooked texture: {}", id.value, error);
+        if (!LoadTypedAsset(assets, id, texture, error))
+            MIR_LOG_ERROR("gameui: texture {:016x}: {}", id.value, error);
         else
             sprite = Add(texture);
 

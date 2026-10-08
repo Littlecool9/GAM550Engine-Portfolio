@@ -93,6 +93,10 @@ engine_add_shaders(MjolnirEngine
     ENTRIES vertexMain:vertex fragmentMain:fragment)
 
 engine_add_shaders(MjolnirEngine
+    SOURCE assets/shaders/error.slang
+    ENTRIES vertexMain:vertex fragmentMain:fragment)
+
+engine_add_shaders(MjolnirEngine
     SOURCE assets/shaders/model.slang
     ENTRIES vertexMain:vertex fragmentMain:fragment)
 

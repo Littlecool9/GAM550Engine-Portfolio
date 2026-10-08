@@ -165,9 +165,13 @@ namespace mir
 
         TextureHandle CreateTexture(const TextureDesc &desc);
 
+        TextureHandle ErrorTexture() const;
+
         MaterialHandle CreateMaterial(const MaterialDesc &desc);
 
         bool DestroyMaterial(MaterialHandle handle);
+
+        MaterialHandle ErrorMaterial() const;
 
         void CaptureNextFrame(const std::filesystem::path &path);
 

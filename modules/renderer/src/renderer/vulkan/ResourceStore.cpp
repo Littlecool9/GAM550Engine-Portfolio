@@ -30,11 +30,6 @@ namespace mir::vk
 {
     namespace
     {
-        // Level 0, then every smaller level if desc asks for them, packed back
-        // to back into one staging blob with a copy region each. Returns the
-        // level count. The box filter averages in linear light, so an sRGB
-        // image is decoded and re-encoded around the average; alpha is already
-        // linear and is averaged as is.
         uint32_t BuildMipChain(const TextureDesc &desc, std::vector<std::byte> &bytes,
             std::vector<VkBufferImageCopy> &regions)
         {
@@ -300,12 +295,17 @@ namespace mir::vk
         const std::array<std::byte, 4> flatNormal{
             std::byte{ 128 }, std::byte{ 128 }, std::byte{ 255 }, std::byte{ 255 } };
 
+        const std::array<std::byte, 4> magenta{
+            std::byte{ 255 }, std::byte{ 0 }, std::byte{ 255 }, std::byte{ 255 } };
+
         mDefaultWhiteTexture = CreateTexture(TextureDesc{
             .width = 1, .height = 1, .pixels = white, .srgb = true });
         mDefaultNormalTexture = CreateTexture(TextureDesc{
             .width = 1, .height = 1, .pixels = flatNormal, .srgb = false });
+        mErrorTexture = CreateTexture(TextureDesc{
+            .width = 1, .height = 1, .pixels = magenta, .srgb = true });
 
-        if (mDefaultWhiteTexture.IsNull() || mDefaultNormalTexture.IsNull())
+        if (mDefaultWhiteTexture.IsNull() || mDefaultNormalTexture.IsNull() || mErrorTexture.IsNull())
         {
             MIR_LOG_CRITICAL("CreateDefaultTextures: default texture upload failed");
             return false;
@@ -313,6 +313,7 @@ namespace mir::vk
 
         mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mDefaultWhiteTexture.mIndex].mImage), "Default white texture");
         mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mDefaultNormalTexture.mIndex].mImage), "Default normal texture");
+        mDevice->NameObject(VK_OBJECT_TYPE_IMAGE, reinterpret_cast<uint64_t>(mTextures[mErrorTexture.mIndex].mImage), "Error Texture");
 
         return true;
     }
@@ -444,7 +445,7 @@ namespace mir::vk
 
     bool ResourceStore::DestroyTexture(TextureHandle handle)
     {
-        if (handle == mDefaultWhiteTexture || handle == mDefaultNormalTexture || FindTexture(handle) == nullptr)
+        if (handle == mDefaultWhiteTexture || handle == mDefaultNormalTexture || handle == mErrorTexture || FindTexture(handle) == nullptr)
             return false;
 
         GpuTexture &texture = mTextures[handle.mIndex];
@@ -455,8 +456,9 @@ namespace mir::vk
 
     std::size_t ResourceStore::ReleaseTextures()
     {
-        // The defaults are created first, so they hold the first two slots.
-        const std::size_t kept = std::min<std::size_t>(mTextures.size(), 2);
+        // defaults hold the first few slots
+        // update slot if new default texture added
+        const std::size_t kept = std::min<std::size_t>(mTextures.size(), 3);
         for (std::size_t i = kept; i < mTextures.size(); ++i)
             FreeTexture(mTextures[i]);
         const std::size_t released = mTextures.size() - kept;
@@ -476,5 +478,6 @@ namespace mir::vk
         mTextures.clear();
         mDefaultWhiteTexture = kNullTexture;
         mDefaultNormalTexture = kNullTexture;
+        mErrorTexture = kNullTexture;
     }
 }
