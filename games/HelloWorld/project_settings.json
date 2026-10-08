@@ -1,6 +1,6 @@
 {
   "rendering": {
-    "fog": true,
+    "fog": false,
     "rayTracing": true
   }
 }

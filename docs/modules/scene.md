@@ -1,7 +1,7 @@
 # scene
 
-Saves and loads a scene as data. It owns the save-file identity, `StableId`, and
-the three-pass load. It owns no runtime state and no authoring UI.
+Saves and loads a scene, or one entity and its descendants, as data. It owns the
+save-file identity, `StableId`, and the three-pass load. It owns no runtime state and no authoring UI.
 
 `mir::scene` · depends `mir::core` (public); `mir::serial` (private) · API `modules/scene/include/scene/` · maintainer Sumin Park · reviewed 2026-09-18
 
@@ -46,6 +46,24 @@ destroys every entity currently alive, then `LoadScene`s that directory back,
 returning the fresh `LoadedScene` identity (new `Entity` handles) for the
 caller to adopt.
 
+`EntitySnapshot` is the same per-entity data, cut down to one entity and its
+descendants. Duplicate, undo of delete and prefabs build on it. `CaptureEntity`
+walks the root and then `ForEachDescendant`, so every parent comes before its
+children. Each member gets a snapshot-local id, starting at 1 for the root.
+The result is a JSON array in the entity-file format, kept in memory as compact
+text. Text keeps nlohmann out of the public header, and a prefab can write it to
+disk unchanged.
+
+`RestoreEntity` runs the same three passes into fresh entities. Replaying
+`SetParent` in capture order reproduces each parent's sibling order. Every
+restored entity is registered in the caller's `LoadedScene` under a new
+`StableId`, so it saves like any other. The root's own parent is not captured.
+The caller passes one, and the root is appended as that parent's last child.
+
+Both paths share `EntityToJson` and `SpawnEntities` in the private
+`src/scene/EntityCodec.h`. `SaveScene` and `LoadScene` only add the files
+around them.
+
 ## API
 
 | Type | Header | Role |
@@ -55,6 +73,7 @@ caller to adopt.
 | `NewScene`, `AllocateStableId`, `CreateSceneEntity` | `scene/SceneAsset.h` | Authoring entry points |
 | `SaveScene`, `LoadScene`, `UnloadScene` | `scene/SceneIO.h` | Directory in, directory out, scoped destroy |
 | `PlaySnapshot`, `CaptureWorld`, `RestoreWorld`, `DiscardSnapshot` | `scene/PlaySnapshot.h` | Whole-World capture/restore around a Play session, built on `SaveScene`/`LoadScene`; `DiscardSnapshot` removes its directory |
+| `EntitySnapshot`, `CaptureEntity`, `RestoreEntity` | `scene/EntitySnapshot.h` | One entity and its descendants as in-memory data, restored into new entities registered in a `LoadedScene` |
 
 `CreateSceneEntity` is the one call an editor's "add entity" needs, so allocation
 and registration cannot happen for one without the other.
@@ -92,6 +111,19 @@ field-bearing component carries a table.
 saved is written as `kNullStableId` and loads back null, so cross-scene
 references are not representable.
 
+**An `EntityRef` leaving a snapshot keeps its live handle.** Duplicate and undo
+restore within the same run, so the referenced entity can still exist. It is
+written as `{"entity": PackEntity}` instead of an id. On restore it resolves
+only if `IsAlive` still accepts that handle, and the generation check turns a
+target destroyed since capture into null. `LoadScene` never resolves that form,
+because a handle from a file names a different run's entity, so it loads null
+with a warning.
+
+**`RestoreEntity` does not resolve runtime handles.** Script instances, meshes
+and materials are left out of the field tables. The caller runs
+`ResolveSceneScripts` and `ResolveSceneMeshes` afterwards, as `App` does after
+`LoadScene`.
+
 **`UnloadScene` destroys exactly what that load created**, each entity guarded by
 `IsAlive` since destroying a parent already cascades. It never touches entities
 that another loaded scene owns.
@@ -108,8 +140,13 @@ field-table round trip and the `EntityRef` patch pass. `PlaySnapshot` builds on
 the same load/save, tested directly against a live `World` (mutate after
 capture, restore, check it reverted) rather than through files.
 
-Tests in `modules/scene/tests/SceneIO.tests.cpp` and
-`modules/scene/tests/PlaySnapshot.tests.cpp`.
+*As of 2026-10-07.* `EntitySnapshot` captures and restores a subtree,
+including sibling order, `EntityRef`s inside the snapshot, and live references
+leaving it. Nothing calls it yet; duplicate, undo and prefabs are separate work.
+
+Tests in `modules/scene/tests/SceneIO.tests.cpp`,
+`modules/scene/tests/PlaySnapshot.tests.cpp` and
+`modules/scene/tests/EntitySnapshot.tests.cpp`.
 
 Resolving names back into live handles after a load is not done here — a
 `ScriptRef.scriptName` into an `instanceRef`, or a mesh name into a `MeshHandle`.
@@ -133,8 +170,20 @@ converge.
    shows up in a profile on a large scene, have each entity file list its
    component names ahead of the blobs, so load can call `Find` per name instead
    of sweeping the whole registry per entity.
+5. **Undo of delete needs more than `EntitySnapshot`.** References into the
+   subtree from outside it stay dead after a restore. The sibling position is
+   lost, since `SetParent` only appends. The `StableId` changes, so the scene
+   file shows a delete plus an add.
 
 ## Changed
+
+*2026-10-07* — **A non-integer `EntityRef` in a scene file loads null.** Was:
+`LoadScene` read every `EntityRef` with `get<StableId>()`, so a `null` or a
+string in its place threw `nlohmann::type_error` out of `LoadScene`. Now: the
+load passes moved into `SpawnEntities`, shared with `EntitySnapshot`, and any
+value that is not an id, including a snapshot's `{"entity": …}` form, loads
+null with a warning. The load warnings now start with `SpawnEntities:` instead
+of `LoadScene:`.
 
 *2026-10-02* — **The Play snapshot directory is per process.** Was:
 `%TEMP%/mjolnir_play_snapshot`, shared, so game builds started together, which
