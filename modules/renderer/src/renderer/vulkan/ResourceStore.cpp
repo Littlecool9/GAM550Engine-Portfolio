@@ -478,5 +478,6 @@ namespace mir::vk
         mTextures.clear();
         mDefaultWhiteTexture = kNullTexture;
         mDefaultNormalTexture = kNullTexture;
+        mErrorTexture = kNullTexture;
     }
 }
