@@ -21,7 +21,7 @@ subsystem holds a pointer to the facade or to another subsystem.
 | `Device` | instance, debug messenger, surface, physical and logical device, queue, VMA allocator, cached device properties |
 | `Swapchain` | swapchain images and views, one depth image per frame in flight, render-complete semaphores, acquire and present |
 | `FrameSync` | command pools and buffers, image-acquired semaphores, the frame timeline with `kFramesInFlight = 2` |
-| `ResourceStore` | meshes, textures, samplers and the two default textures, behind slot/generation handles |
+| `ResourceStore` | meshes, textures, samplers and the three built-in textures (white, flat normal, error magenta), behind slot/generation handles |
 | `MaterialStore` | materials and their pipelines, set 0, the pipeline layout every material shares, the sky pipeline |
 | `CameraBuffer` | set 1: per-view camera data and light list, plus the directional light, ambient, fog and atmosphere |
 | `ModelDescriptors` | set 2: per-draw model data, reset each frame |
@@ -67,7 +67,7 @@ the same sun as scene lighting — see the set-1 UBO rule below and
 Game code never calls Vulkan. It calls `CreateMesh` and `CreateMaterial` once at
 scene-build time, stores the returned handles on a `MeshRenderer` component, and
 `RenderSystem` takes over from there every frame after. When `App` unloads that
-scene, `ReleaseSceneResources` frees them all again, except the default material.
+scene, `ReleaseSceneResources` frees them all again, except the default and error materials.
 
 The module targets Vulkan 1.4 and rejects any device below it. That removes a
 lot of code: there are no render passes and no framebuffers, since
@@ -82,9 +82,11 @@ bool Initialize(const RendererDesc &desc);   // takes an ISurfaceProvider, never
 MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
 bool DestroyMesh(MeshHandle handle);         // false if handle is null/stale; frees that mesh alone
 TextureHandle CreateTexture(const TextureDesc &desc);
+TextureHandle ErrorTexture() const;          // 1x1 magenta, for a caller whose texture failed to load
 MaterialHandle CreateMaterial(const MaterialDesc &desc);
-bool DestroyMaterial(MaterialHandle handle); // same contract; always false on the default material
-void ReleaseSceneResources();                // every mesh, material and texture but the defaults
+bool DestroyMaterial(MaterialHandle handle); // same contract; always false on the default and error materials
+MaterialHandle ErrorMaterial() const;        // solid magenta, for a caller whose CreateMaterial failed
+void ReleaseSceneResources();                // every mesh, material and texture but the built-ins
 
 void DrawFrame(std::span<const RenderView> views);
 void TraceFrame(std::span<const RenderView> views);  // opt-in RT path alongside DrawFrame - see Rules
@@ -401,18 +403,29 @@ the same reverse-Z depth image opaque items wrote, so early-z skips the
 fragment shader — a ~128-tap ray march — everywhere opaque geometry already
 covered.
 
-**An invalid material falls back to the default** rather than failing the
-draw, so one bad handle does not blank the frame. The same rule applies one
-level down: `CreateMaterial` resolves `MaterialDesc::baseColorTexture` and
-`normalTexture` through `CreateTexture`'s table, and a null or stale texture
-handle falls back to a flat white base color / flat normal map rather than
-failing material creation.
+**A null material falls back to the default, and a broken one falls back to
+the error material.** A null `MaterialHandle` means nothing was authored, so
+the draw uses the default material. A non-null handle that does not resolve
+means something failed, so `FindOrDefault` gives the draw the error material
+instead. The error material runs `error.slang`, which draws solid magenta and
+ignores the draw's tint and textures. It has no culling, because one error
+material stands in for both a model primitive and its mirrored twin. Either
+way, one bad handle does not blank the frame.
+
+The same split applies one level down. `CreateMaterial` resolves
+`MaterialDesc::baseColorTexture` and `normalTexture` through `CreateTexture`'s
+table. A null or stale texture handle falls back to a flat white base color or
+a flat normal map, rather than failing material creation. `ErrorTexture()` is
+the texture for the broken case: a caller whose texture failed to load passes
+it instead of null, so the failure shows as magenta rather than as white.
 
 **`ReleaseSceneResources` is all or nothing, and the caller vouches for the
 handles.** It waits for the device to go idle, destroys every mesh, every
-material except the default, and every texture except the two defaults, and
-the next `CreateMesh`/`CreateMaterial`/`CreateTexture` reuses index 0 (index 2
-for textures, since the two defaults keep 0 and 1). Mesh and texture
+material except the default and error materials, and every texture except the
+three built-ins. The next `CreateMesh` reuses index 0. The next
+`CreateMaterial` reuses index 2, since the default and error materials keep 0
+and 1. The next `CreateTexture` reuses index 3, since the built-in textures
+keep 0 to 2. Mesh and texture
 generations are not bumped, so a handle kept across the call names whatever is
 created next in its slot, with no error. `App` calls it only right after
 unloading a scene, when no `MeshRenderer` is left.
@@ -431,11 +444,11 @@ from the buffers/pipeline about to be freed. **Same caller-vouches-for-
 handles rule as `ReleaseSceneResources`**, just at one-handle granularity: a
 `MeshRenderer`/material reference that outlives its handle's destroy isn't
 prevented, it just starts missing in the store's lookup and silently
-stops drawing (`RecordView`'s existing null-mesh skip / default-material
-fallback), rather than crashing. `DestroyMaterial` additionally always
-refuses on the default material — `CreateMaterial`'s own invalid-handle
-fallback needs it alive for the process lifetime, the same reason
-`ReleaseSceneResources` special-cases it. Textures have no public per-handle
+stops drawing (`RecordView`'s existing null-mesh skip) or draws magenta (the
+error-material fallback), rather than crashing. `DestroyMaterial` additionally
+always refuses on the default and error materials. Draws fall back to them for
+the process lifetime, which is the same reason `ReleaseSceneResources` keeps
+them. Textures have no public per-handle
 destroy yet (see Backlog). Material lookups check the generation the same
 way mesh and texture lookups do.
 
@@ -557,11 +570,26 @@ No tests. Everything here needs a device, and the module is verified by running.
    own active light count); only the two shaders that exist
    (`default`/`unlit`) get RT parity, so a third custom material shader
    would trace with whichever of those two `GpuMaterial::mUnlit` happens to
-   pick, not its own look; and `TraceFrame` only ever traces `views[0]` - a
+   pick, not its own look; `closestHitMain` samples no textures, so its colour
+   is the vertex colour or albedo times the draw's tint, a textured model
+   traces untextured, and the error texture and error material trace as the
+   draw's tint rather than magenta; and `TraceFrame` only ever traces `views[0]` - a
    second viewport on screen at once is backlog item 6 regardless of
    raster/RT, and RT inherits that gap rather than fixing it.
 
 ## Changed
+
+*2026-10-08* — **Error texture and error material.** Was: the renderer had one
+fallback per level. A null or stale texture became white or a flat normal, and
+a null or stale material became the default grey. A failed load therefore
+looked the same as an untextured or unmaterialed draw. Now: `ResourceStore`
+creates a third built-in texture, a 1x1 magenta exposed as `ErrorTexture()`.
+`MaterialStore` creates a second built-in material on `error.slang`, exposed as
+`ErrorMaterial()`. `FindOrDefault` sends a stale non-null handle to the error
+material, and a null handle still goes to the default. Release keeps the
+built-ins in the first slots, and `DestroyMaterial` refuses both built-in
+materials. Because: issue #19, which asks a missing texture to fall back
+rather than fail the model, and a failure is easier to spot in magenta.
 
 *2026-10-05* — **`RequestSwapchainRecreate`.** Was: only a size change or an
 out-of-date acquire or present recreated the swapchain. Now: a caller can force

@@ -81,6 +81,17 @@ node with a compatible channel, a skin palette must match its skeleton, and
 morph weights must match the mesh. `LoadModelResources` rejects mismatches;
 it does not silently render a partial model.
 
+**A broken texture or material draws magenta; a broken mesh fails the model.**
+`ModelSystem` loads each primitive's material and base color texture after
+`LoadModelResources` has accepted the model. A material or texture blob that is
+missing or does not parse logs an error with the model and asset IDs. The
+primitive then gets the renderer's `ErrorTexture()`. A `CreateMaterial` that
+returns null logs an error, and the primitive gets `ErrorMaterial()`. In every
+case the primitive's tint becomes magenta too, because the ray tracer reads
+only the tint. A failed texture is cached as the error texture, so it logs
+once per texture and is retried on the next reload. A failed `CreateMesh`
+still fails the whole model, since there is nothing to draw.
+
 ## State
 
 *As of 2026-09-24.* The module samples translation, rotation, scale, and
@@ -107,6 +118,13 @@ a model, but it has no timeline or named clip picker.
 4. Profile per-draw deformation buffer uploads before pooling or caching them.
 
 ## Changed
+
+*2026-10-08* — **Texture and material failures fall back to magenta.** Was:
+a missing or unreadable texture or material blob, or a failed GPU texture or
+material, threw out of `LoadInto`. The entity was marked failed and the model
+did not draw at all. Now: each of those logs an error and the primitive draws
+with the renderer's error texture or error material and a magenta tint. Only
+a failed mesh still fails the model. Because: issue #19.
 
 *2026-09-24* — **ModelSystem moved into this module; ModelPlayer made private.**
 `ModelSystem` was in `app`, which left the component and its only system in
