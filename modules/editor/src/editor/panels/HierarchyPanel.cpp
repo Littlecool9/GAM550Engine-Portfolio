@@ -16,6 +16,8 @@
 
 #include <imgui.h>
 
+#include <algorithm>
+#include <iterator>
 #include <span>
 #include <string>
 #include <string_view>
@@ -26,7 +28,24 @@ namespace mir
 {
     namespace
     {
-        void DrawEntity(World &world, const HierarchyIndex *index, Selection &selection, Entity entity)
+        void DrawEntityMenu(Selection &selection, Entity entity, EntityAction &action)
+        {
+            if (!ImGui::BeginPopupContextItem())
+                return;
+
+            if (!selection.Contains(entity))
+                selection.mSelected = { entity };
+
+            if (ImGui::MenuItem("Duplicate", "Ctrl+D"))
+                action = { EntityActionKind::Duplicate, nullptr, entity };
+            if (ImGui::MenuItem("Delete", "Del"))
+                action = { EntityActionKind::Delete, nullptr, entity };
+
+            ImGui::EndPopup();
+        }
+
+        void DrawEntity(World &world, const HierarchyIndex *index, Selection &selection, Entity entity,
+            EntityAction &action)
         {
             const std::span<const Entity> children =
                 index != nullptr ? index->ChildrenOf(entity) : std::span<const Entity>{};
@@ -48,10 +67,12 @@ namespace mir
             if (ImGui::IsItemClicked())
                 ApplyClick(selection, entity, ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift);
 
+            DrawEntityMenu(selection, entity, action);
+
             if (!children.empty() && open)
             {
                 for (const Entity child : children)
-                    DrawEntity(world, index, selection, child);
+                    DrawEntity(world, index, selection, child, action);
                 ImGui::TreePop();
             }
         }
@@ -94,7 +115,28 @@ namespace mir
         Selection &selection = world.Resource<Selection>();
         std::erase_if(selection.mSelected, [&](Entity e) { return !world.IsAlive(e); });
 
-        if (ImGui::BeginPopupContextWindow("HierarchyCreateEntity"))
+        const HierarchyIndex *index = world.TryResource<HierarchyIndex>();
+
+        world.ForEachAliveEntity(
+            [&](Entity entity)
+            {
+                if (index == nullptr || index->ParentOf(entity).IsNull())
+                    DrawEntity(world, index, selection, entity, action);
+            });
+
+        const Entity primary = selection.Primary();
+        if (!primary.IsNull() && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+            !ImGui::GetIO().WantTextInput)
+        {
+            if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+                action = { EntityActionKind::Delete, nullptr, primary };
+            else if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false))
+                action = { EntityActionKind::Duplicate, nullptr, primary };
+        }
+
+        // after the tree, so NoOpenOverItems sees this frame's items and leaves a right-click on one to its own menu
+        if (ImGui::BeginPopupContextWindow("HierarchyCreateEntity",
+            ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
         {
             if (ImGui::BeginMenu("Create"))
             {
@@ -128,15 +170,38 @@ namespace mir
             ImGui::EndPopup();
         }
 
-        const HierarchyIndex *index = world.TryResource<HierarchyIndex>();
-
-        world.ForEachAliveEntity(
-            [&](Entity entity)
-            {
-                if (index == nullptr || index->ParentOf(entity).IsNull())
-                    DrawEntity(world, index, selection, entity);
-            });
-
         return action;
+    }
+
+    Entity NeighborInHierarchy(const World &world, Entity entity)
+    {
+        const HierarchyIndex *index = world.TryResource<HierarchyIndex>();
+        const Entity parent = index != nullptr ? index->ParentOf(entity) : kNullEntity;
+
+        // roots have no parent to list them, so gather them in the order Draw shows them
+        std::vector<Entity> siblings;
+        if (!parent.IsNull())
+        {
+            const std::span<const Entity> children = index->ChildrenOf(parent);
+            siblings.assign(children.begin(), children.end());
+        }
+        else
+        {
+            world.ForEachAliveEntity(
+                [&](Entity root)
+                {
+                    if (index == nullptr || index->ParentOf(root).IsNull())
+                        siblings.push_back(root);
+                });
+        }
+
+        const auto it = std::find(siblings.begin(), siblings.end(), entity);
+        if (it == siblings.end())
+            return parent;
+        if (std::next(it) != siblings.end())
+            return *std::next(it);
+        if (it != siblings.begin())
+            return *std::prev(it);
+        return parent;
     }
 }

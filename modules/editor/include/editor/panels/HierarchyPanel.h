@@ -17,12 +17,15 @@ namespace mir
     {
         None,
         Create,
+        Delete,
+        Duplicate,
     };
 
     struct EntityAction
     {
         EntityActionKind mKind = EntityActionKind::None;
-        const EntityPresetDesc *mPreset = nullptr; // Create: null is an empty entity
+        const EntityPresetDesc *mPreset = nullptr; // for create
+        Entity mTarget = kNullEntity;              // for delete, duplicate
     };
 
     class HierarchyPanel
@@ -30,4 +33,6 @@ namespace mir
     public:
         EntityAction Draw(World &world);
     };
+
+    Entity NeighborInHierarchy(const World &world, Entity entity);
 }

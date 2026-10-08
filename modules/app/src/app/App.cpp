@@ -35,6 +35,7 @@
 #include <renderer/ComponentRegistration.h>
 #include <renderer/RenderSettings.h>
 #include <renderer/RenderSystem.h>
+#include <scene/EntitySnapshot.h>
 #include <scene/SceneIO.h>
 #include <script/ComponentRegistration.h>
 #include <script/ScriptSystem.h>
@@ -620,21 +621,40 @@ namespace mir
 
     void App::ApplyEntityAction(const EntityAction &action)
     {
-        if (action.mKind != EntityActionKind::Create)
-            return;
+        Selection &selection = mWorld.Resource<Selection>();
 
-        const EntityPresetDesc *preset = action.mPreset;
-        if (preset != nullptr && preset->mCanCreate != nullptr && !preset->mCanCreate(mWorld))
-            return;
+        switch (action.mKind)
+        {
+        case EntityActionKind::Create:
+            {
+                const EntityPresetDesc *preset = action.mPreset;
+                if (preset != nullptr && preset->mCanCreate != nullptr && !preset->mCanCreate(mWorld))
+                    return;
 
-        const Entity entity = CreateSceneEntity(mWorld, mScene);
-        if (preset != nullptr)
-            preset->mCreate(mWorld, entity);
+                const Entity entity = CreateSceneEntity(mWorld, mScene);
+                if (preset != nullptr)
+                    preset->mCreate(mWorld, entity);
 
-        // after the preset
-        AddMissingBaseline(mWorld, entity);
+                // after the preset
+                AddMissingBaseline(mWorld, entity);
 
-        mWorld.Resource<Selection>().mSelected = { entity };
+                selection.mSelected = { entity };
+                break;
+            }
+        case EntityActionKind::Delete:
+            {
+                const Entity neighbor = NeighborInHierarchy(mWorld, action.mTarget);
+                if (DestroySceneEntity(mWorld, mScene, action.mTarget) && selection.Contains(action.mTarget))
+                    selection.mSelected = neighbor.IsNull() ? std::vector<Entity>{} : std::vector<Entity>{ neighbor };
+                break;
+            }
+        case EntityActionKind::Duplicate:
+            if (const Entity copy = DuplicateSceneEntity(mWorld, mScene, action.mTarget); !copy.IsNull())
+                selection.mSelected = { copy };
+            break;
+        case EntityActionKind::None:
+            break;
+        }
     }
 
     void App::ApplyImportedAssets()
