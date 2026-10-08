@@ -182,11 +182,28 @@ namespace mir
                     field->Write(component, empty.mBytes);
         }
 
-        void DrawComponent(World &world, const ComponentOps &ops, Entity entity, const AssetImportView &assets)
+        // right-click menu on a component header
+        void DrawComponentMenu(const ComponentOps &ops, const ComponentOps *&removeRequested)
+        {
+            if (!ImGui::BeginPopupContextItem("ComponentMenu"))
+                return;
+
+            // shown disabled rather than hidden, so the baseline's protection is visible
+            if (ImGui::MenuItem("Remove Component", nullptr, false, !IsBaselineComponent(ops.mType)))
+                removeRequested = &ops;
+
+            ImGui::EndPopup();
+        }
+
+        void DrawComponent(World &world, const ComponentOps &ops, Entity entity, const AssetImportView &assets,
+            const ComponentOps *&removeRequested)
         {
             ImGui::PushID(static_cast<int>(ops.mType.seq));
 
-            if (ImGui::CollapsingHeader(ops.mType.name.data(), ImGuiTreeNodeFlags_DefaultOpen))
+            const bool open = ImGui::CollapsingHeader(ops.mType.name.data(), ImGuiTreeNodeFlags_DefaultOpen);
+            DrawComponentMenu(ops, removeRequested);
+
+            if (open)
             {
                 void *component = ops.GetComponent(world, entity);
                 if (component == nullptr)
@@ -293,13 +310,17 @@ namespace mir
             ImGui::Text("Entity %u", entity.mIndex);
         ImGui::Separator();
 
+        const ComponentOps *removeRequested = nullptr;
         for (const ComponentOps *ops : ComponentRegistry::Instance().All())
         {
             if (!ops->Has(world, entity))
                 continue;
 
-            DrawComponent(world, *ops, entity, assets);
+            DrawComponent(world, *ops, entity, assets, removeRequested);
         }
+
+        if (removeRequested != nullptr)
+            removeRequested->Remove(world, entity);
 
         DrawAddComponent(world, entity);
     }
