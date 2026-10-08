@@ -253,16 +253,6 @@ namespace mir
     {
         SceneMenuAction action = SceneMenuAction::None;
 
-        ImGuiViewport *viewport = ImGui::GetMainViewport();
-        const float height = 28.0f * mWindow->ContentScale();
-
-        if (!ImGui::BeginViewportSideBar("##PlayControls", viewport, ImGuiDir_Up, height,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
-        {
-            ImGui::End();
-            return action;
-        }
-
         const bool playing = mode.mMode == EngineMode::Play;
         const bool paused = playing && mode.mPlayState == PlayState::Paused;
 
@@ -279,7 +269,7 @@ namespace mir
         if (playing)
             rowWidth += style.ItemSpacing.x + buttonWidth;
 
-        ImGui::SetCursorPosY((height - ImGui::GetFrameHeight()) * 0.5f);
+        ImGui::SetCursorPosY((ImGui::GetWindowHeight() - ImGui::GetFrameHeight()) * 0.5f);
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - rowWidth) * 0.5f);
 
         const ImVec2 buttonSize(buttonWidth, 0.0f);
@@ -297,7 +287,6 @@ namespace mir
                 action = SceneMenuAction::Stop;
         }
 
-        ImGui::End();
         return action;
     }
 
@@ -780,8 +769,6 @@ namespace mir
             if (mWindow->HasCustomTitleBar())
                 DrawTitleBar();
 
-            actions.mScene = DrawPlayControls(mode);
-
             const ImGuiID dockspaceId =
                 ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
 
@@ -862,6 +849,9 @@ namespace mir
                     ImGui::MenuItem("Profiler", nullptr, &mShowProfiler);
                     ImGui::EndMenu();
                 }
+                if (const SceneMenuAction playAction = DrawPlayControls(mode); playAction != SceneMenuAction::None)
+                    actions.mScene = playAction;
+
                 ImGui::EndMainMenuBar();
             }
 
