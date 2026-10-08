@@ -30,6 +30,22 @@ namespace mir
         using json = nlohmann::json;
 
         constexpr const char *kFitNames[] = {"cover", "contain", "stretch"};
+        constexpr const char *kPanelsNames[] = {"theme", "black", "transparent"};
+
+        // leaves @p value alone unless @p key holds one of @p names
+        template <typename Enum, size_t N>
+        void ReadEnum(const json &object, const char *key, const char *const (&names)[N], Enum &value)
+        {
+            const auto it = object.find(key);
+            if (it == object.end() || !it->is_string())
+                return;
+            const std::string text = it->get<std::string>();
+            for (size_t i = 0; i < N; ++i)
+            {
+                if (text == names[i])
+                    value = static_cast<Enum>(i);
+            }
+        }
     }
 
     EditorPreferences EditorPreferences::LoadFile(const std::filesystem::path &path)
@@ -69,15 +85,8 @@ namespace mir
                 prefs.backgroundStrength = std::clamp(strength, 0.0f, 1.0f);
         }
 
-        if (const auto it = background->find("fit"); it != background->end() && it->is_string())
-        {
-            const std::string fit = it->get<std::string>();
-            for (size_t i = 0; i < std::size(kFitNames); ++i)
-            {
-                if (fit == kFitNames[i])
-                    prefs.backgroundFit = static_cast<BackgroundFit>(i);
-            }
-        }
+        ReadEnum(*background, "fit", kFitNames, prefs.backgroundFit);
+        ReadEnum(*background, "panels", kPanelsNames, prefs.backgroundPanels);
 
         return prefs;
     }
@@ -96,7 +105,8 @@ namespace mir
                          {{"enabled", backgroundEnabled},
                           {"file", backgroundFile},
                           {"strength", backgroundStrength},
-                          {"fit", kFitNames[static_cast<size_t>(backgroundFit)]}}}};
+                          {"fit", kFitNames[static_cast<size_t>(backgroundFit)]},
+                          {"panels", kPanelsNames[static_cast<size_t>(backgroundPanels)]}}}};
         return WriteJsonFile(path, root);
     }
 

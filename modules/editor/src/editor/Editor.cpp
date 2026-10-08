@@ -866,7 +866,18 @@ namespace mir
                 for (const ImGuiCol col : {ImGuiCol_WindowBg, ImGuiCol_ChildBg})
                 {
                     ImVec4 color = ImGui::GetStyleColorVec4(col);
-                    color.w *= 1.0f - mPreferences.backgroundStrength;
+                    switch (mPreferences.backgroundPanels)
+                    {
+                    case BackgroundPanels::Theme:
+                        color.w *= 1.0f - mPreferences.backgroundStrength;
+                        break;
+                    case BackgroundPanels::Black:
+                        color = ImVec4(0.0f, 0.0f, 0.0f, 1.0f - mPreferences.backgroundStrength);
+                        break;
+                    case BackgroundPanels::Transparent:
+                        color.w = 0.0f;
+                        break;
+                    }
                     ImGui::PushStyleColor(col, color);
                 }
                 return 2;

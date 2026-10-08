@@ -33,10 +33,20 @@ namespace mir
         request.mClearImage = ImGui::Button("Clear");
         ImGui::EndDisabled();
 
+        const char *panelsNames[] = {"Theme", "Black", "Transparent"};
+        int panels = static_cast<int>(preferences.backgroundPanels);
+        if (ImGui::Combo("Panels", &panels, panelsNames, IM_ARRAYSIZE(panelsNames)))
+        {
+            preferences.backgroundPanels = static_cast<BackgroundPanels>(panels);
+            request.mSave = true;
+        }
+
         // applies live while dragging; saved once on release
+        ImGui::BeginDisabled(preferences.backgroundPanels == BackgroundPanels::Transparent);
         ImGui::SliderFloat("Strength", &preferences.backgroundStrength, 0.05f, 0.6f, "%.2f",
             ImGuiSliderFlags_AlwaysClamp);
         request.mSave |= ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::EndDisabled();
 
         const char *fitNames[] = {"Cover", "Contain", "Stretch"};
         int fit = static_cast<int>(preferences.backgroundFit);

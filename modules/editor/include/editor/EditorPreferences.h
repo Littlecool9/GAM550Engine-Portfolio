@@ -20,14 +20,23 @@ namespace mir
         Stretch,
     };
 
+    // what the dock panels are filled with while the image shows
+    enum class BackgroundPanels
+    {
+        Theme,
+        Black,
+        Transparent,
+    };
+
     struct EditorPreferences
     {
         bool backgroundEnabled = false;
         // file name inside EditorPreferencesDir(); empty is no image
         std::string backgroundFile;
-        // how much of the image shows through the panels, 0..1
+        // how much of the image shows through the panels, 0..1; unused with Transparent panels
         float backgroundStrength = 0.2f;
         BackgroundFit backgroundFit = BackgroundFit::Cover;
+        BackgroundPanels backgroundPanels = BackgroundPanels::Theme;
 
         // defaults for a missing file and for any missing or unusable field
         static EditorPreferences LoadFile(const std::filesystem::path &path);
