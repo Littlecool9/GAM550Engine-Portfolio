@@ -49,6 +49,35 @@ TEST_CASE("Packing keeps the generation that a truncated encoding would lose")
     CHECK(world.IsAlive(UnpackEntity(PackEntity(recycled))));
 }
 
+TEST_CASE("A free slot's next-generation handle is not alive")
+{
+    // ForEachAliveEntity builds handles from GenerationOf; a free slot's must not pass
+    World world;
+
+    const Entity destroyed = world.CreateEntity();
+    world.DestroyEntity(destroyed);
+
+    const Entity neverIssued{ destroyed.mIndex, destroyed.mGeneration + 1 };
+    CHECK_FALSE(world.IsAlive(neverIssued));
+}
+
+TEST_CASE("ForEachAliveEntity skips destroyed entities")
+{
+    World world;
+
+    const Entity kept = world.CreateEntity();
+    world.DestroyEntity(world.CreateEntity());
+
+    int visited = 0;
+    world.ForEachAliveEntity(
+        [&](Entity entity)
+        {
+            ++visited;
+            CHECK(entity == kept);
+        });
+    CHECK(visited == 1);
+}
+
 TEST_CASE("A packed entity uses the full 64 bits")
 {
     // Which is why it must not travel through a VM's double: 53 bits of
