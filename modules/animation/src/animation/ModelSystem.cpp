@@ -79,6 +79,26 @@ namespace mir
             return handle;
         }
 
+        bool ReadMaterial(AssetCache &assets, AssetId model, AssetId material, MaterialAsset &out)
+        {
+            const auto *blob = assets.Load(material);
+            if (!blob)
+            {
+                MIR_LOG_ERROR("Model {:016x}: material {:016x} has no cooked blob, using error texture", model.value,
+                    material.value);
+                return false;
+            }
+            std::string error;
+            if (!ReadTypedAsset(*blob, out, error))
+            {
+                MIR_LOG_ERROR("Model {:016x}: material {:016x} is not a cooked material ({}), using error texture",
+                    model.value, material.value, error);
+                out = MaterialAsset{};
+                return false;
+            }
+            return true;
+        }
+
     } // namespace
     void ModelSystem::Reset()
     {
@@ -95,12 +115,6 @@ namespace mir
         std::string error;
         if (!LoadModelResources(assets, id, loaded.resources, error))
             throw std::runtime_error(error);
-        auto read = [&](AssetId key, auto &out)
-            {
-                const auto *blob = assets.Load(key);
-                if (!blob || !ReadTypedAsset(*blob, out, error))
-                    throw std::runtime_error("model dependency: " + error);
-            };
         std::unordered_set<uint64_t> existingTextures;
         for (const auto &[textureId, handle] : textures)
             existingTextures.insert(textureId);
@@ -116,9 +130,8 @@ namespace mir
                     for (const auto &v : p.vertices)
                         vertices.push_back({ v.position, glm::vec3(v.color), v.normal, v.uv, v.color.a, v.tangent });
                     MaterialAsset material;
-                    if (!p.material.IsNull())
-                        read(p.material, material);
-                    if (material.baseColorTexture != p.baseColorTexture)
+                    const bool materialRead = p.material.IsNull() || ReadMaterial(assets, id, p.material, material);
+                    if (materialRead && material.baseColorTexture != p.baseColorTexture)
                         throw std::runtime_error("mesh/material texture reference mismatch");
                     MaterialDesc desc;
                     desc.shaderName = "model";
@@ -129,7 +142,9 @@ namespace mir
                     desc.sampler = ToSamplerDesc(material);
                     desc.alphaMode = static_cast<MaterialAlphaMode>(material.alpha);
                     desc.alphaCutoff = material.alphaCutoff;
-                    if (!material.baseColorTexture.IsNull())
+                    if (!materialRead)
+                        desc.baseColorTexture = mRenderer.ErrorTexture();
+                    else if (!material.baseColorTexture.IsNull())
                     {
                         const auto texId = material.baseColorTexture.value;
                         if (!textures.contains(texId))
@@ -145,7 +160,7 @@ namespace mir
                     gpu.mirrored = mRenderer.CreateMaterial(desc);
                     // Magenta, not white: the ray tracer reads only the tint, never the texture.
                     gpu.factor = desc.baseColorTexture == mRenderer.ErrorTexture() ? glm::vec4(1, 0, 1, 1)
-                                                                                   : material.baseColor;
+                        : material.baseColor;
                     gpu.transparent = material.alpha == MaterialAlpha::Blend;
                     primitives.push_back(gpu);
                     if (gpu.mesh.IsNull() || gpu.material.IsNull() || gpu.mirrored.IsNull())
