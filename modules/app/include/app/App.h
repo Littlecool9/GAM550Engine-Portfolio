@@ -49,6 +49,7 @@ namespace mir
     class RenderSystem;
     class ScriptSystem;
     class ModelSystem;
+    class MeshResolveSystem;
 
     struct AppDesc
     {
@@ -201,6 +202,7 @@ namespace mir
         RenderSystem *mRenderSystem = nullptr;
         ScriptSystem *mScriptSystem = nullptr;
         ModelSystem *mModelSystem = nullptr;
+        MeshResolveSystem *mMeshResolveSystem = nullptr;
         PlaySnapshot mPlaySnapshot;
         ScriptHost mScriptHost;
         ScriptReloadWatcher mScriptReloadWatcher{mScriptHost};

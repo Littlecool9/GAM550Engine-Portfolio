@@ -593,3 +593,57 @@ TEST_CASE("SaveScene then LoadScene round-trips a tag", "[scene]")
     CHECK_FALSE(tag.Has(loadedWorld, loadedPlain));
     CHECK(tag.GetComponent(loadedWorld, loadedTagged) == nullptr);
 }
+
+TEST_CASE("DestroySceneEntity removes the entity and its descendants from the world and the scene", "[scene]")
+{
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity root = CreateSceneEntity(world, scene);
+    Entity child = CreateSceneEntity(world, scene, root);
+    Entity grandchild = CreateSceneEntity(world, scene, child);
+    Entity keeper = CreateSceneEntity(world, scene);
+
+    REQUIRE(mir::DestroySceneEntity(world, scene, root));
+
+    CHECK_FALSE(world.IsAlive(root));
+    CHECK_FALSE(world.IsAlive(child));
+    CHECK_FALSE(world.IsAlive(grandchild));
+    CHECK(world.IsAlive(keeper));
+    REQUIRE(scene.mEntities.size() == 1);
+    CHECK(scene.mEntities.begin()->second == keeper);
+}
+
+TEST_CASE("DestroySceneEntity refuses an entity that is not alive", "[scene]")
+{
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity entity = CreateSceneEntity(world, scene);
+    REQUIRE(mir::DestroySceneEntity(world, scene, entity));
+
+    CHECK_FALSE(mir::DestroySceneEntity(world, scene, entity));
+}
+
+TEST_CASE("SaveScene after DestroySceneEntity writes only the survivors", "[scene]")
+{
+    mir::RegisterCoreComponents();
+
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity root = CreateSceneEntity(world, scene);
+    CreateSceneEntity(world, scene, root);
+    Entity keeper = CreateSceneEntity(world, scene);
+    mir::AddTransform(world, keeper, Transform{ glm::vec3(4.0f, 5.0f, 6.0f) });
+
+    REQUIRE(mir::DestroySceneEntity(world, scene, root));
+
+    TempSceneDir dir("destroy_then_save");
+    REQUIRE(mir::SaveScene(world, dir.mPath, scene));
+
+    World loadedWorld;
+    LoadedScene loaded = mir::LoadScene(loadedWorld, dir.mPath);
+    REQUIRE(loaded.mEntities.size() == 1);
+
+    const Transform *transform = loadedWorld.GetComponent<Transform>(loaded.mEntities.begin()->second);
+    REQUIRE(transform != nullptr);
+    CHECK(transform->Position() == mir::WorldVec3(4.0, 5.0, 6.0));
+}

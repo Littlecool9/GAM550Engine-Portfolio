@@ -9,6 +9,7 @@
 
 #include <app/App.h>
 
+#include "MeshResolveSystem.h"
 #include "SceneResolve.h"
 #include <animation/ModelPlayer.h>
 #include <animation/ModelSystem.h>
@@ -201,6 +202,8 @@ namespace mir
         mScheduler.AddSystem<TransformPropagateSystem>(SystemPhase::PostUpdate);
         mModelSystem =
             &mScheduler.AddSystem<ModelSystem>(SystemPhase::PostUpdate, mRenderer, Assets(), mProject.mAssetIdRoot);
+        mMeshResolveSystem = &mScheduler.AddSystem<MeshResolveSystem>(SystemPhase::PostUpdate, mRenderer, Assets(),
+            mProject.mAssetIdRoot);
 
         // after TransformPropagateSystem: it reads the WorldTransform that system writes
         mScheduler.AddSystem<AudioEmitterSystem>(SystemPhase::PostUpdate);
@@ -292,9 +295,8 @@ namespace mir
         UnloadCurrentScene();
         mScene = mir::LoadScene(mWorld, mProject.mSceneDir);
 
-        // saved names to script instances and GPU handles
+        // saved names to script instances
         ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
-        ResolveSceneMeshes(mWorld, mRenderer, Assets(), mProject.mAssetIdRoot);
         return true;
     }
 
@@ -321,12 +323,12 @@ namespace mir
 
         // Play's entities are gone and the restored ones hold no handles yet
         mModelSystem->Reset();
+        mMeshResolveSystem->Reset();
         mWorld.Resource<ModelDrawItems>().items.clear();
         mWorld.Resource<ModelMorphOverrides>().instances.clear();
         mRenderer.ReleaseSceneResources();
 
         ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
-        ResolveSceneMeshes(mWorld, mRenderer, Assets(), mProject.mAssetIdRoot);
 
         SetEngineMode(mWorld, EngineMode::Edit);
         SetPlayState(mWorld, PlayState::Running);
@@ -385,6 +387,8 @@ namespace mir
         // no scene entity holds a mesh or material handle now
         if (mModelSystem)
             mModelSystem->Reset();
+        if (mMeshResolveSystem)
+            mMeshResolveSystem->Reset();
         if (auto *draws = mWorld.TryResource<ModelDrawItems>())
             draws->items.clear();
         if (auto *overrides = mWorld.TryResource<ModelMorphOverrides>())

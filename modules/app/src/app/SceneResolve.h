@@ -1,7 +1,7 @@
 /**
  * @file SceneResolve.h
  * @author Jackey Cen
- * @brief Post-load passes: saved names to live script instances and GPU handles.
+ * @brief Post-load pass: saved script names to live script instances.
  *
  * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
  *
@@ -15,16 +15,11 @@ namespace mir
     class AssetCache;
     class IScriptHost;
     class ScriptReloadWatcher;
-    class VulkanRenderer;
     class World;
 
-    // Private to app: App::LoadScene runs these after unloading and releasing.
+    // Private to app: App::LoadScene runs this after unloading and releasing.
 
     // For each ScriptRef without an instance: loads <assetIdRoot>/scripts/<name>.lua and creates one
     void ResolveSceneScripts(World &world, IScriptHost &scripts, ScriptReloadWatcher &reload,
                              AssetCache *assets, std::string_view assetIdRoot);
-
-    // For each MeshRenderer: uploads its meshName and creates its material; shared assets upload once
-    void ResolveSceneMeshes(World &world, VulkanRenderer &renderer, AssetCache *assets,
-                            std::string_view assetIdRoot);
 }
