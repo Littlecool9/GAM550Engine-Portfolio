@@ -56,16 +56,6 @@ namespace mir
             }
         }
 
-        void CreateFromMenu(World &world, Selection &selection, const EntityPresetDesc &type)
-        {
-            if (type.mCanCreate != nullptr && !type.mCanCreate(world))
-                return;
-
-            const Entity created = world.CreateEntity();
-            type.mCreate(world, created);
-            selection.mSelected = { created };
-        }
-
         struct MenuTop
         {
             std::string_view mName; // group name, or the flat item's full name
@@ -97,8 +87,10 @@ namespace mir
         }
     }
 
-    void HierarchyPanel::Draw(World &world)
+    EntityAction HierarchyPanel::Draw(World &world)
     {
+        EntityAction action;
+
         Selection &selection = world.Resource<Selection>();
         std::erase_if(selection.mSelected, [&](Entity e) { return !world.IsAlive(e); });
 
@@ -106,12 +98,16 @@ namespace mir
         {
             if (ImGui::BeginMenu("Create"))
             {
+                if (ImGui::MenuItem("New"))
+                    action = { EntityActionKind::Create, nullptr };
+                ImGui::Separator();
+
                 for (const MenuTop &top : BuildCreateMenu(EntityPresetRegistry::Instance().All()))
                 {
                     if (top.mFlat != nullptr)
                     {
                         if (ImGui::MenuItem(top.mName.data()))
-                            CreateFromMenu(world, selection, *top.mFlat);
+                            action = { EntityActionKind::Create, top.mFlat };
                         continue;
                     }
 
@@ -121,7 +117,7 @@ namespace mir
                         {
                             const std::string_view item = child->mName.substr(child->mName.find('/') + 1);
                             if (ImGui::MenuItem(std::string(item).c_str()))
-                                CreateFromMenu(world, selection, *child);
+                                action = { EntityActionKind::Create, child };
                         }
                         ImGui::EndMenu();
                     }
@@ -140,5 +136,7 @@ namespace mir
                 if (index == nullptr || index->ParentOf(entity).IsNull())
                     DrawEntity(world, index, selection, entity);
             });
+
+        return action;
     }
 }

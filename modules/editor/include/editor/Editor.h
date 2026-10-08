@@ -64,6 +64,7 @@ namespace mir
     struct EditorActions
     {
         SceneMenuAction mScene = SceneMenuAction::None;
+        EntityAction mEntity;
         std::string mOpenProject;
 
         // non-empty mCreateProjectName requests CreateGameProject(name, RT),

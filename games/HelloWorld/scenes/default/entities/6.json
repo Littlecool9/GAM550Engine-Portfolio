@@ -23,50 +23,37 @@
     },
     {
       "fields": {
-        "matrix": [
-          1.0,
+        "position": [
           0.0,
           0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0
+          0.0
         ]
       },
       "type": "WorldTransform"
     },
     {
       "fields": {
+        "name": "Sky_Entity6"
+      },
+      "type": "Name"
+    },
+    {
+      "fields": {
+        "atmosphereRadiusKm": 6471.0,
+        "mieCoeff": 21.0,
+        "mieG": 0.758,
+        "mieScaleHeightKm": 1.2,
         "mode": 0,
         "planetRadiusKm": 6371.0,
-        "atmosphereRadiusKm": 6471.0,
         "rayleighCoeff": [
           5.5,
           13.0,
           22.4
         ],
-        "mieCoeff": 21.0,
         "rayleighScaleHeightKm": 8.0,
-        "mieScaleHeightKm": 1.2,
-        "mieG": 0.758,
         "sunIntensity": 22.0
       },
       "type": "Sky"
-    },
-    {
-      "fields": {
-        "name": "Sky_Entity6"
-      },
-      "type": "Name"
     }
   ],
   "id": 6,

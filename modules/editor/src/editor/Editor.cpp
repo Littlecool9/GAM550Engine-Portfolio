@@ -787,7 +787,7 @@ namespace mir
             }
 
             if (ImGui::Begin("Hierarchy"))
-                mHierarchyPanel.Draw(world);
+                actions.mEntity = mHierarchyPanel.Draw(world);
             ImGui::End();
 
             if (ImGui::Begin("Inspector"))

@@ -175,6 +175,7 @@ namespace mir
 #if MIR_WITH_EDITOR
         //what the editor's menus, toolbar and panels asked for this frame
         void ApplyEditorActions(const EditorActions &actions);
+        void ApplyEntityAction(const EntityAction &action);
         void ApplyImportedAssets();
 #endif
 

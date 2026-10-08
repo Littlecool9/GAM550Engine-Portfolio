@@ -22,6 +22,7 @@
 #include <core/ecs/DeferredAccess.h>
 #include <core/ecs/EngineMode.h>
 #include <core/ecs/TransformHierarchy.h>
+#include <core/ecs/components/Name.h>
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
 #include <input/DefaultInputMap.h>
@@ -38,9 +39,14 @@
 #include <script/ComponentRegistration.h>
 #include <script/ScriptSystem.h>
 
+#if MIR_WITH_EDITOR
+#include <editor/Selection.h>
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <system_error>
 #include <utility>
 
@@ -572,6 +578,8 @@ namespace mir
             break;
         }
 
+        ApplyEntityAction(actions.mEntity);
+
         bool assetActionAccepted = true;
         if (actions.mAssetImport.mKind == AssetImportActionKind::Remove)
         {
@@ -603,6 +611,28 @@ namespace mir
         {
             RequestOpenProject("games/" + actions.mCreateProjectName);
         }
+    }
+
+    void App::ApplyEntityAction(const EntityAction &action)
+    {
+        if (action.mKind != EntityActionKind::Create)
+            return;
+
+        const EntityPresetDesc *preset = action.mPreset;
+        if (preset != nullptr && preset->mCanCreate != nullptr && !preset->mCanCreate(mWorld))
+            return;
+
+        const Entity entity = CreateSceneEntity(mWorld, mScene);
+        if (preset != nullptr)
+            preset->mCreate(mWorld, entity);
+
+        // after the preset: AddComponent keeps an existing value, so the preset's own Name must land first
+        if (!mWorld.Has<Transform>(entity))
+            AddTransform(mWorld, entity);
+        if (!mWorld.Has<Name>(entity))
+            mWorld.AddComponent<Name>(entity, MakeName(std::format("Entity{}", entity.mIndex)));
+
+        mWorld.Resource<Selection>().mSelected = { entity };
     }
 
     void App::ApplyImportedAssets()
