@@ -407,7 +407,9 @@ covered.
 the error material.** A null `MaterialHandle` means nothing was authored, so
 the draw uses the default material. A non-null handle that does not resolve
 means something failed, so `FindOrDefault` gives the draw the error material
-instead. The error material runs `error.slang`, which draws solid magenta and
+instead. A failed `CreateMaterial` returns null, so its callers store
+`ErrorMaterial()` in its place; `ResolveSceneMeshes` (app) and `ModelSystem`
+(animation) both do. The error material runs `error.slang`, which draws solid magenta and
 ignores the draw's tint and textures. It has no culling, because one error
 material stands in for both a model primitive and its mirrored twin. Either
 way, one bad handle does not blank the frame.

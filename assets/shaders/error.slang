@@ -1,7 +1,10 @@
 // Error material shader: solid magenta, ignoring the draw's tint and textures.
+// color and normal are unused, but BuildPipeline declares them for every non-model shader.
 struct VSInput
 {
     float3 pos : POSITION;
+    float3 color : COLOR;
+    float3 normal : NORMAL;
 };
 
 struct VSOutput

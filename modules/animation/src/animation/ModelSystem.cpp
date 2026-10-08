@@ -51,17 +51,11 @@ namespace mir
 
         TextureHandle UploadTexture(VulkanRenderer &renderer, AssetCache &assets, AssetId model, AssetId texture)
         {
-            const auto *blob = assets.Load(texture);
-            if (!blob)
-            {
-                MIR_LOG_ERROR("Model {:016x}: texture {:016x} has no cooked blob, using error texture", model.value, texture.value);
-                return renderer.ErrorTexture();
-            }
             TextureAsset tex;
             std::string error;
-            if (!ReadTypedAsset(*blob, tex, error))
+            if (!LoadTypedAsset(assets, texture, tex, error))
             {
-                MIR_LOG_ERROR("Model {:016x}: texture {:016x} is not a cooked texture ({}), using error texture", model.value, texture.value, error);
+                MIR_LOG_ERROR("Model {:016x}: texture {:016x}: {}, using error texture", model.value, texture.value, error);
                 return renderer.ErrorTexture();
             }
 
@@ -81,19 +75,11 @@ namespace mir
 
         bool ReadMaterial(AssetCache &assets, AssetId model, AssetId material, MaterialAsset &out)
         {
-            const auto *blob = assets.Load(material);
-            if (!blob)
-            {
-                MIR_LOG_ERROR("Model {:016x}: material {:016x} has no cooked blob, using error texture", model.value,
-                    material.value);
-                return false;
-            }
             std::string error;
-            if (!ReadTypedAsset(*blob, out, error))
+            if (!LoadTypedAsset(assets, material, out, error))
             {
-                MIR_LOG_ERROR("Model {:016x}: material {:016x} is not a cooked material ({}), using error texture",
-                    model.value, material.value, error);
-                out = MaterialAsset{};
+                MIR_LOG_ERROR("Model {:016x}: material {:016x}: {}, using error texture", model.value, material.value,
+                    error);
                 return false;
             }
             return true;

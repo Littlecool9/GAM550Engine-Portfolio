@@ -201,7 +201,9 @@ live `MeshHandle`/`instanceRef` `RenderSystem`/`ScriptSystem` actually need.
 under the game's `mAssetIdRoot`, and run at the end of both places entities come
 from a `LoadedScene` file: `LoadScene()` and `StopScene()` (via `PlaySnapshot::
 RestoreWorld`). Neither call site can skip them independently — both live
-inside the same two methods.
+inside the same two methods. A `materialShader` whose `CreateMaterial` fails
+logs an error and resolves to the renderer's error material. The mesh then
+draws magenta, rather than the default grey a null handle would give it.
 
 ### Terrain draws (private glue, no caller yet)
 
@@ -344,6 +346,13 @@ logged error.
    cheap for a large scene.
 
 ## Changed
+
+*2026-10-08* — **A failed `materialShader` resolves to the error material.**
+Was: `ResolveSceneMeshes` stored the null handle from a failed
+`CreateMaterial`, so the mesh drew with the default grey material. Now: it logs
+an error and stores the renderer's `ErrorMaterial()`, so the mesh draws
+magenta. Because: issue #19, where a null handle came to mean "nothing
+authored".
 
 *2026-10-05* — **Fullscreen toggle.** Was: the window's mode was fixed at
 creation. Now: `App::ToggleFullscreen`, called from `Run` on the
