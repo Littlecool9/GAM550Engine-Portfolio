@@ -266,16 +266,23 @@ namespace mir
         const bool playing = mode.mMode == EngineMode::Play;
         const bool paused = playing && mode.mPlayState == PlayState::Paused;
 
+        const char *primaryLabel = playing ? (paused ? ICON_FA_PLAY " Resume" : ICON_FA_PAUSE " Pause") : ICON_FA_PLAY " Play";
+        const ImGuiStyle &style = ImGui::GetStyle();
+        float rowWidth = ImGui::CalcTextSize(primaryLabel).x + style.FramePadding.x * 2.0f;
+        if (playing)
+            rowWidth += style.ItemSpacing.x + ImGui::CalcTextSize(ICON_FA_STOP " Stop").x + style.FramePadding.x * 2.0f;
+
         ImGui::SetCursorPosY((height - ImGui::GetFrameHeight()) * 0.5f);
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - rowWidth) * 0.5f);
 
         if (!playing)
         {
-            if (ImGui::Button(ICON_FA_PLAY " Play"))
+            if (ImGui::Button(primaryLabel))
                 action = SceneMenuAction::Play;
         }
         else
         {
-            if (ImGui::Button(paused ? ICON_FA_PLAY " Resume" : ICON_FA_PAUSE " Pause"))
+            if (ImGui::Button(primaryLabel))
                 action = SceneMenuAction::TogglePause;
             ImGui::SameLine();
             if (ImGui::Button(ICON_FA_STOP " Stop"))
