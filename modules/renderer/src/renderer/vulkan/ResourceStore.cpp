@@ -295,32 +295,15 @@ namespace mir::vk
         const std::array<std::byte, 4> flatNormal{
             std::byte{ 128 }, std::byte{ 128 }, std::byte{ 255 }, std::byte{ 255 } };
 
+        const std::array<std::byte, 4> magenta{
+            std::byte{ 255 }, std::byte{ 0 }, std::byte{ 255 }, std::byte{ 255 } };
+
         mDefaultWhiteTexture = CreateTexture(TextureDesc{
             .width = 1, .height = 1, .pixels = white, .srgb = true });
         mDefaultNormalTexture = CreateTexture(TextureDesc{
             .width = 1, .height = 1, .pixels = flatNormal, .srgb = false });
-
-        constexpr uint32_t checkerSize = 32;
-        constexpr uint32_t cell = 16;
-
-        std::vector<std::byte> checker(static_cast<size_t>(checkerSize) * checkerSize * 4);
-        for (int y = 0; y < checkerSize; ++y)
-        {
-            for (int x = 0; x < checkerSize; ++x)
-            {
-                // start with black
-                bool magenta = (x / cell + y / cell) % 2;
-                size_t i = (static_cast<size_t>(y) * checkerSize + x) * 4;
-                checker[i + 0] = magenta ? std::byte{ 255 } : std::byte{ 0 };
-                checker[i + 1] = std::byte{ 0 };
-                checker[i + 2] = magenta ? std::byte{ 255 } : std::byte{ 0 };
-                checker[i + 3] = std::byte{ 255 };
-            }
-        }
-
         mErrorTexture = CreateTexture(TextureDesc{
-            .width = checkerSize, .height = checkerSize, .pixels = checker, .srgb = true
-            });
+            .width = 1, .height = 1, .pixels = magenta, .srgb = true });
 
         if (mDefaultWhiteTexture.IsNull() || mDefaultNormalTexture.IsNull() || mErrorTexture.IsNull())
         {

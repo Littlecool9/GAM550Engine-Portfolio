@@ -135,7 +135,6 @@ namespace mir
                         if (!textures.contains(texId))
                         {
                             textures.emplace(texId, UploadTexture(mRenderer, assets, id, material.baseColorTexture));
-                            desc.baseColorTexture = textures.at(texId);
                         }
                         desc.baseColorTexture = textures.at(texId);
                     }
@@ -144,7 +143,9 @@ namespace mir
                     gpu.material = mRenderer.CreateMaterial(desc);
                     desc.frontFace = VK_FRONT_FACE_CLOCKWISE;
                     gpu.mirrored = mRenderer.CreateMaterial(desc);
-                    gpu.factor = desc.baseColorTexture == mRenderer.ErrorTexture() ? glm::vec4(1) : material.baseColor;
+                    // Magenta, not white: the ray tracer reads only the tint, never the texture.
+                    gpu.factor = desc.baseColorTexture == mRenderer.ErrorTexture() ? glm::vec4(1, 0, 1, 1)
+                                                                                   : material.baseColor;
                     gpu.transparent = material.alpha == MaterialAlpha::Blend;
                     primitives.push_back(gpu);
                     if (gpu.mesh.IsNull() || gpu.material.IsNull() || gpu.mirrored.IsNull())

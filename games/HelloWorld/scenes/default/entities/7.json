@@ -1,0 +1,62 @@
+{
+  "components": [
+    {
+      "fields": {
+        "position": [
+          0.0,
+          1.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "type": "Transform"
+    },
+    {
+      "fields": {
+        "matrix": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "type": "WorldTransform"
+    },
+    {
+      "fields": {
+        "modelName": "Duck.glb"
+      },
+      "type": "ModelPlayer"
+    },
+    {
+      "fields": {
+        "name": "Duck_Entity7"
+      },
+      "type": "Name"
+    }
+  ],
+  "id": 7,
+  "parent": 0
+}
