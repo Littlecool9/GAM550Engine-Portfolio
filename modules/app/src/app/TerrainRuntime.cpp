@@ -19,6 +19,7 @@
 
 #include <glm/vec3.hpp>
 
+#include <algorithm>
 #include <format>
 #include <optional>
 #include <utility>
@@ -43,6 +44,11 @@ namespace mir
                 return "invalid samples";
             }
             return "?";
+        }
+
+        bool SamePlacement(const TerrainPlacement &a, const TerrainPlacement &b)
+        {
+            return a.asset == b.asset && a.translation.Meters() == b.translation.Meters();
         }
     }
 
@@ -139,14 +145,17 @@ namespace mir
         }
 
         // Build everything first, then swap: draws, old meshes and colliders, then the resource.
-        std::vector<InstanceResources> built = Build(next);
-        std::swap(mResources, built);
+        std::vector<InstanceResources> old = std::move(mResources);
+        mResources = Build(next, old);
         Publish();
-        for (InstanceResources &old : built)
+        std::vector<MeshHandle> meshes; // none left after ForgetMeshes
+        for (InstanceResources &stale : old)
         {
-            old.tiles.Destroy(*mRenderer); // nothing left to free after ForgetMeshes
-            DestroyCollider(old.collider);
+            stale.tiles.TakeMeshes(meshes);
+            DestroyCollider(stale.collider);
         }
+        if (!meshes.empty())
+            mRenderer->ReleaseModelResources(meshes, {}, {});
         mMeshesForgotten = false;
         current = std::move(next);
 
@@ -163,17 +172,26 @@ namespace mir
         }
     }
 
-    std::vector<TerrainRuntime::InstanceResources> TerrainRuntime::Build(TerrainWorld &next)
+    std::vector<TerrainRuntime::InstanceResources> TerrainRuntime::Build(TerrainWorld &next,
+                                                                         std::vector<InstanceResources> &old)
     {
         std::vector<InstanceResources> built;
         for (size_t i = 0; i < next.Instances().size();)
         {
             const TerrainInstanceState &instance = next.Instances()[i];
+            if (std::optional<InstanceResources> reused = Reuse(instance, old))
+            {
+                built.push_back(std::move(*reused));
+                ++i;
+                continue;
+            }
+
             InstanceResources resources;
             resources.release = instance.release->Info();
+            resources.placement = instance.placement;
             if (BuildMeshes(instance, resources.tiles))
             {
-                resources.collider = BuildCollider(instance);
+                resources.collider = BuildCollider(instance, resources.colliderOrigin);
                 if (resources.collider.IsValid())
                 {
                     built.push_back(std::move(resources));
@@ -186,6 +204,38 @@ namespace mir
             next.RemoveInstance(i);
         }
         return built;
+    }
+
+    std::optional<TerrainRuntime::InstanceResources> TerrainRuntime::Reuse(const TerrainInstanceState &instance,
+                                                                            std::vector<InstanceResources> &old)
+    {
+        const TerrainReleaseInfo &release = instance.release->Info();
+        const auto find = [&](bool samePlace)
+        {
+            return std::find_if(old.begin(), old.end(),
+                                [&](const InstanceResources &resources)
+                                {
+                                    return resources.release == release && !resources.tiles.Empty() &&
+                                           (!samePlace || SamePlacement(resources.placement, instance.placement));
+                                });
+        };
+        auto match = find(true);
+        if (match == old.end())
+            match = find(false);
+        if (match == old.end())
+            return std::nullopt;
+
+        // A failed move leaves it in old, destroyed after the swap like any other.
+        if (!SamePlacement(match->placement, instance.placement))
+        {
+            if (!MoveCollider(*match, instance) || !match->tiles.Place(instance.placement))
+                return std::nullopt;
+            match->placement = instance.placement;
+        }
+
+        InstanceResources reused = std::move(*match);
+        old.erase(match);
+        return reused;
     }
 
     bool TerrainRuntime::BuildMeshes(const TerrainInstanceState &instance, TerrainRenderTiles &tiles)
@@ -211,7 +261,7 @@ namespace mir
         return true;
     }
 
-    BodyHandle TerrainRuntime::BuildCollider(const TerrainInstanceState &instance)
+    BodyHandle TerrainRuntime::BuildCollider(const TerrainInstanceState &instance, TerrainLocalPosition &origin)
     {
         PhysicsWorld *physics = mWorld->TryResource<PhysicsWorld>();
         if (!physics)
@@ -230,15 +280,9 @@ namespace mir
                                area.error.message));
             return {};
         }
-        const std::optional<WorldPosition> origin =
-            TryTerrainLocalToWorld(area.value->origin, instance.placement.translation);
-        if (!origin)
-        {
-            Report(std::format("Terrain '{}': the collider origin is past the world range; the instance is not "
-                               "loaded",
-                               instance.recipePath));
+        const std::optional<WorldPosition> world = ColliderWorldOrigin(area.value->origin, instance);
+        if (!world)
             return {};
-        }
 
         HeightFieldDesc desc;
         desc.mSamples = area.value->heights;
@@ -246,12 +290,37 @@ namespace mir
         desc.mCountZ = area.value->countZ;
         // Exact for the 1, 2, 4 and 8 m spacings.
         desc.mSpacing = static_cast<float>(area.value->spacing);
-        desc.mOrigin = *origin;
+        desc.mOrigin = *world;
         const BodyHandle body = physics->CreateStaticHeightField(desc);
         if (!body.IsValid())
             Report(std::format("Terrain '{}': the height field was refused; the instance is not loaded",
                                instance.recipePath));
+        else
+            origin = area.value->origin;
         return body;
+    }
+
+    bool TerrainRuntime::MoveCollider(const InstanceResources &resources, const TerrainInstanceState &instance)
+    {
+        PhysicsWorld *physics = mWorld->TryResource<PhysicsWorld>();
+        if (!physics)
+            return false;
+        const std::optional<WorldPosition> world = ColliderWorldOrigin(resources.colliderOrigin, instance);
+        if (!world)
+            return false;
+        physics->SetBodyTransform(resources.collider, *world, kIdentityRotation);
+        return true;
+    }
+
+    std::optional<WorldPosition> TerrainRuntime::ColliderWorldOrigin(const TerrainLocalPosition &origin,
+                                                                     const TerrainInstanceState &instance)
+    {
+        const std::optional<WorldPosition> world = TryTerrainLocalToWorld(origin, instance.placement.translation);
+        if (!world)
+            Report(std::format("Terrain '{}': the collider origin is past the world range; the instance is not "
+                               "loaded",
+                               instance.recipePath));
+        return world;
     }
 
     void TerrainRuntime::RebuildMeshes(TerrainWorld &world)

@@ -66,6 +66,9 @@ namespace mir
                 return Issue(TerrainIssueKind::InvalidPlacement, recipe,
                              subject + " is a child entity; a terrain instance must be a root, whose position "
                                        "is its world placement");
+            // Transform refuses one already; never stand in the origin for it.
+            if (!WorldPosition::FromMeters(transform->Position()))
+                return Issue(TerrainIssueKind::InvalidPlacement, recipe, subject + " has a non-finite position");
 
             // Exact, so an editor leftover is reported, not rounded away; q and -q are equal.
             const glm::quat q = transform->Rotation();
@@ -214,8 +217,8 @@ namespace mir
                 }
 
                 const Transform &transform = *world.GetComponent<Transform>(entity);
-                spec.instances.push_back({recipe, path.logicalPath, path.asset,
-                                          WorldPosition::FromMeters(transform.Position()).value_or(WorldPosition{})});
+                spec.instances.push_back(
+                    {recipe, path.logicalPath, path.asset, *WorldPosition::FromMeters(transform.Position())});
             });
 
         std::sort(spec.instances.begin(), spec.instances.end(),

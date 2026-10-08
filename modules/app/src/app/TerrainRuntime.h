@@ -16,6 +16,7 @@
 #include <terrain/TerrainScene.h>
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -51,15 +52,24 @@ namespace mir
         struct InstanceResources
         {
             TerrainReleaseInfo release;
+            TerrainPlacement placement;
             TerrainRenderTiles tiles;
             BodyHandle collider;
+            // The height field's first sample, so a move needs no rebuild.
+            TerrainLocalPosition colliderOrigin;
         };
 
         bool Bound() const { return mWorld != nullptr; }
         void Apply(TerrainSceneSpec spec);
-        std::vector<InstanceResources> Build(TerrainWorld &next);
+        // Takes what it reuses out of old; the rest is left to destroy after the swap.
+        std::vector<InstanceResources> Build(TerrainWorld &next, std::vector<InstanceResources> &old);
+        std::optional<InstanceResources> Reuse(const TerrainInstanceState &instance,
+                                               std::vector<InstanceResources> &old);
         bool BuildMeshes(const TerrainInstanceState &instance, TerrainRenderTiles &tiles);
-        BodyHandle BuildCollider(const TerrainInstanceState &instance);
+        BodyHandle BuildCollider(const TerrainInstanceState &instance, TerrainLocalPosition &origin);
+        bool MoveCollider(const InstanceResources &resources, const TerrainInstanceState &instance);
+        std::optional<WorldPosition> ColliderWorldOrigin(const TerrainLocalPosition &origin,
+                                                         const TerrainInstanceState &instance);
         void RebuildMeshes(TerrainWorld &world);
         void Publish();
         void DestroyCollider(BodyHandle body);

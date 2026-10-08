@@ -36,7 +36,7 @@ namespace mir
     {
         MissingRecipe,    // the TerrainInstance names no recipe
         BadRecipePath,    // ResolveTerrainAssetPath refuses the path
-        InvalidPlacement, // no Transform, a child, rotated or scaled
+        InvalidPlacement, // no Transform, a child, not finite, rotated or scaled
         NoRelease,        // nothing is published for the asset
         BadRelease,       // the release current names cannot be opened, verified or read
         Overlap,          // its effective XZ bounds overlap another instance's
@@ -77,7 +77,8 @@ namespace mir
     // Refuses a bad recipe path, and a placement other than a root's translation.
     TerrainSceneSpec CollectTerrainScene(World &world, std::string_view assetIdRoot);
 
-    // Every pack verified and every tile resident; never changes after Load.
+    // Every pack verified and every tile resident; the tiles never change after Load, though Query().HeightAt
+    // may still record payload requests.
     class TerrainResidentRelease
     {
     public:

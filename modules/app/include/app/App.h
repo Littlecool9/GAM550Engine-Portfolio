@@ -89,7 +89,6 @@ namespace mir
         //whether this build has the editor in it at all
         static constexpr bool kHasEditor = MIR_WITH_EDITOR != 0;
 
-        // Defined in App.cpp, where the private TerrainRuntime is complete
         App();
         ~App();
 

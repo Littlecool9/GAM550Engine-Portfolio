@@ -66,7 +66,8 @@ namespace mir
         }
     }
 
-    App::App() = default;
+    // Never null; does nothing until Initialize binds it.
+    App::App() : mTerrain(std::make_unique<TerrainRuntime>()) {}
 
     App::~App() { Shutdown(); }
 
@@ -210,7 +211,6 @@ namespace mir
 
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
-        mTerrain = std::make_unique<TerrainRuntime>();
         mTerrain->Bind(mWorld, mRenderer, mProject);
 
         if (mDesc.mUIDemo)
@@ -402,8 +402,7 @@ namespace mir
             draws->items.clear();
         if (auto *overrides = mWorld.TryResource<ModelMorphOverrides>())
             overrides->instances.clear();
-        if (mTerrain)
-            mTerrain->Unload();
+        mTerrain->Unload();
         mRenderer.ReleaseSceneResources();
     }
 
