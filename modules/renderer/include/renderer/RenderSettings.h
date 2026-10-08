@@ -19,6 +19,8 @@ namespace mir
         bool rayTracing = false;
         bool fog = false;
 
+        bool operator==(const RenderSettings &) const = default;
+
         // nullopt if the file is missing or unreadable; a file with no
         // "rendering" section loads as defaults.
         static std::optional<RenderSettings> LoadFile(const std::filesystem::path &path);
