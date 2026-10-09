@@ -253,36 +253,40 @@ namespace mir
     {
         SceneMenuAction action = SceneMenuAction::None;
 
-        ImGuiViewport *viewport = ImGui::GetMainViewport();
-        const float height = 28.0f * mWindow->ContentScale();
-
-        if (!ImGui::BeginViewportSideBar("##PlayControls", viewport, ImGuiDir_Up, height,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings))
-        {
-            ImGui::End();
-            return action;
-        }
-
         const bool playing = mode.mMode == EngineMode::Play;
         const bool paused = playing && mode.mPlayState == PlayState::Paused;
 
-        ImGui::SetCursorPosY((height - ImGui::GetFrameHeight()) * 0.5f);
+        const char *primaryLabel = playing ? (paused ? ICON_FA_PLAY " Resume" : ICON_FA_PAUSE " Pause") : ICON_FA_PLAY " Play";
+        const ImGuiStyle &style = ImGui::GetStyle();
 
+        const float buttonWidth = std::max({ ImGui::CalcTextSize(ICON_FA_PLAY " Play").x,
+                                              ImGui::CalcTextSize(ICON_FA_PLAY " Resume").x,
+                                              ImGui::CalcTextSize(ICON_FA_PAUSE " Pause").x,
+                                              ImGui::CalcTextSize(ICON_FA_STOP " Stop").x }) +
+            style.FramePadding.x * 2.0f;
+
+        float rowWidth = buttonWidth;
+        if (playing)
+            rowWidth += style.ItemSpacing.x + buttonWidth;
+
+        ImGui::SetCursorPosY((ImGui::GetWindowHeight() - ImGui::GetFrameHeight()) * 0.5f);
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - rowWidth) * 0.5f);
+
+        const ImVec2 buttonSize(buttonWidth, 0.0f);
         if (!playing)
         {
-            if (ImGui::Button(ICON_FA_PLAY " Play"))
+            if (ImGui::Button(primaryLabel, buttonSize))
                 action = SceneMenuAction::Play;
         }
         else
         {
-            if (ImGui::Button(paused ? ICON_FA_PLAY " Resume" : ICON_FA_PAUSE " Pause"))
+            if (ImGui::Button(primaryLabel, buttonSize))
                 action = SceneMenuAction::TogglePause;
             ImGui::SameLine();
-            if (ImGui::Button(ICON_FA_STOP " Stop"))
+            if (ImGui::Button(ICON_FA_STOP " Stop", buttonSize))
                 action = SceneMenuAction::Stop;
         }
 
-        ImGui::End();
         return action;
     }
 
@@ -755,7 +759,8 @@ namespace mir
 
     EditorActions Editor::DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
         const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-        std::string_view currentProject, World &world, const AssetImportView &assetImport)
+        std::string_view currentProject, World &world, const AssetImportView &assetImport,
+        const VulkanRenderer &renderer)
     {
         EditorActions actions;
 
@@ -763,8 +768,6 @@ namespace mir
         {
             if (mWindow->HasCustomTitleBar())
                 DrawTitleBar();
-
-            actions.mScene = DrawPlayControls(mode);
 
             const ImGuiID dockspaceId =
                 ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
@@ -843,8 +846,12 @@ namespace mir
                 if (ImGui::BeginMenu("Debug"))
                 {
                     ImGui::MenuItem("Style Editor", nullptr, &mShowStyleEditor);
+                    ImGui::MenuItem("Profiler", nullptr, &mShowProfiler);
                     ImGui::EndMenu();
                 }
+                if (const SceneMenuAction playAction = DrawPlayControls(mode); playAction != SceneMenuAction::None)
+                    actions.mScene = playAction;
+
                 ImGui::EndMainMenuBar();
             }
 
@@ -855,6 +862,16 @@ namespace mir
             {
                 if (ImGui::Begin("Style Editor", &mShowStyleEditor))
                     ImGui::ShowStyleEditor();
+                ImGui::End();
+            }
+
+            if (mShowProfiler)
+            {
+                if (ImGui::Begin("Profiler", &mShowProfiler))
+                {
+                    const VulkanRenderer::GpuMemoryUsage gpuMemory = renderer.GetGpuMemoryUsage();
+                    mProfilerPanel.Draw(gpuMemory.mUsageBytes, gpuMemory.mBudgetBytes);
+                }
                 ImGui::End();
             }
 

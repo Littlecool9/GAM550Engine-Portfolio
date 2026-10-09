@@ -224,6 +224,26 @@ namespace mir::vk
         return true;
     }
 
+    Device::MemoryBudget Device::GpuMemoryBudget() const
+    {
+        MemoryBudget result;
+        if (mAllocator == VK_NULL_HANDLE)
+            return result;
+
+        VkPhysicalDeviceMemoryProperties memProps;
+        vkGetPhysicalDeviceMemoryProperties(mPhysical, &memProps);
+
+        VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+        vmaGetHeapBudgets(mAllocator, budgets);
+
+        for (uint32_t i = 0; i < memProps.memoryHeapCount; ++i)
+        {
+            result.mUsageBytes += budgets[i].usage;
+            result.mBudgetBytes += budgets[i].budget;
+        }
+        return result;
+    }
+
     void Device::Shutdown()
     {
         if (mAllocator != VK_NULL_HANDLE)
@@ -468,6 +488,8 @@ namespace mir::vk
             MIR_LOG_WARN("FindPhysicalDevice: Ray tracing unavailable on {}: missing the acceleration-structure/ray-tracing-pipeline "
                 "extensions or feature bits - raster only", props.deviceName);
 
+        mMemoryBudgetSupported = HasDeviceExtension(mPhysical, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+
         return true;
     }
 
@@ -492,6 +514,8 @@ namespace mir::vk
             deviceExtensions.push_back(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
             deviceExtensions.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
         }
+        if (mMemoryBudgetSupported)
+            deviceExtensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
 
         VkPhysicalDeviceVulkan13Features features13{
             .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
@@ -552,8 +576,12 @@ namespace mir::vk
             .vkGetInstanceProcAddr = vkGetInstanceProcAddr,
             .vkGetDeviceProcAddr = vkGetDeviceProcAddr };
 
+        VmaAllocatorCreateFlags flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+        if (mMemoryBudgetSupported)
+            flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+
         const VmaAllocatorCreateInfo allocatorInfo{
-            .flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
+            .flags = flags,
             .physicalDevice = mPhysical,
             .device = mDevice,
             .pVulkanFunctions = &functions,

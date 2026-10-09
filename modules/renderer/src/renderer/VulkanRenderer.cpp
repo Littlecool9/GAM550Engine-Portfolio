@@ -40,6 +40,12 @@ namespace mir
 
     bool VulkanRenderer::RayTracingSupported() const { return mDevice->RayTracingSupported(); }
 
+    VulkanRenderer::GpuMemoryUsage VulkanRenderer::GetGpuMemoryUsage() const
+    {
+        const vk::Device::MemoryBudget budget = mDevice->GpuMemoryBudget();
+        return GpuMemoryUsage{ .mUsageBytes = budget.mUsageBytes, .mBudgetBytes = budget.mBudgetBytes };
+    }
+
     VkExtent2D VulkanRenderer::SwapchainExtent() const { return mSwapchain->Extent(); }
 
     void VulkanRenderer::RequestSwapchainRecreate() { mSwapchain->MarkOutOfDate(); }

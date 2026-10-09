@@ -250,6 +250,9 @@ namespace mir
         }
         ImGui::EndDisabled();
 
+        if (!mStatusMessage.empty() && mDraftInputMap != mMessageSnapshot)
+            mStatusMessage.clear();
+
         ImGui::SameLine();
         if (ImGui::Button("Save"))
         {
@@ -262,6 +265,7 @@ namespace mir
             {
                 mStatusMessage = "Save failed - see log.";
             }
+            mMessageSnapshot = mDraftInputMap;
         }
 
         if (!mStatusMessage.empty())
