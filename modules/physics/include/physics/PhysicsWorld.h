@@ -148,7 +148,7 @@ namespace mir
         // Advances by dt seconds. Non-positive dt is a no-op, not an error.
         void Step(float dt);
 
-        // Begin/end events from Step and DestroyBody, oldest first; they pile up until drained.
+        // Oldest first; events pile up until drained.
         std::vector<CollisionEvent> DrainCollisionEvents();
 
     private:

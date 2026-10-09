@@ -26,14 +26,12 @@ namespace mir
         End,
     };
 
-    // One per body pair, not per contact point: Begin when the pair starts touching, End when
-    // it stops or one body is destroyed. A pair that falls asleep in contact stays touching.
+    // One per body pair, not per contact point; a pair asleep in contact stays touching.
     struct CollisionEvent
     {
         CollisionPhase mPhase = CollisionPhase::Begin;
         BodyHandle mBodyA;
         BodyHandle mBodyB;
-        // Read from the bodies when the event is made; kNullEntity for an untagged body.
         Entity mEntityA;
         Entity mEntityB;
         // End reuses the pair's last contact.
@@ -42,8 +40,7 @@ namespace mir
         glm::vec3 mNormal{ 0.0f };
     };
 
-    // The events of the previous frame's physics substeps, published once per frame by
-    // CollisionEventSystem. Empty outside Play.
+    // Last frame's events; empty outside Play.
     struct CollisionEvents
     {
         std::vector<CollisionEvent> mEvents;

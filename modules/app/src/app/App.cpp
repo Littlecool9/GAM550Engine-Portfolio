@@ -222,7 +222,6 @@ namespace mir
         mScheduler.AddSystem<AudioEmitterSystem>(SystemPhase::PostUpdate);
         mScheduler.AddSystem<AudioListenerSystem>(SystemPhase::PostUpdate);
 
-        // the frame's collision events, read by next frame's scripts
         mScheduler.AddSystem<CollisionEventSystem>(SystemPhase::PostUpdate);
 
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);

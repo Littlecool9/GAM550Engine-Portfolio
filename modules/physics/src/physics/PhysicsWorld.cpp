@@ -176,13 +176,11 @@ namespace
         return bodies.GetCenterOfMassPosition(id) + worldOffset;
     }
 
-    // Folds Jolt's contacts, which come per sub-shape pair (a sphere on a height field touches
-    // several triangles), into one touching state per body pair.
+    // Folds Jolt's per sub-shape contacts into one touching state per body pair.
     class ContactTracker final : public JPH::ContactListener
     {
     public:
-        // The three callbacks run on Jolt's job threads with every body locked, so they read
-        // only IDs and the manifold, under the mutex.
+        // Called on Jolt's job threads with bodies locked: read only IDs and the manifold.
         void OnContactAdded(const JPH::Body &body1, const JPH::Body &body2, const JPH::ContactManifold &manifold,
             JPH::ContactSettings &) override
         {
@@ -214,7 +212,7 @@ namespace
         void OnContactRemoved(const JPH::SubShapeIDPair &key) override
         {
             const std::scoped_lock lock(mMutex);
-            // Unknown when the pair went with a destroyed body.
+            // Already ended by ForgetBody.
             if (mSubShapes.erase(key) == 0)
                 return;
             if (const auto it = mPairs.find(PairKey(key.GetBody1ID(), key.GetBody2ID())); it != mPairs.end())
@@ -224,13 +222,12 @@ namespace
             }
         }
 
-        // After Update, on the stepping thread.
         void Flush(const JPH::BodyInterface &bodies, std::vector<mir::CollisionEvent> &out)
         {
             const std::scoped_lock lock(mMutex);
             std::vector<uint64_t> queued;
             queued.swap(mQueued);
-            // Callback order depends on thread timing; sorted keys keep the events deterministic.
+            // Sorted: callback order depends on thread timing.
             std::sort(queued.begin(), queued.end());
             for (const uint64_t key : queued)
             {
@@ -248,15 +245,14 @@ namespace
                     continue;
                 }
 
-                // Jolt removes the contacts of a body that falls asleep; the pair still touches,
-                // so it is rechecked after every Update until a body wakes up without them.
+                // Jolt drops a sleeping body's contacts; the pair stays touching until a body wakes.
                 if (pair.mTouching && !bodies.IsActive(pair.mBodyA) && !bodies.IsActive(pair.mBodyB))
                 {
                     Queue(key, pair);
                     continue;
                 }
 
-                // Added and removed within one Update (several collision steps): still an impact.
+                // Added and removed within one Update: still an impact.
                 if (!pair.mTouching)
                     out.push_back(MakeEvent(mir::CollisionPhase::Begin, pair, bodies));
                 out.push_back(MakeEvent(mir::CollisionPhase::End, pair, bodies));
@@ -264,8 +260,7 @@ namespace
             }
         }
 
-        // Before the body leaves Jolt: ends its pairs now, while its user data is still readable.
-        // Jolt's later OnContactRemoved for them then finds nothing.
+        // Call before the body leaves Jolt, while its user data is still readable.
         void ForgetBody(JPH::BodyID body, const JPH::BodyInterface &bodies, std::vector<mir::CollisionEvent> &out)
         {
             const std::scoped_lock lock(mMutex);
@@ -341,7 +336,6 @@ namespace
             event.mBodyB = mir::BodyHandle{ pair.mBodyB.GetIndexAndSequenceNumber() };
             event.mEntityA = EntityFromUserData(bodies.GetUserData(pair.mBodyA));
             event.mEntityB = EntityFromUserData(bodies.GetUserData(pair.mBodyB));
-            // Contacts between finite bodies are finite, so the origin is never used.
             event.mPoint = PositionFromJolt(pair.mPoint).value_or(mir::WorldPosition{});
             event.mNormal = FromJolt(pair.mNormal);
             return event;

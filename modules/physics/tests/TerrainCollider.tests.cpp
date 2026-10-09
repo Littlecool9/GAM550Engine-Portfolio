@@ -224,8 +224,7 @@ namespace
     const Entity kTerrainEntity{1, 1};
     const Entity kSphereEntity{2, 1};
 
-    // Drops a tagged sphere onto the plains and checks it begins exactly one collision with the
-    // terrain; returns the contact point, terrain-local.
+    // Returns the contact point, terrain-local.
     glm::dvec3 DropAndCollide(const glm::dvec3 &placement)
     {
         Pinned terrain(placement);
@@ -237,7 +236,7 @@ namespace
         const BodyHandle sphere = world.CreateDynamicSphere(At(terrain.World(dropAt)), kRadius);
         world.SetBodyEntity(sphere, kSphereEntity);
 
-        // 5 s: well past landing and falling asleep, which drops Jolt's contacts.
+        // Long enough to land and fall asleep, which drops Jolt's contacts.
         std::vector<CollisionEvent> events;
         for (int i = 0; i < 300; ++i)
         {

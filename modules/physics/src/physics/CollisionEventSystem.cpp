@@ -23,7 +23,7 @@ namespace mir
     {
         World &world = context.world;
 
-        // Scripts do not run while paused either: hold the list so they still see it once on resume.
+        // Held while paused so scripts still see the list on resume.
         if (IsPaused(world))
             return;
 
@@ -31,7 +31,6 @@ namespace mir
         if (PhysicsWorld *physics = world.TryResource<PhysicsWorld>(); physics != nullptr)
             drained = physics->DrainCollisionEvents();
 
-        // In Edit this drops the Ends of bodies Stop's RestoreWorld destroyed, so Play starts empty.
         if (!IsSimulating(world))
             drained.clear();
 

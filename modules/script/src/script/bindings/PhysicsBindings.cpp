@@ -250,8 +250,7 @@ namespace mir
 
     namespace
     {
-        // Last frame's begin/end events involving entity, from its side: other is nil when untagged
-        // or no longer alive, and normal points from other toward entity (up for a ball on the ground).
+        // From entity's side: normal points from other toward it; other is nil when untagged or dead.
         sol::table WorldCollisions(World &world, Entity entity, sol::this_state state)
         {
             sol::state_view lua(state);

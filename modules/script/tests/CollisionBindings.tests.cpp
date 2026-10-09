@@ -34,7 +34,6 @@ namespace
 {
     constexpr float kStep = 1.0f / 60.0f;
 
-    // Where the script writes what world:collisions(target) returned this frame.
     const mir::ComponentOps &ProbeOps()
     {
         static const mir::RuntimeFieldDecl fields[] = {
@@ -90,12 +89,9 @@ return T
     {
         mir::Entity entity;
         int32_t instance = -1;
-        // Entries returned over every frame so far.
         int total = 0;
     };
 
-    // A ball dropped onto a terrain-like height field tagged with the ground entity, and scripts
-    // that each ask world:collisions about one target, the way App drives them.
     struct Fixture
     {
         mir::World world;
@@ -165,7 +161,7 @@ return T
             return observers.size() - 1;
         }
 
-        // Scripts first (PreUpdate), then one substep and the publish.
+        // App's order: scripts, one substep, then the publish.
         void Frame()
         {
             for (Observer &observer : observers)
@@ -238,7 +234,6 @@ TEST_CASE("world:collisions gives no other once that entity is destroyed", "[scr
         fixture.Frame();
     REQUIRE(fixture.observers[fromBall].total == 0);
 
-    // The height field outlives its entity; only the name goes.
     fixture.world.DestroyEntity(fixture.ground);
     fixture.Frame();
 
@@ -254,7 +249,6 @@ TEST_CASE("world:collisions is empty, not an error, for a dead or null entity", 
     fixture.world.DestroyEntity(dead);
     const std::size_t aboutDead = fixture.Observe(dead);
     const std::size_t aboutNull = fixture.Observe(mir::kNullEntity);
-    // Destroyed after landing: its own events are still published but no longer answered.
     const std::size_t aboutBall = fixture.Observe(fixture.ball);
 
     for (int i = 0; i < 120 && fixture.world.Resource<mir::CollisionEvents>().mEvents.empty(); ++i)

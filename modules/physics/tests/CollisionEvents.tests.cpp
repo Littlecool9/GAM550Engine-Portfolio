@@ -32,7 +32,7 @@ namespace
 {
     constexpr float kStep = 1.0f / 60.0f;
     constexpr float kRadius = 0.5f;
-    // Contacts start inside Jolt's 2 cm speculative distance and rest within its slop.
+    // Jolt's speculative contact distance plus its penetration slop.
     constexpr double kContactSlack = 0.03;
 
     const Entity kGroundEntity{ 3, 1 };
@@ -45,7 +45,7 @@ namespace
         return *position;
     }
 
-    // A flat 16 m square of terrain-like samples; its surface is at corner.y.
+    // Flat; its surface is at corner.y.
     BodyHandle AddGround(PhysicsWorld &world, const glm::dvec3 &corner)
     {
         static const std::vector<float> samples(17 * 17, 0.0f);
@@ -86,7 +86,7 @@ namespace
         return (event.mBodyA == a && event.mBodyB == b) || (event.mBodyA == b && event.mBodyB == a);
     }
 
-    // The ball rests on the ground, and has slept for a while.
+    // The ball rests on the ground, asleep.
     struct Resting
     {
         PhysicsWorld world;
@@ -114,7 +114,7 @@ TEST_CASE("A body resting on the ground begins one collision and keeps it while 
     const BodyHandle ball = world.CreateDynamicSphere(At({ 0.25, 2.0, 0.25 }), kRadius);
     world.SetBodyEntity(ball, kBallEntity);
 
-    // 5 s: Jolt puts the ball to sleep after half a second at rest, which drops its contacts.
+    // Long enough for the ball to fall asleep, which drops its contacts.
     const std::vector<CollisionEvent> events = StepAndCollect(world, 300);
     REQUIRE(events.size() == 1);
     const CollisionEvent &begin = events[0];
@@ -128,7 +128,6 @@ TEST_CASE("A body resting on the ground begins one collision and keeps it while 
     CHECK(std::abs(point.y) < kContactSlack);
     CHECK(std::abs(point.z - 0.25) < 0.01);
 
-    // Seen from the ball, the normal points up out of the ground.
     const glm::vec3 fromGroundToBall = begin.mBodyA == ground ? begin.mNormal : -begin.mNormal;
     CHECK(fromGroundToBall.y > 0.99f);
 }
@@ -144,7 +143,6 @@ TEST_CASE("Lifting a body off the ground ends its collision once", "[physics][co
         REQUIRE(events.size() == 1);
         CHECK(events[0].mPhase == CollisionPhase::End);
         CHECK(Involves(events[0], resting.ground, resting.ball));
-        // End has no contact of its own: it repeats the last one.
         CHECK(std::abs(double(events[0].mPoint.Meters().y)) < kContactSlack);
     }
 
@@ -174,13 +172,10 @@ TEST_CASE("Destroying a body in contact ends its collision once", "[physics][col
         REQUIRE(events.size() == 1);
         CHECK(events[0].mPhase == CollisionPhase::End);
         CHECK(Involves(events[0], resting.ground, resting.ball));
-        // Named while the body still existed.
         CHECK((events[0].mBodyA == resting.ball ? events[0].mEntityA : events[0].mEntityB) == kBallEntity);
 
-        // Jolt's own removal of those contacts finds nothing left to end.
         CHECK(StepAndCollect(resting.world, 60).empty());
 
-        // A new body in the same place starts a fresh collision.
         const BodyHandle again = resting.world.CreateDynamicSphere(At({ 0.25, 0.6, 0.25 }), kRadius);
         events = StepAndCollect(resting.world, 30);
         REQUIRE(events.size() == 1);
@@ -198,7 +193,6 @@ TEST_CASE("Destroying a body in contact ends its collision once", "[physics][col
         CHECK(events[0].mPhase == CollisionPhase::End);
         CHECK(Involves(events[0], resting.ground, resting.ball));
 
-        // The ball wakes and falls through where the ground was.
         CHECK(StepAndCollect(resting.world, 60).empty());
         CHECK(resting.world.BodyPosition(resting.ball)->Meters().y < -1.0);
     }
@@ -222,7 +216,6 @@ TEST_CASE("Two dynamic bodies colliding begin one collision naming both", "[phys
     CHECK(Involves(begin, left, right));
     CHECK((begin.mBodyA == left ? begin.mEntityA : begin.mEntityB) == leftEntity);
     CHECK((begin.mBodyA == right ? begin.mEntityA : begin.mEntityB) == rightEntity);
-    // The faces meet around x = 2.5 at the moment of contact.
     CHECK(std::abs(double(begin.mPoint.Meters().x) - 2.5) < 0.2);
 }
 
@@ -257,7 +250,7 @@ TEST_CASE("A collision at the map edge is reported in world precision", "[physic
 
 namespace
 {
-    // Counts what a PreUpdate reader (a script) would see each frame.
+    // Stands in for a PreUpdate script.
     class Reader final : public ISystem
     {
     public:
@@ -318,7 +311,6 @@ namespace
 
         const std::vector<CollisionEvent> &Published() { return world.Resource<CollisionEvents>().mEvents; }
 
-        // Frames until the first event is published; returns that frame's index.
         int FrameUntilPublished()
         {
             for (int i = 0; i < 60; ++i)
@@ -344,7 +336,6 @@ TEST_CASE("A frame's collision events reach the next frame's readers exactly onc
     CHECK(((begin.mEntityA == fixture.ball && begin.mEntityB == fixture.ground) ||
            (begin.mEntityA == fixture.ground && begin.mEntityB == fixture.ball)));
 
-    // Nothing was visible up to and including the frame that produced it.
     for (int i = 0; i <= published; ++i)
         CHECK(fixture.reader->mSeen[i].empty());
 
@@ -385,7 +376,6 @@ TEST_CASE("Collision events are held while paused and dropped in Edit", "[physic
     SECTION("edit")
     {
         SetEngineMode(fixture.world, EngineMode::Edit);
-        // Stop destroys the touching body; its End must not leak into the next Play.
         fixture.world.DestroyEntity(fixture.ball);
         fixture.Frame();
         CHECK(fixture.Published().empty());
