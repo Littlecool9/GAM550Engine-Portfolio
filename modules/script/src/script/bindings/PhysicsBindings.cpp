@@ -1,18 +1,27 @@
 #include "PhysicsBindings.h"
 
+#include "LuaWorldVec3.h"
+
 #include <core/ecs/World.h>
 #include <core/log/Log.h>
 #include <physics/PhysicsWorld.h>
 #include <physics/components/RigidBody.h>
 
+#include <glm/geometric.hpp>
+
 #include <sol/sol.hpp>
 
+#include <cmath>
+#include <optional>
 #include <string_view>
 
 namespace mir
 {
     namespace
     {
+        // Jolt's hit fraction is a float, so the hit point resolves to ~6e-8 of this (0.06 mm).
+        constexpr float kRaycastDefaultMaxDistance = 1000.0f;
+
         sol::table Vec3ToLua(sol::state_view lua, const glm::vec3 &value)
         {
             sol::table out = lua.create_table();
@@ -167,6 +176,69 @@ namespace mir
             return WriteVector(world, entity, "apply_angular_impulse", impulse,
                                &PhysicsWorld::AddAngularImpulse);
         }
+
+        bool IsFinite(const glm::vec3 &v)
+        {
+            return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+        }
+
+        // Closest hit only. A ray that starts inside a body hits it at distance 0.
+        sol::table WorldRaycast(World &world, const sol::object &origin, const sol::object &direction,
+                                sol::optional<sol::object> maxDistance, sol::this_state state)
+        {
+            sol::state_view lua(state);
+            sol::table result = lua.create_table();
+            result["hit"] = false;
+
+            const std::optional<WorldVec3> from = WorldVec3FromLua(origin);
+            if (!from)
+            {
+                MIR_LOG_ERROR("script: world:raycast needs an origin table with finite x, y and z in world range");
+                return result;
+            }
+
+            glm::vec3 dir{};
+            const float length = ToVec3(direction, dir) ? glm::length(dir) : 0.0f;
+            if (!IsFinite(dir) || !(length > 0.0f) || !IsFinite(dir / length))
+            {
+                MIR_LOG_ERROR("script: world:raycast needs a finite, non-zero direction table with x, y and z");
+                return result;
+            }
+
+            float distance = kRaycastDefaultMaxDistance;
+            if (Given(maxDistance))
+            {
+                const double given = maxDistance->get_type() == sol::type::number ? maxDistance->as<double>() : 0.0;
+                distance = static_cast<float>(given);
+                if (!std::isfinite(distance) || !(distance > 0.0f))
+                {
+                    MIR_LOG_ERROR("script: world:raycast needs a finite, positive maxDistance");
+                    return result;
+                }
+            }
+
+            const PhysicsWorld *physics = world.TryResource<PhysicsWorld>();
+            if (physics == nullptr)
+                return result;
+
+            const std::optional<WorldPosition> position = WorldPosition::FromMeters(*from);
+            if (!position)
+                return result;
+
+            const std::optional<RayHit> hit = physics->RayCast(*position, dir / length, distance);
+            if (!hit)
+                return result;
+
+            result["hit"] = true;
+            result["point"] = WorldVec3ToLua(lua, hit->mPoint.Meters());
+            result["normal"] = Vec3ToLua(lua, hit->mNormal);
+            result["distance"] = hit->mDistance;
+            // A terrain collider's tag can name an entity destroyed during Play.
+            const Entity entity = physics->BodyEntity(hit->mBody);
+            if (!entity.IsNull() && world.IsAlive(entity))
+                result["entity"] = entity;
+            return result;
+        }
     }
 
     void RegisterPhysicsBindings(sol::state &lua)
@@ -182,5 +254,6 @@ namespace mir
         worldType.set_function("apply_torque", &WorldApplyTorque);
         worldType.set_function("apply_impulse", &WorldApplyImpulse);
         worldType.set_function("apply_angular_impulse", &WorldApplyAngularImpulse);
+        worldType.set_function("raycast", &WorldRaycast);
     }
 }
