@@ -13,7 +13,6 @@
 
 #include <cstdint>
 #include <map>
-#include <set>
 #include <string>
 #include <unordered_set>
 
@@ -38,8 +37,6 @@ namespace mir
         // next id handed out, persisted in scene.json so a deleted entity's id
         // is never reissued
         StableId mNextId = 1;
-
-        std::set<StableId> mDeletedIds;
     };
 
     // Not backed by a file until the first save.
@@ -70,13 +67,7 @@ namespace mir
         std::unordered_set<uint64_t> doomed{ PackEntity(root) };
         ForEachDescendant(world, root, [&](Entity entity) { doomed.insert(PackEntity(entity)); });
 
-        std::erase_if(scene.mEntities, [&](const auto &entry)
-            {
-                if (!doomed.contains(PackEntity(entry.second)))
-                    return false;
-                scene.mDeletedIds.insert(entry.first);
-                return true;
-            });
+        std::erase_if(scene.mEntities, [&](const auto &entry) { return doomed.contains(PackEntity(entry.second)); });
 
         // the hierarchy's destroy hook takes the descendants with it
         world.DestroyEntity(root);
