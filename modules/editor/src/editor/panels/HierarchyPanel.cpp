@@ -24,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace mir
@@ -75,6 +76,11 @@ namespace mir
             std::vector<Entity> &dragged;
             const std::string &dropHint;
             DropPreview &preview;
+            std::vector<Entity> &reveal;
+
+            // rows forced open this frame, and the row to scroll into view
+            const std::unordered_set<uint64_t> &openRows;
+            Entity scrollTo;
         };
 
         std::string LabelOf(const World &world, Entity entity)
@@ -225,6 +231,7 @@ namespace mir
                     if (payload->IsDelivery())
                     {
                         context.action = { EntityActionKind::Reparent, nullptr, kNullEntity, context.dragged, parent, before };
+                        context.reveal = std::move(context.dragged);
                         context.dragged.clear();
                     }
                 }
@@ -249,6 +256,7 @@ namespace mir
                     if (payload->IsDelivery())
                     {
                         context.action = { EntityActionKind::Reparent, nullptr, kNullEntity, context.dragged, kNullEntity, kNullEntity };
+                        context.reveal = std::move(context.dragged);
                         context.dragged.clear();
                     }
                 }
@@ -273,10 +281,16 @@ namespace mir
 
             // unique across index/generation reuse, distinct from the label text
             void *id = reinterpret_cast<void *>(static_cast<uintptr_t>(PackEntity(entity)));
+            if (!children.empty() && context.openRows.contains(PackEntity(entity)))
+                ImGui::SetNextItemOpen(true);
+
             const Name *name = world.GetComponent<Name>(entity);
             const bool open = name != nullptr
                 ? ImGui::TreeNodeEx(id, flags, "%s", name->mValue)
                 : ImGui::TreeNodeEx(id, flags, "Entity %u", entity.mIndex);
+
+            if (entity == context.scrollTo)
+                ImGui::ScrollToItem(ImGuiScrollFlags_KeepVisibleEdgeY);
 
             HandleRowClick(context, entity);
             DragSourceForRow(context, entity, name);
@@ -331,8 +345,24 @@ namespace mir
         std::erase_if(selection.mSelected, [&](Entity e) { return !world.IsAlive(e); });
 
         const HierarchyIndex *index = world.TryResource<HierarchyIndex>();
+        // reveal last frame's drop: open every ancestor, scroll to the last moved entity
+        std::unordered_set<uint64_t> openRows;
+        Entity scrollTo = kNullEntity;
+        if (index != nullptr && !mReveal.empty())
+        {
+            const std::vector<Entity> moved = TopmostInHierarchyOrder(world, mReveal);
+            for (const Entity entity : moved)
+            {
+                for (Entity ancestor = index->ParentOf(entity); !ancestor.IsNull(); ancestor = index->ParentOf(ancestor))
+                    openRows.insert(PackEntity(ancestor));
+            }
+            if (!moved.empty())
+                scrollTo = moved.back();
+        }
+        mReveal.clear();
+
         DropPreview preview;
-        DrawContext context{ world, index, selection, action, mDeferredClick, mDragged, mDropHint, preview };
+        DrawContext context{ world, index, selection, action, mDeferredClick, mDragged, mDropHint, preview, mReveal, openRows, scrollTo };
 
         if (index != nullptr)
         {
