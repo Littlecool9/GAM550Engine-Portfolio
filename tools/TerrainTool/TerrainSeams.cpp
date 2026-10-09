@@ -33,6 +33,8 @@ namespace mir::terrainbake
             const int32_t ratio = n / coarseN;
             if (sample == n) return edge.values.back();
             const int32_t cell = sample / ratio;
+            // Reuse coarse nodes exactly, including the sign of zero.
+            if (sample % ratio == 0) return edge.values[cell];
             const double t = double(sample % ratio) / ratio;
             return double(edge.values[cell]) + (double(edge.values[cell + 1]) - edge.values[cell]) * t;
         }

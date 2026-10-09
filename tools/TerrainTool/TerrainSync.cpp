@@ -116,6 +116,14 @@ namespace mir::terrainbake
             return std::format("current release {} is format {}.{} content {}; this tool writes {}.{} content {}", id,
                                index.release.format.value, index.formatMinor, index.contentVersion,
                                kTerrainFormatVersion.value, kTerrainFormatMinor, kTerrainHeightsContentVersion);
+        // Format 2.1 can also describe generic Height-only releases. Those are
+        // readable, but cannot satisfy the runtime's default source-layer mesh.
+        for (const TerrainTileRecord &source : index.tiles)
+            if (source.source &&
+                (!index.Find(source.tile, source.layer, TerrainPayloadKind::LodHeight, 0) ||
+                 !index.Find(source.tile, source.layer, TerrainPayloadKind::Normal, 0)))
+                return std::format("current release {}: tile ({}, {}) has no source-layer LOD/normal derivatives",
+                                   id, source.tile.x, source.tile.z);
         for (const TerrainPackRecord &pack : index.packs)
         {
             const std::string name = TerrainPackFileName(pack.chunk);

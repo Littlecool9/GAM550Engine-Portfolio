@@ -52,6 +52,11 @@ namespace mir
     // A fixed-size, non-cascaded shadow frustum
     glm::mat4 MakeOrthographicViewProjection(const glm::vec3 &direction, float halfExtent, float nearZ);
 
+    // Forward-Z directional shadow projection covering this camera's visible
+    // frustum up to maxDistance. Coordinates are relative to camera.position.
+    glm::mat4 MakeDirectionalShadowViewProjection(const WorldPose &camera, const Camera &lens,
+        float aspectRatio, const glm::vec3 &lightDirection, float maxDistance);
+
     // A Spot/Point shadow frustum
     glm::mat4 MakeForwardZPerspectiveViewProjection(const glm::vec3 &forward, const glm::vec3 &up,
         float fovYDegrees, float nearZ, float farZ);

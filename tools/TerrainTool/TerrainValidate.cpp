@@ -338,7 +338,9 @@ namespace mir::terrainbake
             });
         }
 
-        if (std::any_of(index.tiles.begin(),index.tiles.end(),[](const auto &r){return r.kind==TerrainPayloadKind::LodHeight || (!r.source && r.kind==TerrainPayloadKind::Height && r.sourceChecksum!=0);}))
+        // A recipe-backed candidate must include this tool's complete runtime
+        // derivatives, even when every derived record has been removed.
+        if (options.recipe || std::any_of(index.tiles.begin(),index.tiles.end(),[](const auto &r){return r.kind==TerrainPayloadKind::LodHeight || (!r.source && r.kind==TerrainPayloadKind::Height && r.sourceChecksum!=0);}))
         {
             TerrainRecipe derivedRecipe{.layout=layout};derivedRecipe.defaultSpacing=layout.SampleSpacing();
             std::vector<TileHeights> sourceTiles;

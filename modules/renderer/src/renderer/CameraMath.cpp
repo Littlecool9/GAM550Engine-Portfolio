@@ -125,6 +125,43 @@ namespace mir
         return proj * view;
     }
 
+    glm::mat4 MakeDirectionalShadowViewProjection(const WorldPose &camera, const Camera &lens,
+        float aspectRatio, const glm::vec3 &lightDirection, float maxDistance)
+    {
+        const glm::vec3 forward = -glm::normalize(lightDirection);
+        const glm::vec3 upHint = std::abs(forward.y) > 0.99f ? glm::vec3(0, 0, 1) : glm::vec3(0, 1, 0);
+        const glm::mat4 lightView = glm::lookAt(glm::vec3(0), forward, upHint);
+        const float nearZ = lens.mNearZ;
+        const float farZ = std::max(nearZ + 0.1f,
+            lens.HasFarPlane() ? std::min(lens.mFarZ, maxDistance) : maxDistance);
+        const float tangent = std::tan(glm::radians(lens.mFovYDegrees) * 0.5f);
+        glm::vec3 minimum(std::numeric_limits<float>::max()), maximum(-std::numeric_limits<float>::max());
+        for (float distance : { nearZ, farZ })
+            for (float x : { -1.0f, 1.0f })
+                for (float y : { -1.0f, 1.0f })
+                {
+                    const glm::vec3 corner = camera.linear *
+                        glm::vec3(x * distance * tangent * aspectRatio, y * distance * tangent, -distance);
+                    const glm::vec3 lightSpace = glm::vec3(lightView * glm::vec4(corner, 1));
+                    minimum = glm::min(minimum, lightSpace);
+                    maximum = glm::max(maximum, lightSpace);
+                }
+
+        // Include casters above/below the receiving frustum along the sun axis.
+        // Small XY padding keeps rounded frustum boundary points inside the map.
+        minimum -= glm::vec3(1, 1, maxDistance);
+        maximum += glm::vec3(1, 1, maxDistance);
+        const glm::vec3 size = maximum - minimum;
+        glm::mat4 projection(1);
+        projection[0][0] = 2 / size.x;
+        projection[1][1] = -2 / size.y;
+        projection[2][2] = -1 / size.z;
+        projection[3][0] = -(maximum.x + minimum.x) / size.x;
+        projection[3][1] = (maximum.y + minimum.y) / size.y;
+        projection[3][2] = maximum.z / size.z;
+        return projection * lightView;
+    }
+
     glm::mat4 MakeForwardZPerspectiveViewProjection(const glm::vec3 &forward, const glm::vec3 &up,
         float fovYDegrees, float nearZ, float farZ)
     {

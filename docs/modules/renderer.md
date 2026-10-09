@@ -632,12 +632,22 @@ primary camera into `kMaxPointShadows`(2)/`kMaxSpotShadows`(4) slots; Area
 never competes for one. RT fires one occlusion `TraceRay` per shadowed light
 per pixel (reusing the existing hit group, `RAY_FLAG_SKIP_CLOSEST_HIT_SHADER`,
 recursion depth 1→2). Raster renders real shadow maps each frame before the
-main pass: Sun gets one fixed, non-cascaded orthographic map; Spot a
+main pass: Sun gets one non-cascaded orthographic map fitted to the primary
+rendered viewport's frustum, including external editor cameras, up to 512 m
+(`kSunShadowDistance`), with extra sun-axis depth for off-frustum casters; Spot a
 `Texture2DArray`; Point a distance cube array (each face stores
 `length(worldPos - lightPos)` in a color attachment, not hardware depth, so
 shading samples by direction with no per-face matrices). Cost: up to 17 extra
 raster depth passes/frame worst case (backlog item 3); RT pays up to
 `1 + lightingMeta.x` extra `TraceRay`s/pixel (backlog item 8).
+
+Default and model materials share `RasterLighting.slang` for scene lighting,
+Sun/Spot/Point shadow lookups and fog. Model draws pass their deformed,
+camera-relative world position to that lighting code. RT diagnostic images
+are prepared after any swapchain recreation and before frame acquisition.
+`TerrainRenderProbe --regressions --out <directory>` checks actual raster
+receiver shadows for both materials, near and distant geometry, an external
+camera at large world coordinates, and diagnostic captures across two resizes.
 
 *2026-09-30* — **Depth is reverse-Z, and a lens can have no far plane.** Was:
 `MakeViewProjection(cameraWorld, fov, near, far, aspect)` mapped near to depth 0

@@ -191,12 +191,17 @@ namespace mir
             captured ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     }
 
-    std::optional<vk::FrameContext> VulkanRenderer::BeginFrame()
+    std::optional<vk::FrameContext> VulkanRenderer::BeginFrame(bool prepareRtDiagnostics)
     {
         if (mFrameSync->Stopped() || mWindow->Width() == 0 || mWindow->Height() == 0)
             return std::nullopt;
 
         if (mSwapchain->NeedsRecreate(*mWindow) && !RecreateSwapchain())
+            return std::nullopt;
+
+        // RecreateSwapchain destroys the old RT diagnostic images. Prepare their
+        // replacements after resizing, before acquiring an image or a frame slot.
+        if (prepareRtDiagnostics && !mRayTracer->PrepareDiagnostics())
             return std::nullopt;
 
         const std::optional<vk::FrameContext> frame = mFrameSync->Begin(*mSwapchain);
@@ -289,9 +294,7 @@ namespace mir
         if (views.empty())
             return;
 
-        if (mCapture->WantsDiagnostics() && !mRayTracer->PrepareDiagnostics())
-            return;
-        const std::optional<vk::FrameContext> frame = BeginFrame();
+        const std::optional<vk::FrameContext> frame = BeginFrame(mCapture->WantsDiagnostics());
         if (!frame)
             return;
 

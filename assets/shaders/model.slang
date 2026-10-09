@@ -1,3 +1,5 @@
+#include "RasterLighting.slang"
+
 struct VSInput
 {
     [[vk::location(0)]] float3 pos : POSITION;
@@ -13,6 +15,7 @@ struct VSOutput
     float4 color : COLOR;
     float2 uv : TEXCOORD0;
     float3 normal : NORMAL;
+    float3 worldPos : TEXCOORD1;
     float pointSize : PSIZE;
 };
 struct RasterPushConstants
@@ -27,12 +30,6 @@ struct RasterPushConstants
 
 // set 0, binding 0: base color, combined with this material's sampler.
 [[vk::binding(0, 0)]] Sampler2D<float4> baseColor;
-
-// set 1, binding 0: per-view camera data (VulkanRenderer's camera UBO).
-[[vk::binding(0, 1)]] cbuffer CameraData
-{
-    float4x4 viewProj;
-};
 
 // set 2, binding 0: this draw's morph/skin data. Slot 2 is the material
 // channel the renderer writes in; see vk::ModelDescriptors::Bind.
@@ -73,7 +70,9 @@ struct RasterPushConstants
         }
     }
     VSOutput output;
-    output.position = mul(viewProj, mul(pushData.model, float4(p, 1)));
+    float4 worldPos = mul(pushData.model, float4(p, 1));
+    output.position = mul(viewProj, worldPos);
+    output.worldPos = worldPos.xyz;
     output.color = float4(input.color, input.alpha) * pushData.tint;
     output.uv = input.uv;
     output.normal = pushData.normalCol0.xyz * n.x + pushData.normalCol1.xyz * n.y + pushData.normalCol2.xyz * n.z;
@@ -91,6 +90,5 @@ struct RasterPushConstants
     float3 normal = normalize(input.normal);
     if (material.z > 0 && !front)
         normal = -normal;
-    float lighting = .25 + .85 * max(dot(normal, normalize(float3(.4, .7, .5))), 0);
-    return float4(color.rgb * lighting, color.a);
+    return float4(RasterLighting(input.worldPos, normal, color.rgb), color.a);
 }

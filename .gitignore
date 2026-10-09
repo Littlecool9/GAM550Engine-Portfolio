@@ -15,3 +15,6 @@ __pycache__/
 # IDE
 /.idea
 /.vscode
+
+# Per-issue terrain handoffs and evidence stay local.
+/docs/terrain-p2-[0-9]*

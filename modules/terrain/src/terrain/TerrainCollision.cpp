@@ -19,6 +19,21 @@ namespace mir
             return std::isfinite(spacing) && spacing > 0 && std::frexp(spacing, &exponent) == 0.5;
         }
 
+        bool ExactSumLessEqual(double a, double b, double c, double d)
+        {
+            // Keep the addition's rounding remainder: an outward-rounded endpoint
+            // must not prove coverage, including in a double world far from zero.
+            const auto sum = [](double x, double y) {
+                const double value = x + y;
+                if (!std::isfinite(value)) return std::array{value, 0.0};
+                const double part = value - x;
+                return std::array{value, (x - (value - part)) + (y - part)};
+            };
+            const auto left = sum(a, b), right = sum(c, d);
+            return std::isfinite(left[0]) && std::isfinite(right[0]) &&
+                (left[0] < right[0] || (left[0] == right[0] && left[1] <= right[1]));
+        }
+
         std::optional<double> RefinementDeviation(const TerrainLayout &sourceLayout, const TileHeights &source,
             const TerrainLayout &uniform, const TileHeights &block)
         {
@@ -209,10 +224,10 @@ namespace mir
         const auto at = origin.Meters();
         const glm::dvec3 translation(placement.translation.Meters());
         const auto &bounds = samples.validBounds;
-        const WorldReal maxX = at.x + static_cast<WorldReal>(extentX);
-        const WorldReal maxZ = at.z + static_cast<WorldReal>(extentZ);
-        return std::isfinite(maxX) && std::isfinite(maxZ) && double(at.x) <= translation.x + bounds.minX && double(at.z) <= translation.z + bounds.minZ &&
-            double(maxX) >= translation.x + bounds.maxX && double(maxZ) >= translation.z + bounds.maxZ;
+        return ExactSumLessEqual(double(at.x), 0.0, translation.x, bounds.minX) &&
+            ExactSumLessEqual(double(at.z), 0.0, translation.z, bounds.minZ) &&
+            ExactSumLessEqual(translation.x, bounds.maxX, double(at.x), extentX) &&
+            ExactSumLessEqual(translation.z, bounds.maxZ, double(at.z), extentZ);
     }
 
     std::optional<TerrainCollisionError> TerrainCollisionErrorBudget(const TerrainUniformSamples &samples,

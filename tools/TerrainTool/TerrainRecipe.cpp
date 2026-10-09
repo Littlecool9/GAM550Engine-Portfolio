@@ -542,7 +542,13 @@ namespace mir::terrainbake
                     double halo = 0.0;
                     if (recipeVersion && *recipeVersion != 1)
                     {
-                        double coarsest = defaultSpacing.value_or(*spacing);
+                        const TileRange range = layout->Tiles();
+                        const uint64_t tileCount = uint64_t(int64_t(range.max.x) - range.min.x + 1) *
+                                                   uint64_t(int64_t(range.max.z) - range.min.z + 1);
+                        double coarsest = *spacing;
+                        // An entirely overridden default contributes no filtered samples.
+                        if (defaultSpacing && rules.size() < tileCount)
+                            coarsest = std::max(coarsest, *defaultSpacing);
                         for (const auto &rule : rules)
                             coarsest = std::max(coarsest, rule.spacing);
                         halo = std::max(0.0, coarsest - *spacing);

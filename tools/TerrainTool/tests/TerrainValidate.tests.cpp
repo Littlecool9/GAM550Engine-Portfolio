@@ -9,6 +9,7 @@
 #include "TerrainBakeTestSupport.h"
 
 #include <TerrainContinuity.h>
+#include <TerrainPublish.h>
 #include <TerrainValidate.h>
 
 #include <terrain/TerrainSurface.h>
@@ -53,7 +54,9 @@ TEST_CASE("A baked candidate passes every check, with and without its recipe", "
 {
     ScratchDir scratch("validate_ok");
     const fs::path dir = scratch.path / "candidate";
-    const TerrainBakedRelease baked = WriteCraftedCandidate(dir, [](auto &) {});
+    const TerrainReleaseId baked = BakeCandidate(dir, kNonce);
+    const auto opened = TerrainReleaseHandle::Open(std::make_shared<TerrainFileSource>(dir));
+    REQUIRE(opened);
     const TerrainRecipe recipe = LoadExample();
 
     const TerrainReport report = Validate(dir, &recipe);
@@ -64,10 +67,12 @@ TEST_CASE("A baked candidate passes every check, with and without its recipe", "
         CHECK(c.status == CheckStatus::Passed);
     }
     REQUIRE(report.release);
-    CHECK(*report.release == baked.info);
-    CHECK(report.heightsHash == baked.encoded.heightsHash);
+    CHECK(report.release->release == baked);
+    CHECK(*report.release == opened.value->Info());
+    CHECK(report.heightsHash == opened.value->Index().heightsHash);
     CHECK(report.surfaceVersion == kTerrainSurfaceVersion);
-    CHECK(report.tiles.size() == 4);
+    CHECK(report.tiles.size() == opened.value->Index().tiles.size());
+    CHECK(std::count_if(report.tiles.begin(), report.tiles.end(), [](const auto &tile) { return tile.source; }) == 4);
 
     CHECK(Validate(dir).Status(check::kIdentity) == CheckStatus::Passed);
 
@@ -81,6 +86,57 @@ TEST_CASE("A baked candidate passes every check, with and without its recipe", "
         const std::vector<TerrainDiagnostic> required = DiagnosticsOf(Validate(dir), check::kCandidate);
         REQUIRE(required.size() == 1);
         CHECK(required[0].field == "candidate.json");
+    }
+}
+
+TEST_CASE("Recipe-backed validation and publication reject Height-only runtime candidates", "[terraintool][validate][publish][lod]")
+{
+    for (const uint32_t recipeVersion : {1u, 2u})
+    {
+        INFO("recipe version " << recipeVersion);
+        ScratchDir scratch("validate_height_only");
+        const fs::path recipePath = scratch.path / "relief-2x2.terrain.json";
+        const auto text = ReadText(ExampleRecipePath());
+        REQUIRE(text);
+        Json json = Json::parse(*text);
+        if (recipeVersion == 2)
+        {
+            json["recipeVersion"] = 2;
+            json["generator"]["version"] = 2;
+            json["precision"] = {{"defaultSpacing", json["layout"]["sampleSpacing"]}, {"tiles", Json::array()}};
+        }
+        REQUIRE(WriteText(recipePath, json.dump(2)));
+        const auto parsed = LoadTerrainRecipe(recipePath);
+        REQUIRE(parsed.recipe);
+        const TerrainRecipe &recipe = *parsed.recipe;
+        TerrainReport encode("craft", {});
+        auto tiles = BakeFinalHeights(recipe, encode);
+        REQUIRE(tiles);
+        auto baked = EncodeBakedRelease(MakeAssetId(ExampleAssetPath()), FingerprintRecipe(recipe), recipe.layout,
+                                       std::move(*tiles), {kNonce, {}}, encode);
+        REQUIRE(baked);
+        const fs::path candidate = scratch.path / "candidate";
+        fs::create_directories(candidate);
+        std::string error;
+        REQUIRE(WriteCandidateFiles(candidate, baked->encoded,
+                                    MakeCandidateManifest(*baked, ExampleAssetPath(), recipePath.string()), error));
+
+        // Generic Height releases remain readable and may be validated without a recipe.
+        CHECK(RunTerrainValidate({candidate, {}}).Ok());
+        const auto readable = TerrainReleaseHandle::Open(MakeTerrainMemorySource(baked->encoded));
+        REQUIRE(readable);
+        REQUIRE(readable.value->ReadTile({baked->info.asset, {-1, -1}}));
+        CHECK_FALSE(readable.value->ReadLod({baked->info.asset, {-1, -1}}, 0));
+
+        const auto validated = RunTerrainValidate({candidate, recipePath});
+        CHECK_FALSE(validated.Ok());
+        CHECK(validated.Status(check::kIndex) == CheckStatus::Passed);
+        CHECK(validated.Status(check::kPayloads) == CheckStatus::Failed);
+        const fs::path releases = scratch.path / "releases";
+        const auto published = RunTerrainPublish({candidate, releases, recipePath});
+        CHECK_FALSE(published.Ok());
+        CHECK(published.Status(check::kPayloads) == CheckStatus::Failed);
+        CHECK_FALSE(fs::exists(releases));
     }
 }
 
@@ -241,7 +297,7 @@ TEST_CASE("Validating against a recipe checks the source fingerprint and layout"
 {
     ScratchDir scratch("validate_recipe");
     const fs::path dir = scratch.path / "candidate";
-    WriteCraftedCandidate(dir, [](auto &) {});
+    BakeCandidate(dir, kNonce);
 
     std::ifstream in(ExampleRecipePath());
     Json json = Json::parse(in);

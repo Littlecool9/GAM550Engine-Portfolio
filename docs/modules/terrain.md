@@ -764,7 +764,7 @@ collider) until `current` moves to one that loads.
 *As of 2026-10-09.* Format 2 supports sparse layers, independent payload
 ranges and unique per-tile source records (#145). Recipes and runtime meshes
 still use one layer until the remaining P2 issues are integrated. See
-[the #145 handoff](../terrain-p2-145.md) for validation and full-map measurements.
+[the P2 summary](../terrain-p2-summary.md) for validation and full-map measurements.
 The accepted P1/P2 size baseline is 256 m tiles and 4096 m chunks; see
 [the measurements](#size-baseline-issue-24). Layout, addressing, placement, identities, the canonical
 surface, the tile mesh builder, the collider block, the release format, its
@@ -871,7 +871,7 @@ documentation decision; the production terrain runtime is unchanged.
 nested layer grids, independent payload keys/ranges and per-tile deviation
 bounds; v1 readers/writers removed. Candidate manifest and sync use format 2.
 All four build presets pass; full-map index measurements are recorded in
-[the #145 handoff](../terrain-p2-145.md).
+[the P2 summary](../terrain-p2-summary.md).
 
 *2026-10-03* — **A build without the editor packages terrain (#116).** Was: no
 packaging step, so the `windows-msvc-game-*` builds, which read `games/` next
@@ -956,11 +956,11 @@ shape. The binding performs no IO and resolves the World resource per call;
 Play retains its pinned release. Invalid arguments return `Failed/InvalidInput`
 with a script error log; no terrain or no covering instance gives `OutsideMap`.
 The old Backlog item 2's script query is complete; per-instance mesh uploads
-remain as described there. Verification: [#144 handoff](../terrain-p2-144.md).
+remain as described there. Verification: [the P2 summary](../terrain-p2-summary.md).
 
 
 ## P2 #123：统一碰撞精度
 
 app 从唯一 resident 最终 source 采样整实例规则 HeightField，按 TerrainCollisionPolicy 的严格递减 spacing 列表选择最粗满足误差门槛的档。默认 8/4/2/1 m、0.05 m 门槛；source→实际均匀 canonical 三角面的覆盖误差、真实 Jolt decoded Y/XZ 偏差、double→float scale drift 和 WorldReal 预算相加。解码 XY 矩形必须完整覆盖有效 bounds。失败候选立即销毁，全部失败拒绝实例；预算细化只记录 INFO。
 
-该 policy 可作为 World resource 覆盖原型配置。默认网格不适配某些 P1 decimal tileSize 时，烘焙仍合法但默认 app 碰撞明确拒绝，调用方必须提供能构成精确 tile 网格的候选；不会静默在 1 m 失败后生成更细原始细节。整实例内存、同步加载及多形状接触/替换仍由 P3 #128 处理。量化 metadata 只含通用数值，Jolt 不进入任何公共头文件。测量与验证见 docs/terrain-p2-123.md。
+该 policy 可作为 World resource 覆盖原型配置。默认网格不适配某些 P1 decimal tileSize 时，烘焙仍合法但默认 app 碰撞明确拒绝，调用方必须提供能构成精确 tile 网格的候选；不会静默在 1 m 失败后生成更细原始细节。整实例内存、同步加载及多形状接触/替换仍由 P3 #128 处理。量化 metadata 只含通用数值，Jolt 不进入任何公共头文件。测量与验证见 [P2 汇总](../terrain-p2-summary.md)。

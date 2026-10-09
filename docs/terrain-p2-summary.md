@@ -10,13 +10,13 @@
 
 | Issue / 中文 PR 描述 | 分支 / 本地提交 | Debug / Release / game-debug 各自通过 | debug-float | smoke 各配置 | 风险及需要审核的实现决定 |
 |---|---|---:|---:|---:|---|
-| [#145 格式](terrain-p2-145.md) | `codex/terrain-p2-145` / `8135fe1` | 676 | 641 + 35 SKIP | 6/6 | 整份索引驻留；当前最终格式为 2.1，只接受 major 2。|
-| [#119 精度图](terrain-p2-119.md) | `codex/terrain-p2-119` / `0c4516d` | 688 | 653 + 35 SKIP | 6/6 | recipe 固定过滤基准，默认值只填未赋值 tile；过滤读取全局 halo。|
-| [#120 最终接缝](terrain-p2-120.md) | `codex/terrain-p2-120` / `d44df58` | 699 | 664 + 35 SKIP | 6/6 | smoothstep + Coons；边带 2×粗 spacing、最多半 tile；0.5 m 质量告警允许发布，保证 C0。|
-| [#121 派生载荷](terrain-p2-121.md) | `codex/terrain-p2-121` / `618bc79` | 711 | 676 + 35 SKIP | 6/6 | 原型粗化上限 8 m，更粗源档保留自身；边界法线使用共同 stencil。float 几何不覆盖有效范围时拒绝 bake。|
-| [#122 渲染](terrain-p2-122.md) | `codex/terrain-p2-122` / `35a42af` | 733 | 696 + 37 SKIP | 7/7 | 默认静态源档；同时修正 RT 材质剔面。逐像素参照针对本机 RTX，跨设备仍需 readback。|
-| [#123 碰撞](terrain-p2-123.md) | `codex/terrain-p2-123` / `1a6ef1a` | 722 | 686 + 36 SKIP | 6/6 | 整实例统一精度；decimal 默认候选限制、有效范围外已知 padding 支撑条带需审核。|
-| [#144 Lua](terrain-p2-144.md) | `codex/terrain-p2-144` / `8cc5486` | 718 | 682 + 36 SKIP | 6/6 | camelCase 字段、枚举字符串、零基 layer、两个必填参数；每次结果表分配尚未测性能。|
+| #145 格式 | `codex/terrain-p2-145` / `8135fe1` | 676 | 641 + 35 SKIP | 6/6 | 整份索引驻留；当前最终格式为 2.1，只接受 major 2。|
+| #119 精度图 | `codex/terrain-p2-119` / `0c4516d` | 688 | 653 + 35 SKIP | 6/6 | recipe 固定过滤基准，默认值只填未赋值 tile；过滤读取全局 halo。|
+| #120 最终接缝 | `codex/terrain-p2-120` / `d44df58` | 699 | 664 + 35 SKIP | 6/6 | smoothstep + Coons；边带 2×粗 spacing、最多半 tile；0.5 m 质量告警允许发布，保证 C0。|
+| #121 派生载荷 | `codex/terrain-p2-121` / `618bc79` | 711 | 676 + 35 SKIP | 6/6 | 原型粗化上限 8 m，更粗源档保留自身；边界法线使用共同 stencil。float 几何不覆盖有效范围时拒绝 bake。|
+| #122 渲染 | `codex/terrain-p2-122` / `35a42af` | 733 | 696 + 37 SKIP | 7/7 | 默认静态源档；同时修正 RT 材质剔面。逐像素参照针对本机 RTX，跨设备仍需 readback。|
+| #123 碰撞 | `codex/terrain-p2-123` / `1a6ef1a` | 722 | 686 + 36 SKIP | 6/6 | 整实例统一精度；decimal 默认候选限制、有效范围外已知 padding 支撑条带需审核。|
+| #144 Lua | `codex/terrain-p2-144` / `8cc5486` | 718 | 682 + 36 SKIP | 6/6 | camelCase 字段、枚举字符串、零基 layer、两个必填参数；每次结果表分配尚未测性能。|
 
 各分支计数对应各自交付点；下游加入更多回归用例，因此不能相加。#122 最终在自己的 worktree 合入总集成 `bafd620`（包含 #123/#144），再冻结、完成四配置验收和提交。总集成快进到 `35a42af` 后再次独立验证全部配置。
 
@@ -53,13 +53,9 @@ debug-float 的 37 个跳过项由 `MIR_LARGE_WORLD=OFF` 的既定精度条件�
 | 生产 mixed-float | 约 (150000.5,-20,-75000.25) 实际加载四 mesh、一 HeightField；1 m 总误差界 0.044749764 m | 8/4/2 m 按原预算拒绝并细化。余量约 5.25 mm，未缩小振幅、禁用碰撞或放宽门槛。|
 | Lua | 7 个新增用例，10,214 个断言；245 探测点、全部状态逐字段对照 C++，查询期间零 IO | Loading 等状态由受控驻留资源构造，未提前实现 streaming。|
 
-GPU 完整矩阵 SHA256：`d00cd5f2d904601366745b0801b30f0bd56c6850fc8d05028a800d39cd8f7138`。本次原始 GPU 文件保存在 #122 worktree 的 `builds/p2-evidence/gpu-full-float-viewport-release/`，junction 指向 `E:/CodexTerrainP2/run-20261006/issue-122`；其他 issue 的完整测试及测量证据也保留在各自本次 worktree。真实 GPU 派生图、数值分析及独立参照 proof 已随 #122 提交。
+GPU 完整矩阵 SHA256：`d00cd5f2d904601366745b0801b30f0bd56c6850fc8d05028a800d39cd8f7138`。本次原始 GPU 文件保存在 #122 worktree 的 `builds/p2-evidence/gpu-full-float-viewport-release/`，junction 指向 `E:/CodexTerrainP2/run-20261006/issue-122`；其他 issue 的完整测试及测量证据也保留在各自本次 worktree。per-issue handoff、GPU 派生图、数值分析及独立参照 proof 仅保留为本地证据，不进入 Git。
 
-![混合 LOD 的真实 GPU 光栅深度](terrain-p2-122-raster-depth.png)
-
-![混合 LOD 的真实 GPU 光追距离](terrain-p2-122-rt-distance.png)
-
-上图分别为 reverse-Z 和米，颜色不可直接比较。±150 km 验收指地形与附近相机共同放置在远坐标，不是相机相对 150 km 距离，也不是 150 km×150 km 地图全域常驻验收。
+±150 km 验收指地形与附近相机共同放置在远坐标，不是相机相对 150 km 距离，也不是 150 km×150 km 地图全域常驻验收。
 
 ## 需要审核的设计决定
 

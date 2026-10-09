@@ -18,7 +18,7 @@ namespace mir::terrainbake
 {
     struct TerrainValidateOptions
     {
-        // When set, its fingerprint and layout must match.
+        // When set, its fingerprint/layout and complete runtime derivatives must match.
         const TerrainRecipe *recipe = nullptr;
         // Published release directories have no candidate.json.
         bool requireManifest = true;

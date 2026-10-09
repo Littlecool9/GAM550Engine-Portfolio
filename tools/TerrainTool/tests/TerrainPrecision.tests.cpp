@@ -108,6 +108,40 @@ TEST_CASE("Explicit source defaults fill only unassigned tiles", "[terraintool][
     CHECK(index.value->Find({0, -1})->sampleSpacing == 8.0);
 }
 
+TEST_CASE("Unused source defaults do not extend the generated height halo", "[terraintool][precision][regression]")
+{
+    Json json = MixedJson();
+    json["layout"]["bounds"] = {{"minX", 0.0}, {"minZ", 0.0}, {"maxX", 256.0}, {"maxZ", 256.0}};
+    json["precision"] = {{"defaultSpacing", 256.0},
+        {"tiles", Json::array({{{"x", 0}, {"z", 0}, {"spacing", 1.0}}})}};
+    json["parameters"]["baseHeight"] = 9990.0;
+    json["parameters"]["tilt"] = {{"x", 0.03}, {"z", 0.0}};
+    for (auto term : {"broad", "ridges", "detail"}) json["parameters"][term]["amplitude"] = 0.0;
+    json["parameters"]["plains"] = {{"height", 0.0}, {"blend", 0.0}};
+
+    SECTION("every tile overrides the default")
+    {
+        const auto recipe = Mixed(json);
+        REQUIRE(recipe.SourceEstimates().size() == 1);
+        CHECK(recipe.SourceEstimates()[0].spacing == 1.0);
+        const TerrainGenerator generator(recipe);
+        CHECK(generator.SampleHeight({256, 256}) <= kMaxHeightMagnitude);
+        json["precision"]["defaultSpacing"] = nullptr;
+        CHECK(Mixed(json).SourceSpacing({0, 0}) == recipe.SourceSpacing({0, 0}));
+    }
+    SECTION("an unassigned tile uses the default and its halo")
+    {
+        json["precision"]["tiles"] = Json::array();
+        CHECK(Issue(ParseTerrainRecipe(json.dump()), "parameters", "heights can reach"));
+    }
+    SECTION("an explicit coarse source still contributes its halo")
+    {
+        json["precision"]["tiles"][0]["spacing"] = 256.0;
+        json["precision"]["defaultSpacing"] = nullptr;
+        CHECK(Issue(ParseTerrainRecipe(json.dump()), "parameters", "heights can reach"));
+    }
+}
+
 TEST_CASE("Missing duplicate outside and non-nested source rules are rejected", "[terraintool][precision]")
 {
     Json json = MixedJson();

@@ -168,7 +168,33 @@ namespace mir
                     haveDefaultCamera = true;
                 });
 
-            if (haveDefaultCamera)
+            // Shadow maps follow the primary rendered viewport, including the
+            // editor's external camera and explicitly selected game cameras.
+            bool haveShadowCamera = haveDefaultCamera;
+            WorldPose shadowCameraPose = defaultCameraPose;
+            Camera shadowCamera = defaultCamera;
+            const Viewport &primaryViewport = mViewports.front();
+            if (primaryViewport.mUseExternalCamera)
+            {
+                shadowCameraPose = primaryViewport.mExternalCameraPose;
+                shadowCamera = primaryViewport.mExternalCamera;
+                haveShadowCamera = true;
+            }
+            else if (primaryViewport.mCameraEntity != kNullEntity)
+            {
+                haveShadowCamera = false;
+                mCameraQuery->ForEach([&](Entity e, const WorldTransform &world, const Camera &camera)
+                    {
+                        if (e == primaryViewport.mCameraEntity)
+                        {
+                            shadowCameraPose = world.Pose();
+                            shadowCamera = camera;
+                            haveShadowCamera = true;
+                        }
+                    });
+            }
+
+            if (haveShadowCamera)
             {
                 const auto assignNearest = [&](bool wantSpot, uint32_t cap)
                     {
@@ -179,7 +205,7 @@ namespace mir
                             if (isSpot != wantSpot || item.shadowSlot == -2)
                                 continue;
                             const std::optional<glm::vec3> relative =
-                                TryCameraRelativeFloat(item.position, defaultCameraPose.position);
+                                TryCameraRelativeFloat(item.position, shadowCameraPose.position);
                             candidates.emplace_back(
                                 relative ? glm::length(*relative) : std::numeric_limits<float>::max(), &item);
                         }
@@ -215,12 +241,16 @@ namespace mir
 
             const bool haveDirectionalLight = haveSunLight || haveSky;
             mSunShadowItems.clear();
-            if (haveDirectionalLight && haveDefaultCamera)
+            if (haveDirectionalLight && haveShadowCamera)
             {
-                const glm::mat4 sunShadowViewProj = MakeOrthographicViewProjection(
-                    -sunDirWS, VulkanRenderer::kSunShadowHalfExtent, VulkanRenderer::kSunShadowNearZ);
-                BuildViewDrawItems(mDrawItems, defaultCameraPose.position, sunShadowViewProj, mSunShadowItems);
-                mRenderer.SetSunShadowCaster(true, sunShadowViewProj, defaultCameraPose.position, mSunShadowItems);
+                const VkExtent2D shadowExtent = primaryViewport.mRect.extent.width > 0 && primaryViewport.mRect.extent.height > 0
+                    ? primaryViewport.mRect.extent : swapchainExtent;
+                const float shadowAspect = shadowExtent.height == 0 ? 1.0f
+                    : static_cast<float>(shadowExtent.width) / shadowExtent.height;
+                const glm::mat4 sunShadowViewProj = MakeDirectionalShadowViewProjection(
+                    shadowCameraPose, shadowCamera, shadowAspect, sunDirWS, VulkanRenderer::kSunShadowDistance);
+                BuildViewDrawItems(mDrawItems, shadowCameraPose.position, sunShadowViewProj, mSunShadowItems);
+                mRenderer.SetSunShadowCaster(true, sunShadowViewProj, shadowCameraPose.position, mSunShadowItems);
             }
             else
             {

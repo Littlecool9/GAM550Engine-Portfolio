@@ -145,6 +145,84 @@ TEST_CASE("Final seam adjustments and encoded releases do not depend on tile ord
     CHECK(ra.seams->maxAdjustment == rb.seams->maxAdjustment);
 }
 
+TEST_CASE("Final seams preserve signed zero at exact shared source nodes", "[terraintool][seams][regression]")
+{
+    for (double base : {-1e-50, 1e-50}) for (double spacing : {1.0, 2.0})
+    {
+        INFO("base " << base << ", neighbour spacing " << spacing);
+        auto json = SeamJson();
+        json["layout"]["intervalsPerTile"] = 8;
+        json["layout"]["bounds"] = {{"minX", 0.0}, {"minZ", 0.0}, {"maxX", 16.0}, {"maxZ", 8.0}};
+        json["precision"] = {{"defaultSpacing", 1.0},
+            {"tiles", Json::array({{{"x", 1}, {"z", 0}, {"spacing", spacing}}})}};
+        json["parameters"]["baseHeight"] = base;
+        json["parameters"]["tilt"] = {{"x", 0.0}, {"z", 0.0}};
+        for (auto term : {"broad", "ridges", "detail"}) json["parameters"][term]["amplitude"] = 0.0;
+        json["parameters"]["plains"] = {{"height", -1.0}, {"blend", 0.0}};
+        const auto recipe = Recipe(json);
+        auto tiles = Raw(recipe);
+        const auto coarseBefore = TileAt(tiles, {1, 0});
+        REQUIRE(std::signbit(coarseBefore.At(0, 1)) == (base < 0.0));
+        TerrainReport report("signed_zero", {});
+        REQUIRE(AdjustTerrainSeams(recipe, tiles, report));
+        const auto &fine = TileAt(tiles, {0, 0});
+        const auto &coarse = TileAt(tiles, {1, 0});
+        for (int32_t k = 0; k <= coarse.IntervalsPerTile(); ++k)
+        {
+            const auto expected = std::bit_cast<uint32_t>(coarseBefore.At(0, k));
+            CHECK(std::bit_cast<uint32_t>(fine.At(8, k * int32_t(spacing))) == expected);
+            CHECK(std::bit_cast<uint32_t>(coarse.At(0, k)) == expected);
+        }
+        const auto stats = Check(recipe, tiles, report);
+        for (const auto &d : report.diagnostics) UNSCOPED_INFO(FormatDiagnostic(d));
+        CHECK(stats.edgesCompared == 1);
+        CHECK(report.Ok());
+    }
+}
+
+TEST_CASE("Sparse height layers compare baked diagonal tiles at their shared corner", "[terraintool][continuity][sparse][regression]")
+{
+    const auto layout = TerrainLayout::Create(2.0, 1, {0.0, 0.0, 4.0, 4.0});
+    REQUIRE(layout);
+    auto lo = TileHeights::Create({0, 0}, 1);
+    auto hi = TileHeights::Create({1, 1}, 1);
+    REQUIRE(lo); REQUIRE(hi);
+    bool secondBaked = true, secondReadable = true;
+    bool differs = false;
+    SECTION("equal shared corner") {}
+    SECTION("different heights") { hi->Set(0, 0, 5.0f); differs = true; }
+    SECTION("different zero signs") { lo->Set(1, 1, -0.0f); differs = true; }
+    SECTION("a baked payload is unreadable") { secondReadable = false; }
+    SECTION("a single baked tile has no corner neighbour") { secondBaked = false; }
+    const auto baked = [&](TileCoord tile) {
+        return tile == lo->Tile() || (secondBaked && tile == hi->Tile());
+    };
+    const TileSampleLookup lookup = [&](TileCoord tile) -> std::span<const float> {
+        if (tile == lo->Tile()) return lo->Samples();
+        if (tile == hi->Tile() && secondReadable) return hi->Samples();
+        return {};
+    };
+    TerrainReport report("sparse_corner", {check::kEdges, check::kCorners});
+    const auto stats = CheckTileContinuity(*layout, lookup, report, baked);
+    CHECK(stats.edgesCompared == 0);
+    CHECK(stats.corners == (secondBaked ? 1 : 0));
+    CHECK(stats.cornersCompared == (secondBaked && secondReadable ? 1 : 0));
+    if (!secondReadable)
+        CHECK(report.Status(check::kCorners) == CheckStatus::Skipped);
+    else if (differs)
+    {
+        CHECK(report.Status(check::kCorners) == CheckStatus::Failed);
+        const auto samples = std::find_if(report.diagnostics.begin(), report.diagnostics.end(), [](const auto &d) {
+            return d.check == check::kCorners && d.field == "samples";
+        });
+        REQUIRE(samples != report.diagnostics.end());
+        CHECK(samples->tiles == std::vector<TileCoord>{{0, 0}, {1, 1}});
+        CHECK(samples->sample == GlobalSampleIndex{1, 1});
+    }
+    else
+        CHECK(report.Status(check::kCorners) == CheckStatus::Passed);
+}
+
 TEST_CASE("Seam tolerance uses interpolation supports when a steep edge crosses zero", "[terraintool][seams]")
 {
     auto j = SeamJson();

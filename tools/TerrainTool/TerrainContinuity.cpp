@@ -218,51 +218,50 @@ namespace mir::terrainbake
             void Corner(int32_t x, int32_t z)
             {
                 const TileCoord tiles[4] = {{x, z}, {x + 1, z}, {x, z + 1}, {x + 1, z + 1}};
-                if (mBaked && std::any_of(std::begin(tiles), std::end(tiles), [&](TileCoord t) { return !mBaked(t); })) return;
-                ++mStats.corners;
-                std::span<const float> s[4];
+                std::vector<int> participating;
                 for (int t = 0; t < 4; ++t)
-                {
-                    s[t] = Samples(tiles[t]);
-                    if (s[t].empty())
-                        return;
-                }
-                ++mStats.cornersCompared;
-
+                    if (!mBaked || mBaked(tiles[t])) participating.push_back(t);
+                if (participating.size() < 2) return;
+                ++mStats.corners;
                 const int64_t ci = mLayout.TileFirstSample(x + 1);
                 const int64_t ck = mLayout.TileFirstSample(z + 1);
-                const float values[4] = {At(s[0], mN, mN), At(s[1], 0, mN), At(s[2], mN, 0), At(s[3], 0, 0)};
-                const std::vector<TileCoord> named(std::begin(tiles), std::end(tiles));
+                std::vector<float> values;
+                std::vector<TileCoord> named;
+                std::vector<SideEval> sides;
+                for (int t : participating)
+                {
+                    const auto samples = Samples(tiles[t]);
+                    if (samples.empty()) return;
+                    values.push_back(At(samples, t % 2 ? 0 : mN, t / 2 ? 0 : mN));
+                    named.push_back(tiles[t]);
+                    sides.push_back({tiles[t], samples, {ci - (t % 2 ? 0 : 1), ck - (t / 2 ? 0 : 1)}});
+                }
+                ++mStats.cornersCompared;
                 const double px = mLayout.SamplePosition(ci);
                 const double pz = mLayout.SamplePosition(ck);
-                if (!SameBits(values[0], values[1]) || !SameBits(values[0], values[2]) ||
-                    !SameBits(values[0], values[3]))
+                const auto different = std::find_if(values.begin() + 1, values.end(), [&](float value) { return !SameBits(values[0], value); });
+                if (different != values.end())
                     mReport.Add({std::string(check::kCorners), "samples", named, GlobalSampleIndex{ci, ck},
-                                 std::format("the four-tile corner ({}, {}) m holds {} in {}, {} in {}, {} in {} and {} "
-                                             "in {}",
-                                             px, pz, values[0], Tile(tiles[0]), values[1], Tile(tiles[1]),
-                                             values[2], Tile(tiles[2]), values[3], Tile(tiles[3]))});
+                                 std::format("the shared corner ({}, {}) m holds {} in {} vs {} in {} across {} baked tiles",
+                                             px, pz, values[0], Tile(named[0]), *different,
+                                             Tile(named[size_t(different - values.begin())]), named.size())});
 
-                const SideEval sides[4] = {{tiles[0], s[0], {ci - 1, ck - 1}},
-                                           {tiles[1], s[1], {ci, ck - 1}},
-                                           {tiles[2], s[2], {ci - 1, ck}},
-                                           {tiles[3], s[3], {ci, ck}}};
                 ++mStats.probes;
                 const Probe probe = EvaluateSides(mLayout, sides, px, pz);
                 if (!probe.ok)
                 {
                     mReport.Add({std::string(check::kCorners), "surface", named, GlobalSampleIndex{ci, ck},
-                                 std::format("the four-tile corner ({}, {}) m evaluates to {}", px, pz,
-                                             StatusName(probe.status))});
+                                  std::format("the shared corner ({}, {}) m evaluates to {}", px, pz,
+                                              StatusName(probe.status))});
                     return;
                 }
                 const double diff = probe.high - probe.low;
                 mStats.maxSurfaceDifference = std::max(mStats.maxSurfaceDifference, diff);
                 if (diff > SurfaceTolerance(std::max(std::abs(probe.low), std::abs(probe.high))))
                     mReport.Add({std::string(check::kCorners), "surface", named, GlobalSampleIndex{ci, ck},
-                                 std::format("the surface at the four-tile corner ({}, {}) m spans [{}, {}] m across "
-                                             "its four cells, beyond SurfaceTolerance",
-                                             px, pz, probe.low, probe.high)});
+                                  std::format("the surface at the shared corner ({}, {}) m spans [{}, {}] m across "
+                                              "{} baked cells, beyond SurfaceTolerance",
+                                              px, pz, probe.low, probe.high, sides.size())});
             }
 
             const TerrainLayout &mLayout;
@@ -289,7 +288,7 @@ namespace mir::terrainbake
                 report.Ran(name, detail);
         };
         finish(check::kEdges, stats.edgesCompared, stats.edges, "shared edges");
-        finish(check::kCorners, stats.cornersCompared, stats.corners, "four-tile corners");
+        finish(check::kCorners, stats.cornersCompared, stats.corners, "shared corners");
         return stats;
     }
 }

@@ -436,6 +436,79 @@ TEST_CASE("Uniform collision handles the largest accepted signed tile without ov
     CHECK(samples.value->area.countZ==9);
 }
 
+TEST_CASE("Translated collision coverage rejects a rounded endpoint with missing boundary rays",
+          "[physics][terrain][p2collision][collision-support]")
+{
+    Fixture fixture(std::in_place);
+    auto parsed = LoadTerrainRecipe(std::filesystem::path(TERRAIN_COLLISION_RECIPE));
+    REQUIRE(parsed.recipe);
+    auto recipe = *parsed.recipe;
+    constexpr double max = 6.2999999523162842;
+    const auto layout = TerrainLayout::Create(1, 18, {0, 0, max, max});
+    REQUIRE(layout);
+    recipe.layout = *layout;
+    recipe.defaultSpacing = 1;
+    recipe.sourceRules.clear();
+    recipe.relief.baseHeight = 5;
+    recipe.relief.tiltX = recipe.relief.tiltZ = 0;
+    recipe.relief.broad.amplitude = recipe.relief.ridges.amplitude = recipe.relief.detail.amplitude = 0;
+    recipe.relief.plainsHeight = recipe.relief.plainsBlend = 0;
+    TerrainReport report("collision", {});
+    auto heights = BakeFinalHeights(recipe, report);
+    REQUIRE(heights);
+    TerrainBakeOptions options;
+    options.nonce = 1;
+    auto baked = EncodeBakedRelease(fixture.placement.asset, FingerprintRecipe(recipe), recipe,
+                                   std::move(*heights), options, report);
+    REQUIRE(baked);
+    REQUIRE(report.Ok());
+    auto opened = TerrainReleaseHandle::Open(MakeTerrainMemorySource(baked->encoded));
+    REQUIRE(opened);
+    fixture.handle = std::move(*opened.value);
+    fixture.query = TerrainHeightQuery::Create(*fixture.handle);
+    REQUIRE(PreloadAllTerrainTiles(*fixture.query, *fixture.handle).Ok());
+    fixture.placement.translation = At({0.5000002384185791, 0, 0.5000002384185791});
+
+    PhysicsWorld world;
+    auto samples = BuildTerrainUniformSamples(fixture.handle->Index(), *fixture.query, 0.9);
+    REQUIRE(samples);
+    HeightFieldDesc desc;
+    desc.mSamples = samples.value->area.heights;
+    desc.mCountX = samples.value->area.countX;
+    desc.mCountZ = samples.value->area.countZ;
+    desc.mSpacing = 0.9f;
+    desc.mOrigin = *TryTerrainLocalToWorld(samples.value->area.origin, fixture.placement.translation);
+    const auto body = world.CreateStaticHeightField(desc);
+    REQUIRE(body.IsValid());
+    const auto info = world.HeightFieldInfoOf(body);
+    REQUIRE(info);
+    const auto error = TerrainCollisionErrorBudget(*samples.value, fixture.placement, desc.mOrigin,
+                                                  info->mMaxQuantizationError, info->mMaxHorizontalError);
+    REQUIRE(error);
+    CHECK(error->total < 0.05);
+    CHECK_FALSE(TerrainCollisionCovers(*samples.value, fixture.placement, desc.mOrigin,
+                                      info->mExtentX, info->mExtentZ));
+    const std::array boundaryPoints{At({6.8000001907348633, 10, 3}),
+                                    At({3, 10, 6.8000001907348633}),
+                                    At({6.8000001907348633, 10, 6.8000001907348633})};
+    for (const auto point : boundaryPoints)
+    {
+        const auto height = fixture.query->HeightAt(point, fixture.placement, {fixture.handle->Info(), 1});
+        REQUIRE(height.HasHeight());
+        CHECK(height.localHeight == 5);
+        CHECK_FALSE(world.RayCast(point, {0, -1, 0}, 20));
+    }
+    CHECK(world.RayCast(At({6.7999997138977051, 10, 3}), {0, -1, 0}, 20));
+    world.DestroyBody(body);
+
+    TerrainCollisionPolicy policy;
+    policy.spacings = {0.9, 0.5, 0.25, 0.125};
+    const auto selected = Select(fixture, world, "translated-decoded-support", policy);
+    REQUIRE(selected);
+    CHECK(selected->samples.area.spacing == 0.5);
+    for (const auto point : boundaryPoints) CHECK(world.RayCast(point, {0, -1, 0}, 20));
+}
+
 TEST_CASE("Height-field metadata measures actual quantization, stride, holes and lifetime", "[physics][heightfield][p2collision]")
 {
     std::vector<float> samples(9*7);

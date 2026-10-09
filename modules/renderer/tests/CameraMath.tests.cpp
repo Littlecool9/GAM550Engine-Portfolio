@@ -13,6 +13,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <optional>
@@ -59,6 +60,31 @@ namespace
         const glm::vec4 clip = mir::MakeViewProjection(glm::mat4(1.0f), lens, 1.0f) * glm::vec4(0.0f, 0.0f, -distance, 1.0f);
         return clip.z / clip.w;
     }
+}
+
+TEST_CASE("Directional shadows cover the rendered frustum beyond the old camera box", "[renderer][shadow]")
+{
+    const glm::mat3 orientation = glm::mat3_cast(glm::angleAxis(0.7f, glm::vec3(0, 1, 0)));
+    const WorldPose camera{At(kEdgeB), orientation};
+    for (const mir::Camera lens : {kLens, kNoFarLens, kTerrainLens})
+        for (const glm::vec3 sun : {glm::vec3(0, 1, 0), glm::vec3(-0.3f, 0.8f, -0.2f)})
+        {
+            const auto projection = mir::MakeDirectionalShadowViewProjection(camera, lens, 1.8f, sun, 512);
+            const float end = lens.HasFarPlane() ? std::min(lens.mFarZ, 512.0f) : 512.0f;
+            for (float distance : {lens.mNearZ, end})
+                for (float x : {-1.f, 1.f}) for (float y : {-1.f, 1.f})
+                {
+                    const float halfHeight = distance * std::tan(glm::radians(lens.mFovYDegrees) / 2);
+                    const auto relative = orientation * glm::vec3(x * halfHeight * 1.8f, y * halfHeight, -distance);
+                    const auto clip = projection * glm::vec4(relative, 1);
+                    CHECK(std::abs(clip.x) < clip.w);
+                    CHECK(std::abs(clip.y) < clip.w);
+                    CHECK(clip.z >= 0);
+                    CHECK(clip.z <= clip.w);
+                }
+            const WorldPose originCamera{At(glm::dvec3(0)), orientation};
+            CHECK(projection == mir::MakeDirectionalShadowViewProjection(originCamera, lens, 1.8f, sun, 512));
+        }
 }
 
 TEST_CASE("The projection is reverse-Z: near maps to depth 1 and far to 0", "[renderer]")

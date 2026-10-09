@@ -148,6 +148,47 @@ TEST_CASE("Sync publishes a changed recipe as a new release and keeps the old on
     CHECK(settled.publish->current == r2);
 }
 
+TEST_CASE("Sync replaces a matching Height-only 2.1 current with runtime derivatives", "[terraintool][sync][lod]")
+{
+    SyncTree tree("sync_height_only");
+    const fs::path candidate = tree.scratch.path / "generic-candidate";
+    const auto heightOnly = WriteCraftedCandidate(candidate, [](auto &) {});
+    const auto published = RunTerrainPublish({candidate, tree.releases, {}});
+    REQUIRE(published.Ok());
+    REQUIRE(published.publish->current == heightOnly.info.release);
+    const auto old = OpenCurrentTerrainRelease(tree.releases, tree.asset);
+    REQUIRE(old);
+    CHECK(old.value->Index().formatMinor == kTerrainFormatMinor);
+    CHECK_FALSE(old.value->ReadLod({tree.asset, {-1, -1}}, 0));
+
+    const auto repaired = Sync(tree.Request());
+    REQUIRE(repaired.Ok());
+    CHECK(repaired.publish->published);
+    CHECK(repaired.publish->previous == heightOnly.info.release);
+    REQUIRE(repaired.publish->current);
+    CHECK(repaired.publish->current != heightOnly.info.release);
+    CHECK(repaired.Status(check::kGenerate) == CheckStatus::Passed);
+    const auto current = OpenCurrentTerrainRelease(tree.releases, tree.asset);
+    REQUIRE(current);
+    for (const auto &source : current.value->Index().tiles)
+        if (source.source)
+        {
+            const auto lod = current.value->ReadLod({tree.asset, source.tile}, source.layer);
+            const auto normals = current.value->ReadNormals({tree.asset, source.tile}, source.layer);
+            REQUIRE(lod);
+            REQUIRE(normals);
+            CHECK(lod.value->positions.size() == normals.value->normals.size());
+        }
+    CHECK(old.value->Info().release == heightOnly.info.release);
+    CHECK(old.value->VerifyAllPacks().code == TerrainPackErrorCode::None);
+
+    const auto settled = Sync(tree.Request());
+    REQUIRE(settled.Ok());
+    CHECK_FALSE(settled.publish->published);
+    CHECK(settled.Status(check::kGenerate) == CheckStatus::Skipped);
+    CHECK(settled.publish->current == repaired.publish->current);
+}
+
 TEST_CASE("A missing or damaged current release makes the next sync publish again", "[terraintool][sync]")
 {
     SyncTree tree("sync_damaged");

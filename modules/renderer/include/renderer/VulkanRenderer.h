@@ -206,6 +206,7 @@ namespace mir
 
         constexpr static float kSunShadowHalfExtent = 25.0f;
         constexpr static float kSunShadowNearZ = 0.5f;
+        constexpr static float kSunShadowDistance = 512.0f;
 
         constexpr static float kSpotShadowNearZ = 0.05f;
         constexpr static float kPointShadowNearZ = 0.05f;
@@ -238,7 +239,7 @@ namespace mir
     private:
         bool RecreateSwapchain();
         // Shared prelude of DrawFrame and TraceFrame; nullopt skips the frame.
-        std::optional<vk::FrameContext> BeginFrame();
+        std::optional<vk::FrameContext> BeginFrame(bool prepareRtDiagnostics = false);
         // No wait: the caller idles the device first. False for a null or stale handle.
         bool DestroyMeshAndBlas(MeshHandle handle);
 
