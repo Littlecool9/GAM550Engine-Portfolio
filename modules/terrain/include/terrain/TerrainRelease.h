@@ -73,4 +73,8 @@ namespace mir
                                                               AssetId asset);
     TerrainResult<TerrainReleaseHandle> OpenCurrentTerrainRelease(const std::filesystem::path &releasesRoot,
                                                                   AssetId asset);
+
+    // A missing pointer is NotFound without a log line.
+    TerrainResult<TerrainReleaseId> PeekTerrainCurrentPointer(const std::filesystem::path &releasesRoot,
+                                                              AssetId asset);
 }

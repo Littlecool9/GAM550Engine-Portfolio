@@ -49,6 +49,7 @@ namespace mir
     class RenderSystem;
     class ScriptSystem;
     class ModelSystem;
+    class TerrainRuntime;
     class MeshResolveSystem;
 
     struct AppDesc
@@ -89,7 +90,7 @@ namespace mir
         //whether this build has the editor in it at all
         static constexpr bool kHasEditor = MIR_WITH_EDITOR != 0;
 
-        App() = default;
+        App();
         ~App();
 
         App(const App &) = delete;
@@ -173,28 +174,28 @@ namespace mir
         //the game UI's area: the editor's scene viewport, or the whole window
         UIRect GameUIArea() const;
 
-#if MIR_WITH_EDITOR
-        //what the editor's menus, toolbar and panels asked for this frame
+    #if MIR_WITH_EDITOR
+            //what the editor's menus, toolbar and panels asked for this frame
         void ApplyEditorActions(const EditorActions &actions);
         void ApplyEntityAction(const EntityAction &action);
         void ApplyImportedAssets();
-#endif
+    #endif
 
         SplashScreen mSplash;
         std::unique_ptr<Window> mWindow;
         VulkanRenderer mRenderer;
         ImGuiRuntime mImGui;
-#if MIR_WITH_EDITOR
+    #if MIR_WITH_EDITOR
         Editor mEditor;
-#endif
+    #endif
         UIContext mGameUI;
         UIDemoScreen mUIDemo;
         GameShell mGameShell;
-#if MIR_WITH_EDITOR
+    #if MIR_WITH_EDITOR
         AssetImportManager mAssetImport;
-#endif
+    #endif
 
-        // Before mWorld, so it is destroyed after it
+            // Before mWorld, so it is destroyed after it
         CommandBuffer mCommands;
 
         World mWorld;
@@ -205,15 +206,18 @@ namespace mir
         MeshResolveSystem *mMeshResolveSystem = nullptr;
         PlaySnapshot mPlaySnapshot;
         ScriptHost mScriptHost;
-        ScriptReloadWatcher mScriptReloadWatcher{mScriptHost};
+        ScriptReloadWatcher mScriptReloadWatcher{ mScriptHost };
         LoadedScene mScene;
+
+        // Handles only, freed with the renderer and the World
+        std::unique_ptr<TerrainRuntime> mTerrain;
 
         AppDesc mDesc;
         GameProject mProject;
         std::vector<GameProject> mAvailableProjects;
-#if MIR_WITH_EDITOR
+    #if MIR_WITH_EDITOR
         std::vector<ProjectMenuEntry> mProjectMenu;
-#endif
+    #endif
         std::optional<GameProject> mProjectToOpen;
         bool mSwitchHookFired = false;
         double mElapsed = 0.0;

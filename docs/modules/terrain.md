@@ -6,10 +6,12 @@ identities of a terrain's source, baked format and release, the versioned files
 a baked release is stored in, with a reader that fetches one tile by byte
 range, the canonical surface over a release's final samples, a resident height
 query over one release, a tile's fixed-LOD triangle mesh built from those
-samples on the CPU (plain data; `app` uploads it), and the one rule from a
-recipe path to its asset id and from a game to its published releases. It does
-not bake, publish, stream or collide terrain itself; collision is built by
-physics from these samples, streaming is P3. Generating, baking and publishing
+samples on the CPU (plain data; `app` uploads it), the same samples gathered
+into one block for a collider, the one rule from a recipe path to its asset id
+and from a game to its published releases, and the scene side: the
+`TerrainInstance` component and the `TerrainWorld` resource it resolves to,
+which pins one release per asset. It does not bake, publish, stream or collide
+terrain itself; collision is built by physics from these samples, streaming is P3. Generating, baking and publishing
 heights is offline work: the `terrain_bake` library and the headless
 `TerrainTool` executable in `tools/TerrainTool/` read a source recipe, produce
 heights on this module's grid, encode a candidate release with this module's
@@ -132,6 +134,44 @@ The mesh has no renderer types. `app` converts it to renderer vertices,
 uploads it (traced like any mesh when ray tracing is on) and places the draw at placement plus
 origin in double (see [renderer.md](renderer.md) and [app.md](app.md)).
 
+The collider is one shape over the whole map (ADR 0017), so
+`BuildTerrainAreaSamples` gathers every tile's samples into one row-major
+block: exactly the cells the tile meshes cover, each sample taken from the tile
+that owns it, with its first sample as a terrain-local origin. `app` hands it to
+`PhysicsWorld::CreateStaticHeightField` at placement plus that origin.
+
+### Scene instances and pinned releases
+
+A scene holds terrain as a `TerrainInstance` component: the recipe path
+relative to the game's assetsRoot, nothing else. Its placement is the entity's
+Transform position, so the entity must be a root with identity rotation and
+unit scale. Tiles never become entities, and a scene file holds one small entity
+per instance.
+
+```cpp
+// scenes/default/entities/1.json: Transform at (150000.5, -20, -75000.25) and
+// TerrainInstance { "recipePath": "terrain/relief-2x2.terrain.json" }
+const TerrainSceneSpec spec = CollectTerrainScene(world, project.mAssetIdRoot);  // ids, placements, refusals
+std::vector<TerrainIssue> issues = spec.issues;
+TerrainWorld terrain = ResolveTerrainWorld(spec, TerrainReleasesRoot(gameDir), &loaded, issues);
+const TerrainHeightResult ground = terrain.HeightAt(position, 4.0);            // the instance holding the point
+```
+
+`ResolveTerrainWorld` opens the release each asset's `current` names, reads every
+pack whole (`VerifyAllPacks`) and preloads every tile into a
+`TerrainResidentRelease`: handle plus height query, the one source an
+instance's mesh, collider and queries derive from. Given what is loaded, it
+keeps an asset whose pointer has not moved without reading anything, and when a
+moved pointer names a release that does not load, it keeps the old one and
+remembers the refusal. `TerrainCurrentMoved` is the cheap poll that decides
+whether a resolve is worth running. Instances whose effective XZ bounds (map
+bounds plus translation) overlap are refused; touching ones both load.
+
+App owns the `TerrainWorld` World resource and replaces it only at an Edit frame
+boundary, together with the meshes and colliders (see [app.md](app.md)). One Play
+keeps the releases it entered with; a publish during Play is adopted at the
+first Edit frame boundary after Stop.
+
 ### Source, candidates and published releases
 
 A game's terrain has three places with separate lifetimes:
@@ -146,11 +186,11 @@ A game's terrain has three places with separate lifetimes:
 use: `ResolveTerrainAssetPath(idRoot, "terrain/hills.terrain.json")` gives the
 logical path and asset id (`idRoot` is the `GameProject::mAssetIdRoot`
 `LoadGameProject` builds), and `TerrainReleasesRoot(gameDir)` gives
-`<gameDir>/terrain/releases`. In a development build the engine's game
-directory is in the source tree (through `asset_workspace.json`, as
-`app/GameProject.cpp`'s project root), so it reads the releases the build just
-published; a build without the editor reads the copy its package step put next
-to the executable.
+`<gameDir>/terrain/releases`. The engine's game directory is
+`GameProject::mRootDir`, where it also reads the game's scenes: in a
+development build the source tree (through `asset_workspace.json`), so it reads
+the releases the build just published; a build without the editor reads the
+copy its package step put next to the executable.
 
 ```cpp
 const TerrainAssetPath source = ResolveTerrainAssetPath(project.mAssetIdRoot, "terrain/hills.terrain.json");
@@ -316,6 +356,14 @@ tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-
 | `TerrainTileMesh`, `TerrainMeshVertex` | `terrain/TerrainTileMesh.h` | one tile's raster mesh: release, surface version, tile, double origin, sample range, float vertices (position, normal), `TriangulateCell` indices, bounds |
 | `BuildTerrainTileMesh`, `TerrainMeshResult`, `TerrainMeshStatus` | `terrain/TerrainTileMesh.h` | builds it from a `TileSampleLookup`; `MissingTile`, `MissingNeighbour`, `InvalidSamples`, `InvalidInput` instead of a mesh |
 | `TerrainTileMeshWorldOrigin` | `terrain/TerrainTileMesh.h` | placement plus mesh origin in double; nullopt for another asset or an overflow |
+| `TerrainAreaSamples`, `BuildTerrainAreaSamples` | `terrain/TerrainAreaSamples.h` | every meshed cell's samples in one block from the owning tiles, with its first sample as origin, for one collider over the map; refuses more than `kMaxTerrainAreaSamplesPerSide` (32768) a side |
+| `TerrainInstance`, `RegisterTerrainComponents` | `terrain/components/TerrainInstance.h`, `terrain/ComponentRegistration.h` | the scene component: `recipePath` (String, at most 63 characters) relative to assetsRoot; placement is the root entity's Transform position |
+| `TerrainSceneSpec`, `TerrainInstanceSpec`, `TerrainIssue`, `TerrainIssueKind` | `terrain/TerrainScene.h` | what the World asks for, sorted by content; refusals with a one-line message (`MissingRecipe`, `BadRecipePath`, `InvalidPlacement`, `NoRelease`, `BadRelease`, `Overlap`); `HasTerrain` |
+| `CollectTerrainScene` | `terrain/TerrainScene.h` | reads every `TerrainInstance` and its Transform; resolves the asset id, checks the placement |
+| `TerrainResidentRelease` | `terrain/TerrainScene.h` | one release opened, verified (`VerifyAllPacks`) and preloaded; `Info`, `Layout`, `Query`, `Lookup` |
+| `TerrainWorld`, `TerrainInstanceState`, `TerrainWorldRect` | `terrain/TerrainScene.h` | World resource: per asset the pinned release and what `current` last named, per instance placement, effective XZ bounds and release; `HeightAt`, `SameDerivedState`, `RemoveInstance` |
+| `ResolveTerrainWorld`, `TerrainCurrentMoved` | `terrain/TerrainScene.h` | resolve a spec against the releases, reusing what is loaded; the Edit poll |
+| `PeekTerrainCurrentPointer` | `terrain/TerrainRelease.h` | `ReadTerrainCurrentPointer` without the FileIO log line when nothing is published |
 
 ## Rules
 
@@ -408,7 +456,8 @@ own IO failures once.
 
 **Only the release reader touches disk, and only to read.** It goes through
 core `ReadBytes`, `ReadByteRange`, `FileSize` and `ReadText`, opening a file
-per read. Nothing here writes a release or the `current` pointer: TerrainTool's
+per read; `PeekTerrainCurrentPointer` checks that the pointer exists first, so
+an Edit poll of an unpublished asset logs nothing. Nothing here writes a release or the `current` pointer: TerrainTool's
 bake writes the encoded bytes itself, into a candidate directory only, and its
 publish copies, verifies and switches the pointer.
 
@@ -532,20 +581,55 @@ keeps its origin and vertex frame but meshes just the cells whose rectangle
 reaches the valid extent, so padding samples appear only under those edge
 cells.
 
+**The collider covers what the meshes cover.** `BuildTerrainAreaSamples` takes
+the same cells (the first holds the min bound, the last reaches the max bound),
+so samples of cells wholly past a map edge never enter the collider and no hole
+value is needed. A shared edge sample comes from the tile that owns it (the
+larger index; the last tile owns the closed max edge), never from the
+neighbour's copy.
+
+**A placement is a root's translation, exactly.** `CollectTerrainScene` refuses
+a `TerrainInstance` without a Transform, on a child entity, with any rotation
+other than identity (`q` or `-q`, compared exactly, so an editor leftover is
+reported rather than rounded away) or any scale other than one. A refused
+instance does not load; nothing places terrain somewhere other than where the
+scene says.
+
+**Instances may touch, not overlap.** Two effective XZ rectangles that share
+positive area refuse both instances, whatever their order; sharing an edge or a
+corner is fine, and on the shared edge `TerrainWorld::HeightAt` answers from the
+first instance.
+
+**A release is used whole or not at all.** `TerrainResidentRelease::Load` reads
+every pack whole and every tile before anything derives from it. A failure is a
+`TerrainIssue` naming the recipe, asset, release and cause; for an asset that is
+already loaded, the old release stays and the message says so. No stand-in
+terrain.
+
+**Resolving reuses what is pinned.** An asset whose `current` still names what
+the previous `TerrainWorld` examined keeps that outcome, a release or a refusal,
+without reading the release again. So a broken publish is reported once, not on
+every poll, and a release stays the same object (and the same meshes and
+collider) until `current` moves to one that loads.
+
 ## State
 
 *As of 2026-10-02.* Layout, addressing, placement, identities, the canonical
-surface, the tile mesh builder, the release format, its in-memory encoder, the
-synchronous range reader and the resident height query with a synchronous
-preload work; nothing takes the query's payload requests yet (P3). No scene
-loads terrain yet: app's private `TerrainRender` uploads tile meshes but has no
-caller until the `TerrainInstance` work (#118). Its other non-test callers are
-offline: the `terrain_bake` library (#113: recipe, fingerprint, "mir.relief"
-generator; #115: bake, candidate directory, validation; #116: publish, sync,
-the per-asset lock) and the `TerrainTool` executable over it, tested by
-`terrain_tool_tests` (the CLI through `LaunchProcess`), plus AssetCooker, which
-only asks `IsTerrainFileExcludedFromCook`. Every build runs `TerrainTool sync`
-for each game recipe; no game has one yet (#118 adds `games/TerrainCheck/`).
+surface, the tile mesh builder, the collider block, the release format, its
+in-memory encoder, the synchronous range reader and the resident height query
+with a synchronous preload work; nothing takes the query's payload requests yet
+(P3). Scenes load terrain (#118): app's private `TerrainRuntime` resolves every
+`TerrainInstance` into the `TerrainWorld` resource and builds tile meshes and
+one height field per instance from the pinned release, and
+`games/TerrainCheck/` (a 2x2 relief at (150000.5, -20, -75000.25), ray tracing
+requested) runs as `smoke.TerrainCheck`. Offline callers: the `terrain_bake`
+library (#113: recipe, fingerprint, "mir.relief" generator; #115: bake,
+candidate directory, validation; #116: publish, sync, the per-asset lock) and
+the `TerrainTool` executable over it, tested by `terrain_tool_tests` (the CLI
+through `LaunchProcess`), plus AssetCooker, which only asks
+`IsTerrainFileExcludedFromCook`. Every build runs `TerrainTool sync` for each
+game recipe (today TerrainCheck's). Nothing outside C++ reads `TerrainWorld`
+yet: scripts have no height query.
 Bakes hold every tile in memory, as the encoder takes the whole set; that is
 fine for P1's small maps, not for a 150 km map. Old releases accumulate until a
 cleanup with a cross-process use protocol exists.
@@ -579,7 +663,16 @@ tiles), `TerrainTileMesh` (a vertex on every sample,
 `EvaluateSurface`, shared edges and normals at 4 m near and far and at 0.1 m,
 central-difference normals and missing neighbours, bounds, a clipped boundary
 layout, the identity of a release read in memory, far placements after
-camera-relative narrowing, sizes for 65 and 257 samples a side).
+camera-relative narrowing, sizes for 65 and 257 samples a side),
+`TerrainAreaSamples` (the meshed cells exactly on clipped, aligned and relief
+layouts, owner-tile samples with the other copies poisoned, refusals),
+`TerrainScene` (a far `TerrainInstance` through SceneIO and the Play snapshot
+with no tile entities, placement and path refusals, the engine and build
+spelling of one asset id, queries/meshes/collider block from one release at the
+far placement, missing/corrupt/incompatible releases next to a working one,
+touching and overlapping instances, a release pinned across a publish and the
+safe-point switch, a broken publish reported once and never re-read).
+`engine_terrain_tests` links `mir::scene` for that last file only.
 
 ## Backlog
 
@@ -587,8 +680,8 @@ camera-relative narrowing, sizes for 65 and 257 samples a side).
    the height query's payload requests, read each record's range, hand the
    bytes to `DecodeTerrainTile` and `Insert` the result; add eviction, retry
    and cancellation to the query's slots and decide its threading model.
-2. `TerrainInstance` scene data and overlap checks between placements, and a
-   World resource owning a height query per pinned release (#118).
+2. A script-facing height query over `TerrainWorld::HeightAt`; instances of
+   one asset share one release but upload their tile meshes once each.
 3. Per-tile source precision (P2), under the nesting rule above; the surface
    rule stays, the views will carry their spacing. The query takes it as a
    finer layer with `bakedTiles`; coarse levels (P3) as coarser layers with a
@@ -622,6 +715,15 @@ to the executable, would find no release. Now: `TerrainTool package` copies
 each recipe's current release and a `current` naming it there, and removes
 older copies; publish and package share `InstallTerrainRelease`.
 
+*2026-10-02* — **Scenes hold terrain, and Play pins its release (#118).** Was:
+nothing in a scene referred to terrain, and nothing in the engine opened a
+published release. Now: the `TerrainInstance` component (recipe path; the root
+entity's position is the placement), `CollectTerrainScene` and
+`ResolveTerrainWorld` (asset id, placement and overlap checks, open, verify,
+preload, reuse what is pinned), the `TerrainWorld` World resource with
+`HeightAt`, `TerrainCurrentMoved` and `PeekTerrainCurrentPointer` for Edit polls,
+and `BuildTerrainAreaSamples` for one collider over the map. App builds meshes
+and height fields from it and swaps them only at Edit frame boundaries.
 
 *2026-10-02* — **Published releases and the shared path rule (#116).**
 `terrain/TerrainAssetPath.h` adds `ResolveTerrainAssetPath`,

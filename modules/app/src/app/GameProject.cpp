@@ -138,6 +138,7 @@ namespace mir
         }
 
         project.mAssetIdRoot = std::move(idRoot.path);
+        project.mRootDir = root;
         project.mSceneDir = root / sceneDir;
         project.mProjectSettingsPath = root / kProjectSettingsFileName;
         project.mSoundBankDir = root / soundBanksRoot;

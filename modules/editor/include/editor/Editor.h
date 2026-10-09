@@ -17,6 +17,7 @@
 #include <editor/panels/InputSettingsPanel.h>
 #include <editor/panels/InspectorPanel.h>
 #include <editor/panels/LogPanel.h>
+#include <editor/panels/ProfilerPanel.h>
 #include <editor/panels/ProjectSettingsPanel.h>
 #include <imguiruntime/ImGuiRuntime.h>
 #include <renderer/RenderSettings.h>
@@ -95,7 +96,8 @@ namespace mir
         //between ImGuiRuntime::BeginFrame and EndFrame
         EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                                  const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-                                 std::string_view currentProject, World &world, const AssetImportView &assetImport);
+                                 std::string_view currentProject, World &world, const AssetImportView &assetImport,
+                                 const VulkanRenderer &renderer);
 
         VkRect2D SceneViewportRect() const { return mSceneViewportRect; }
 
@@ -127,6 +129,7 @@ namespace mir
         bool mShowProjectSettings = false;
         bool mShowInputSettings = false;
         bool mShowAssetImport = false;
+        bool mShowProfiler = false;
         std::string mImGuiIniPath;
         std::filesystem::path mProjectSettingsPath;
         VkRect2D mSceneViewportRect{};
@@ -138,6 +141,7 @@ namespace mir
         InspectorPanel mInspectorPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
         InputSettingsPanel mInputSettingsPanel;
+        ProfilerPanel mProfilerPanel;
         EditorCamera mCamera;
 
         // waiting on the confirm dialog

@@ -1,0 +1,63 @@
+{
+  "components": [
+    {
+      "fields": {
+        "position": [
+          149820.5,
+          -14.0,
+          -75100.25
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          2.0,
+          2.0,
+          2.0
+        ]
+      },
+      "type": "Transform"
+    },
+    {
+      "fields": {},
+      "type": "WorldTransform"
+    },
+    {
+      "fields": {
+        "materialShader": "default",
+        "meshName": "meshes/sphere.mesh.json",
+        "tint": [
+          0.95,
+          0.35,
+          0.2,
+          1.0
+        ]
+      },
+      "type": "MeshRenderer"
+    },
+    {
+      "fields": {
+        "halfExtent": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "motion": 1,
+        "radius": 2.0,
+        "shape": 1
+      },
+      "type": "RigidBody"
+    },
+    {
+      "fields": {
+        "name": "Sphere"
+      },
+      "type": "Name"
+    }
+  ],
+  "id": 4,
+  "parent": 0
+}

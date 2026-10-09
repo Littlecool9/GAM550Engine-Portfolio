@@ -34,6 +34,9 @@ namespace mir
         // asset id prefix, e.g. "games/HelloWorld/assets" - not a disk path
         std::string mAssetIdRoot;
 
+        // Source tree in a development build (asset_workspace.json), else next to the executable
+        std::filesystem::path mRootDir;
+
         std::filesystem::path mSceneDir;
         std::filesystem::path mProjectSettingsPath;
         std::filesystem::path mSoundBankDir;

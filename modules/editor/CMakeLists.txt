@@ -26,5 +26,6 @@ target_sources(engine_editor PRIVATE
     src/editor/panels/InputSettingsPanel.cpp
     src/editor/panels/InspectorPanel.cpp
     src/editor/panels/LogPanel.cpp
+    src/editor/panels/ProfilerPanel.cpp
     src/editor/panels/ProjectSettingsPanel.cpp
 )

@@ -11,6 +11,7 @@
 
 #include "MeshResolveSystem.h"
 #include "SceneResolve.h"
+#include "TerrainRuntime.h"
 #include <animation/ModelPlayer.h>
 #include <animation/ModelSystem.h>
 #include <assets/AssetPath.h>
@@ -39,6 +40,8 @@
 #include <scene/SceneIO.h>
 #include <script/ComponentRegistration.h>
 #include <script/ScriptSystem.h>
+#include <terrain/ComponentRegistration.h>
+#include <terrain/TerrainScene.h>
 
 #if MIR_WITH_EDITOR
 #include <editor/EntityBaseline.h>
@@ -69,6 +72,9 @@ namespace mir
                              input.IsDown(MouseButton::Left) };
         }
     }
+
+    // Never null; does nothing until Initialize binds it.
+    App::App() : mTerrain(std::make_unique<TerrainRuntime>()) {}
 
     App::~App() { Shutdown(); }
 
@@ -173,9 +179,12 @@ namespace mir
         RegisterScriptComponents();
         RegisterAudioComponents();
         RegisterModelPlayer();
+        RegisterTerrainComponents();
 
         mWorld.EmplaceResource<ModelDrawItems>();
         mWorld.EmplaceResource<ModelMorphOverrides>();
+        mWorld.EmplaceResource<TerrainDrawItems>();
+        mWorld.EmplaceResource<TerrainWorld>();
 
         // defers structural change
         mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
@@ -211,6 +220,8 @@ namespace mir
         mScheduler.AddSystem<AudioListenerSystem>(SystemPhase::PostUpdate);
 
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
+
+        mTerrain->Bind(mWorld, mRenderer, mProject);
 
         if (mDesc.mUIDemo)
             mUIDemo.Load(mGameUI, Assets());
@@ -298,6 +309,7 @@ namespace mir
 
         // saved names to script instances
         ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
+        mTerrain->Load();
         return true;
     }
 
@@ -305,6 +317,9 @@ namespace mir
     {
         if (IsPlaying(mWorld))
             return;
+
+        // Play pins the terrain releases present on entry
+        mTerrain->Refresh(0.0f, true);
 
         mPlaySnapshot = CaptureWorld(mWorld);
 
@@ -327,12 +342,16 @@ namespace mir
         mMeshResolveSystem->Reset();
         mWorld.Resource<ModelDrawItems>().items.clear();
         mWorld.Resource<ModelMorphOverrides>().instances.clear();
+        mTerrain->ForgetMeshes();
         mRenderer.ReleaseSceneResources();
 
         ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
 
         SetEngineMode(mWorld, EngineMode::Edit);
         SetPlayState(mWorld, PlayState::Running);
+
+        // Picks up a release published during Play
+        mTerrain->Refresh(0.0f, true);
     }
 
     void App::TogglePause()
@@ -394,6 +413,7 @@ namespace mir
             draws->items.clear();
         if (auto *overrides = mWorld.TryResource<ModelMorphOverrides>())
             overrides->instances.clear();
+        mTerrain->Unload();
         mRenderer.ReleaseSceneResources();
     }
 
@@ -472,6 +492,10 @@ namespace mir
                 ApplyImportedAssets();
         #endif
 
+            // Edit, between frames, before any system runs
+            if (IsEditing(mWorld))
+                mTerrain->Refresh(dt, false);
+
             mImGui.BeginFrame();
 
             if (mWindow->Width() != 0 && mWindow->Height() != 0)
@@ -479,7 +503,8 @@ namespace mir
             #if MIR_WITH_EDITOR
                 const EditorActions actions = mEditor.DrawLayout(
                     mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<RenderSettings>(),
-                    mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir, mWorld, mAssetImport.View());
+                    mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir, mWorld, mAssetImport.View(),
+                    mRenderer);
             #endif
 
                 mGameUI.BeginFrame(GameUIArea(), mWorld.Resource<InputState>(), mWorld.Resource<InputMap>(),

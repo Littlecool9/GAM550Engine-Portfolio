@@ -28,6 +28,7 @@ namespace mir
         {
             CancelListening();
             mDraftLoaded = false;
+            mStatusMessage.clear();
         }
 
     private:
@@ -46,6 +47,9 @@ namespace mir
         RawInputSnapshot mPreviousRaw;
 
         std::string mStatusMessage;
+        // mDraftInputMap as of the last time mStatusMessage was set; a further
+        // edit invalidates the message before it goes stale.
+        InputMap mMessageSnapshot;
 
         bool mDraftLoaded = false;
         InputMap mDraftInputMap;
