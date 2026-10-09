@@ -18,7 +18,7 @@ heights on this module's grid, encode a candidate release with this module's
 writer, validate it with its reader and publish it as an immutable release
 (see [TerrainTool CLI](#terraintool-cli)); the engine never links them.
 
-`mir::terrain` · depends `mir::assets`, `mir::core` (public) · API `modules/terrain/include/terrain/` · maintainer Jackey Cen · reviewed 2026-10-02
+`mir::terrain` · depends `mir::assets`, `mir::core` (public) · API `modules/terrain/include/terrain/` · maintainer Jackey Cen · reviewed 2026-10-08
 
 ## Model
 
@@ -27,7 +27,8 @@ one sample spacing `s` and `n` sample intervals per tile: sample `i` is at
 `i * s`, and tile `t` spans samples `t*n` to `(t+1)*n`. Tile edges, tile origins
 and sample positions all come from that one formula, so no two call sites can
 disagree on where an edge is. The tile size `n * s` is a property of the asset,
-not an engine constant; 256 m is only the prototype value.
+not an engine constant; 256 m is the accepted, revisable P1/P2 development
+baseline ([issue #24](https://github.com/GAM550F26/alpha/issues/24)).
 
 A `TerrainPlacement` puts one instance of an asset into the fixed Scene world by
 translation only. Addressing a world position subtracts the placement in double
@@ -80,6 +81,140 @@ const TerrainResult<TileHeights> tile = release.value->ReadTile({asset, {-3, 7}}
 A `TerrainReleaseHandle` is bound to the release it opened. When a later
 publish moves `current`, the handle keeps reading its own files, which are
 never changed after publication.
+
+### Size baseline (issue #24)
+
+For P1/P2 engine development, use **256 m logical tiles and 4096 m chunks
+(16 x 16 tiles)**. Keep the asset's tile size and the encoder's `chunkTiles`
+configurable. Source-spacing candidates remain **1, 2, 4 and 8 m**, giving
+256, 128, 64 and 32 intervals per tile respectively. The 1 m case is the
+highest-density development reference; this decision supplies a baseline for
+dependent engine work, without requiring game-specific entities or content.
+These sizes may change after P3 measurements.
+
+| Unit | Role and current relationship |
+|---|---|
+| Logical tile | Addressable source/final height data; payloads can be requested independently |
+| Chunk | Spatial grouping for index organization and possible regional work; does not require all member tiles resident |
+| `.tpack` | Physical container; format 1 maps each occupied chunk to one file |
+| Render patch / Region | Draw geometry; P1 has one mesh per tile, while future coarse Regions may combine tiles independently of chunks |
+| Physics area | Sample block for one collision shape; current App uses one area per terrain instance, independent of tile/chunk size |
+
+The following results describe the **2026-10-03 measurement build**. CPU
+experiments used `BakeFinalHeights`, `BuildTerrainTileMesh`,
+`BuildTerrainAreaSamples`, `EncodeTerrainRelease` and `PhysicsWorld` directly.
+At spacing `s`, a complete 256 m tile has `n = 256 / s` intervals,
+`(n+1)^2` stored boundary samples and vertices, and `6*n*n` uint32 indices.
+Clipped map-edge tiles retain their full height block but can have fewer mesh
+cells. All memory figures below are **bytes**.
+
+| Spacing | Samples = vertices | Indices | Height payload | CPU mesh | GPU buffer payload |
+|---|---:|---:|---:|---:|---:|
+| 1 m | 257² = 66049 | 393216 | 264196 | 3158040 | 5800000 |
+| 2 m | 129² = 16641 | 98304 | 66564 | 792600 | 1458240 |
+| 4 m | 65² = 4225 | 24576 | 16900 | 199704 | 368704 |
+| 8 m | 33² = 1089 | 6144 | 4356 | 50712 | 94272 |
+
+CPU mesh bytes use that build's 24-byte `TerrainMeshVertex` and uint32 indices;
+GPU payload uses its 64-byte renderer `Vertex` and the same indices. They
+exclude allocator overhead, staging buffers and other scene resources.
+Single-tile CPU mesh medians were 6.35 / 1.84 / 0.46 / 0.12 ms at the four
+spacings. In the initial tile comparison, the 1 m mesh took 1.86 / 6.35 /
+25.69 ms for 128 / 256 / 512 m tiles. The 256 m baseline balances fine-tile
+construction size against the larger submission counts of 128 m tiles in
+the measured one-mesh-per-tile implementation; P3 patch/Region batching must
+be measured again.
+
+The initial raster comparisons used TerrainCheck-derived terrain with a
+camera 1.7 m above the surface, and DepthProto-derived flight cases at 3000 m
+above the terrain placement, moving at 150/200 m/s. The 18 captures used an
+RTX 3070 Laptop GPU at 1280 x 720 with MAILBOX presentation and validation
+disabled. They used fixed LOD and full preload; they measure that rendering
+setup rather than P3 streaming behavior.
+
+The project's pinned **Jolt 5.5.0, port 2, double-precision build** was
+checked through `PhysicsWorld` with `blockSize=2`, `bitsPerSample=8`:
+
+| Spacing | Input side -> actual Jolt side | Shape bytes | Build median |
+|---|---:|---:|---:|
+| 1 m | 257 -> 258 | 246487 | 8.17 ms |
+| 2 m | 129 -> 130 | 62583 | 1.98 ms |
+| 4 m | 65 -> 66 | 16199 | 0.48 ms |
+| 8 m | 33 -> 34 | 4399 | 0.13 ms |
+
+Build timings include destroying the previous shape. All four closed corners
+hit, and four probes 0.25 sample spacings beyond the sides missed. The
+effective tile collision boundary remained **[0,256] x [0,256] m**: padding
+did not extend its collision surface. These are shape-construction and ray
+checks; collision residency areas remain an independent engine choice.
+
+Chunk comparisons used the same generated tiles on a **16384 m square map
+at 8 m spacing**, with signed bounds [-8192,8192] on both axes. The encoded
+height hash stayed identical. This covers complete 2048 / 4096 / 8192 m
+chunks; an 8192 m map centered at zero would give the last two sizes identical
+four-pack grouping and hide their full-chunk cost difference.
+
+Full positive-coordinate chunk-sized batches were also measured at all four
+spacings. The dense 1 m results are below; **MiB = 2^20 bytes**.
+
+| Chunk | Tiles per full chunk | Full tpack, 1 m | Serial generation | Encoding | Packs in 150 km map (expected) |
+|---|---:|---:|---:|---:|---:|
+| 2048 m | 64 | 16.126 MiB | 0.802 s | 97 ms | 5476 |
+| 4096 m | 256 | 64.504 MiB | 3.216 s | 380 ms | 1444 |
+| 8192 m | 1024 | 258.016 MiB | 13.050 s | 1565 ms | 400 |
+
+At 8 m the full packs were 0.267 / 1.066 / 4.266 MiB. The 150 km columns
+are layout-derived expectations, not a generated world: bounds [-75000,75000]
+give tile coordinates [-293,292], or 586² = 343396 tiles. Format 1's index is
+`128 + 88*tileCount + 32*packCount` bytes: 28.986 / 28.863 / 28.831 MiB for
+the three chunk sizes. Index footprint changes little; **4096 m trades fewer
+containers than 2048 m against roughly one-quarter of 8192 m's full-pack and
+regional batch size**. The serial batches use the measurement build's
+generator and whole-release encoder as proxies for future regional work;
+they do not implement regional scheduling or incremental publication.
+Generation and encoding timings include destroying the previous results.
+Live height payload and maximum file read buffer sizes are not process peak
+memory.
+
+File measurements wrote real index/tpack files and used `TerrainFileSource`,
+resetting byte-read statistics separately for index opening, full-pack
+verification and tile reads. Warm file reads confirmed that a tile fetch is
+**one range request**, for 264196 / 66564 / 16900 / 4356 bytes at the four
+spacings, independent of chunk size. On the common 8 m map, file read plus
+decoding took about 0.19-0.20 ms per tile. A storage workload with an 8 x 4
+tile window, sampled every 0.25 s along 40 s paths, yielded:
+
+| Path speed | Tile requests | Payload bytes | Distinct packs, 2048 / 4096 / 8192 m |
+|---|---:|---:|---:|
+| 150 m/s | 128 | 557568 | 10 / 6 / 4 |
+| 200 m/s | 156 | 679536 | 12 / 6 / 4 |
+
+This window is a storage workload, not a chosen render or physics radius.
+The path crosses the z=0 chunk boundary. Requests were replayed synchronously
+with first-request deduplication; they were not a real-time streaming run.
+`TerrainFileSource` opened a file per read, so payload file opens remained
+128 / 156, rather than the distinct-pack counts. Replay totals include data
+comparison and bookkeeping; per-request latency is from the last measured
+replay. `Open` read the index and `VerifyAllPacks` separately read every pack
+whole. P1's subsequent tile preload must not be confused with a P3 request
+workload. Buffered writes were measured without a durable flush; warm reads
+cannot set cold-storage or end-to-end streaming budgets.
+
+Measurements: 2026-10-03, Ryzen 7 5800H, Release; one warm-up followed by
+five repeats for tile/Jolt and three for chunk measurements, reporting
+medians. That build's Debug and Release each passed all 679 CTests, including
+8 smoke tests. The measurement executables and raw captures are retained
+with the local #24 spike. This document records the results and protocol;
+it does not add those executables to the repository. Counts/memory,
+pinned-Jolt padding/boundaries, and the revisable size choice cover
+[#24's acceptance criteria](https://github.com/GAM550F26/alpha/issues/24).
+
+When implementing P3, measure asynchronous range-read queues, cache/eviction
+behavior, validation policy, upload and mesh work per frame, and complete
+request-to-ready latency at 150/200 m/s. Measure patch/Region batching,
+coarse geometry/error and collision-area residency independently. Use those
+results to revisit the tile and chunk parameters; this baseline does not set
+permanent distance, memory or latency thresholds.
 
 ### Height queries
 
@@ -614,7 +749,9 @@ collider) until `current` moves to one that loads.
 
 ## State
 
-*As of 2026-10-02.* Layout, addressing, placement, identities, the canonical
+*As of 2026-10-08.* The accepted P1/P2 size baseline is 256 m tiles and
+4096 m chunks; see [the measurements](#size-baseline-issue-24). Layout,
+addressing, placement, identities, the canonical
 surface, the tile mesh builder, the collider block, the release format, its
 in-memory encoder, the synchronous range reader and the resident height query
 with a synchronous preload work; nothing takes the query's payload requests yet
@@ -708,6 +845,13 @@ safe-point switch, a broken publish reported once and never re-read).
     fingerprint, or sync keeps the old release current.
 
 ## Changed
+
+*2026-10-08* — **Recorded measured P1/P2 sizes ([#24](https://github.com/GAM550F26/alpha/issues/24)).**
+Accepted 256 m logical tiles and 4096 m chunks as revisable engine-development
+defaults, using measurements collected on 2026-10-03 for sample/mesh memory,
+pinned-Jolt padding/boundaries, chunk grouping and file reads. Render Regions,
+physics areas and P3 streaming budgets remain independent. This is a
+documentation decision; the production terrain runtime is unchanged.
 
 *2026-10-03* — **A build without the editor packages terrain (#116).** Was: no
 packaging step, so the `windows-msvc-game-*` builds, which read `games/` next
