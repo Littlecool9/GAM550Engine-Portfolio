@@ -9,7 +9,7 @@
 
 #include "WorldBindings.h"
 
-#include "LuaWorldVec3.h"
+#include "BindingHelpers.h"
 
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/DeferredAccess.h>

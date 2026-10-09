@@ -1,5 +1,5 @@
 /**
- * @file LuaWorldVec3.h
+ * @file BindingHelpers.h
  * @author Jackey Cen
  * @brief World positions to and from Lua {x, y, z} tables, read as double.
  *

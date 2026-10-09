@@ -1,6 +1,15 @@
+/**
+ * @file PhysicsBindings.cpp
+ * @author Jackey Cen
+ * @brief Extends the World usertype with RigidBody velocity, force and impulse calls and world:raycast.
+ *
+ * @copyright Copyright (c) 2026 DigiPen (USA) Corporation
+ *
+ */
+
 #include "PhysicsBindings.h"
 
-#include "LuaWorldVec3.h"
+#include "BindingHelpers.h"
 
 #include <core/ecs/World.h>
 #include <core/log/Log.h>
