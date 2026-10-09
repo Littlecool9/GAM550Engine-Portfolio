@@ -1566,3 +1566,45 @@ TEST_CASE("Keep-world reparent holds a far pose", "[ecs][transform][hierarchy][k
     REQUIRE(mir::SetParent(world, child, mir::kNullEntity));
     CHECK(MaxError(WorldOf(world, child), start) <= 1e-9);
 }
+
+TEST_CASE("CanSetParent answers as SetParent would, without changing anything", "[ecs][transform][hierarchy][order]")
+{
+    World world;
+    mir::InstallHierarchy(world);
+    const Entity a = world.CreateEntity();
+    const Entity b = world.CreateEntity();
+    const Entity child = world.CreateEntity();
+    REQUIRE(mir::SetParent(world, child, a));
+
+    CHECK(mir::CanSetParent(world, b, a));
+    CHECK(mir::CanSetParent(world, b, a, child));
+    CHECK(mir::CanSetParent(world, b, mir::kNullEntity, a));
+    CHECK_FALSE(mir::CanSetParent(world, a, a));
+    CHECK_FALSE(mir::CanSetParent(world, a, child));
+    CHECK_FALSE(mir::CanSetParent(world, b, a, b));
+    CHECK_FALSE(mir::CanSetParent(world, b, a, a));
+
+    CHECK(mir::ParentOf(world, b).IsNull());
+    CHECK(RootsOf(world) == std::vector<Entity>{ a, b });
+}
+
+TEST_CASE("TopmostInHierarchyOrder sorts by hierarchy and drops listed descendants", "[ecs][transform][hierarchy][order]")
+{
+    World world;
+    mir::InstallHierarchy(world);
+    const Entity a = world.CreateEntity();
+    const Entity b = world.CreateEntity();
+    const Entity x = world.CreateEntity();
+    const Entity y = world.CreateEntity();
+    const Entity grandchild = world.CreateEntity();
+    REQUIRE(mir::SetParent(world, x, a));
+    REQUIRE(mir::SetParent(world, y, a));
+    REQUIRE(mir::SetParent(world, grandchild, x));
+
+    // click order, not hierarchy order
+    const std::vector<Entity> picked{ b, y, x };
+    CHECK(mir::TopmostInHierarchyOrder(world, picked) == std::vector<Entity>{ x, y, b });
+
+    const std::vector<Entity> nested{ grandchild, a, b };
+    CHECK(mir::TopmostInHierarchyOrder(world, nested) == std::vector<Entity>{ a, b });
+}

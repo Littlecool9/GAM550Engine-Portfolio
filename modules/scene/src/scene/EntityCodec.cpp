@@ -20,7 +20,9 @@
 #include <charconv>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace mir
@@ -193,6 +195,31 @@ namespace mir
 
         // Marks an EntityRef written as a live handle rather than an id in the set
         constexpr const char *kLiveEntityKey = "entity";
+        constexpr const char *kSiblingIndexKey = "siblingIndex";
+
+        // Missing on scenes saved before sibling order; sorts after every saved index, then by id
+        constexpr uint32_t kNoSiblingIndex = std::numeric_limits<uint32_t>::max();
+
+        // Position among the siblings this save writes, so entities outside it leave no gaps
+        uint32_t SiblingIndexOf(const World &world, Entity entity, const EntityIdMap &ids)
+        {
+            const HierarchyIndex *index = world.TryResource<HierarchyIndex>();
+            if (index == nullptr)
+                return 0;
+
+            const Entity parent = index->ParentOf(entity);
+            const std::span<const Entity> siblings = parent.IsNull() ? index->Roots() : index->ChildrenOf(parent);
+
+            uint32_t position = 0;
+            for (const Entity sibling : siblings)
+            {
+                if (sibling == entity)
+                    break;
+                if (ids.contains(PackEntity(sibling)))
+                    ++position;
+            }
+            return position;
+        }
 
         json RefToJson(Entity ref, const EntityIdMap &ids, bool keepOutsideRefs)
         {
@@ -247,6 +274,7 @@ namespace mir
         const Entity parent = ParentOf(world, entity);
         const auto parentIt = ids.find(PackEntity(parent));
         file["parent"] = (!parent.IsNull() && parentIt != ids.end()) ? parentIt->second : kNullStableId;
+        file[kSiblingIndexKey] = SiblingIndexOf(world, entity, ids);
 
         ComponentRegistry &registry = ComponentRegistry::Instance();
 
@@ -289,6 +317,9 @@ namespace mir
     std::map<StableId, Entity> SpawnEntities(World &world, const std::vector<std::pair<StableId, json>> &entities,
         bool resolveOutsideRefs)
     {
+        // before any create, so the sorted creation order below sets the root order
+        InstallHierarchy(world);
+
         std::map<StableId, Entity> spawned;
         ComponentRegistry &registry = ComponentRegistry::Instance();
 
@@ -309,9 +340,27 @@ namespace mir
         };
         std::vector<PendingParent> pendingParents;
 
+        // Creation order sets root order and parent replay order sets child order,
+        // so one sort by (siblingIndex, id) restores both
+        std::vector<const std::pair<StableId, json> *> ordered;
+        ordered.reserve(entities.size());
+        for (const auto &entry : entities)
+            ordered.push_back(&entry);
+
+        const auto siblingIndex = [](const json &ejson)
+            {
+                const auto it = ejson.find(kSiblingIndexKey);
+                return it != ejson.end() && it->is_number_unsigned() ? it->get<uint32_t>() : kNoSiblingIndex;
+            };
+        std::sort(ordered.begin(), ordered.end(), [&siblingIndex](const auto *a, const auto *b)
+            {
+                return std::pair(siblingIndex(a->second), a->first) < std::pair(siblingIndex(b->second), b->first);
+            });
+
         // 1. spawn every entity, add its components, write every non-EntityRef field
-        for (const auto &[id, ejson] : entities)
+        for (const auto *entry : ordered)
         {
+            const auto &[id, ejson] = *entry;
             Entity entity = world.CreateEntity();
             spawned[id] = entity;
 

@@ -677,6 +677,26 @@ namespace mir
             if (const Entity copy = DuplicateSceneEntity(mWorld, mScene, action.mTarget); !copy.IsNull())
                 selection.mSelected = { copy };
             break;
+        case EntityActionKind::Reparent:
+            {
+                // one invalid entity refuses the whole drop
+                if (!CanSetParentAll(mWorld, action.mTargets, action.mParent, action.mBefore))
+                    return;
+
+                const std::vector<Entity> moved = TopmostInHierarchyOrder(mWorld, action.mTargets);
+
+                for (const Entity entity : moved)
+                {
+                    if (action.mBefore.IsNull() && ParentOf(mWorld, entity) == action.mParent)
+                        MoveToLastSibling(mWorld, entity);
+                    else
+                        SetParent(mWorld, entity, action.mParent, action.mBefore);
+                }
+
+                if (!moved.empty())
+                    selection.mSelected = moved;
+                break;
+            }
         case EntityActionKind::None:
             break;
         }

@@ -155,7 +155,7 @@ namespace mir
         return node ? &node->children : nullptr;
     }
 
-    bool HierarchyIndex::SetParent(Entity child, Entity parent, Entity before)
+    bool HierarchyIndex::CanSetParent(Entity child, Entity parent, Entity before) const
     {
         if (child.IsNull())
             return false;
@@ -183,6 +183,14 @@ namespace mir
             if (DepthOf(parent) + 1 + HeightOf(child) >= kMaxHierarchyDepth)
                 return false;
         }
+
+        return true;
+    }
+
+    bool HierarchyIndex::SetParent(Entity child, Entity parent, Entity before)
+    {
+        if (!CanSetParent(child, parent, before))
+            return false;
 
         const Entity previous = ParentOf(child);
         if (previous == parent && before.IsNull())

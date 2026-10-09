@@ -31,17 +31,23 @@ namespace mir
         const Transform &transform = Transform{},
         Entity parent = kNullEntity);
 
-    // Inserts `child` before sibling `before`, or last when null. Same parent with
-    // null `before` is a no-op. `keepWorld` rewrites the local Transform so the world
-    // pose holds (shear is dropped); false leaves it untouched
+    // Inserts child before sibling before, or last when null
     bool SetParent(World &world, Entity child, Entity parent, Entity before = kNullEntity, bool keepWorld = true);
 
     bool MoveToLastSibling(World &world, Entity entity);
 
-    // Parent of `entity`, or null. Reads the graph without creating it.
+    bool CanSetParent(const World &world, Entity child, Entity parent, Entity before = kNullEntity);
+
+    // entities in hierarchy order (roots first, depth-first), minus any whose ancestor is also listed
+    std::vector<Entity> TopmostInHierarchyOrder(const World &world, std::span<const Entity> entities);
+
+    // Check CanSetParent for every topmost entity
+    bool CanSetParentAll(const World &world, std::span<const Entity> entities, Entity parent, Entity before);
+
+    // Parent of entity, or null. Reads the graph without creating it.
     Entity ParentOf(const World &world, Entity entity);
 
-    // True if `ancestor` is `entity` or any transitive parent of it.
+    // True if ancestor is entity or any transitive parent of it.
     bool IsAncestorOf(const World &world, Entity ancestor, Entity entity);
 
     // Installs the HierarchyIndex resource and its create and destroy hooks

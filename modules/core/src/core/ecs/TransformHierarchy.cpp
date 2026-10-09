@@ -15,6 +15,7 @@
 #include "core/log/Assert.h"
 #include "core/log/Log.h"
 
+#include <algorithm>
 #include <optional>
 
 namespace mir
@@ -297,6 +298,58 @@ namespace mir
 
         InvalidateCache(world, child);
         return true;
+    }
+
+    bool CanSetParent(const World &world, Entity child, Entity parent, Entity before)
+    {
+        if (!world.IsAlive(child) || (!parent.IsNull() && !world.IsAlive(parent)))
+            return false;
+
+        const HierarchyIndex *index = world.TryResource<HierarchyIndex>();
+        if (index == nullptr)
+            return child != parent && before.IsNull();
+
+        return index->CanSetParent(child, parent, before);
+    }
+
+    std::vector<Entity> TopmostInHierarchyOrder(const World &world, std::span<const Entity> entities)
+    {
+        std::vector<Entity> ordered;
+        const HierarchyIndex *index = world.TryResource<HierarchyIndex>();
+        if (index == nullptr)
+            return ordered;
+
+        const auto listed = [&entities](Entity entity)
+            {
+                return std::find(entities.begin(), entities.end(), entity) != entities.end();
+            };
+
+// a listed entity's subtree is skipped, which drops its listed descendants
+        std::vector<Entity> pending(index->Roots().rbegin(), index->Roots().rend());
+        while (!pending.empty())
+        {
+            const Entity entity = pending.back();
+            pending.pop_back();
+
+            if (listed(entity))
+            {
+                ordered.push_back(entity);
+                continue;
+            }
+
+            const std::span<const Entity> children = index->ChildrenOf(entity);
+            pending.insert(pending.end(), children.rbegin(), children.rend());
+        }
+        return ordered;
+    }
+
+    bool CanSetParentAll(const World &world, std::span<const Entity> entities, Entity parent, Entity before)
+    {
+        const std::vector<Entity> moved = TopmostInHierarchyOrder(world, entities);
+        return !moved.empty() && std::all_of(moved.begin(), moved.end(), [&](Entity entity)
+            {
+                return CanSetParent(world, entity, parent, before);
+            });
     }
 
     bool MoveToLastSibling(World &world, Entity entity)

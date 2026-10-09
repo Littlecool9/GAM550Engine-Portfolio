@@ -46,6 +46,8 @@ namespace mir
         // Levels below `entity`. 0 for a leaf.
         uint32_t HeightOf(Entity entity) const;
 
+        bool CanSetParent(Entity child, Entity parent, Entity before) const;
+
         std::size_t NodeCount() const;
 
     private:
