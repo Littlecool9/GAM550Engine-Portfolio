@@ -24,6 +24,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace
@@ -47,7 +48,7 @@ namespace
     Entity MakeAt(World &world, const glm::vec3 &position)
     {
         const Entity entity = world.CreateEntity();
-        mir::AddTransform(world, entity, Transform{position});
+        mir::AddTransform(world, entity, Transform{ position });
         return entity;
     }
 
@@ -56,6 +57,12 @@ namespace
     bool Contains(const std::vector<Entity> &entities, Entity entity)
     {
         return std::find(entities.begin(), entities.end(), entity) != entities.end();
+    }
+
+    std::vector<Entity> RootsOf(const World &world)
+    {
+        const std::span<const Entity> roots = world.Resource<mir::HierarchyIndex>().Roots();
+        return { roots.begin(), roots.end() };
     }
 }
 
@@ -213,7 +220,7 @@ TEST_CASE("AddTransform can parent on creation", "[ecs][transform][hierarchy]")
     const Entity parent = MakeAt(world, glm::vec3(10.0f, 0.0f, 0.0f));
 
     const Entity child = world.CreateEntity();
-    mir::AddTransform(world, child, Transform{glm::vec3(0.0f, 1.0f, 0.0f)}, parent);
+    mir::AddTransform(world, child, Transform{ glm::vec3(0.0f, 1.0f, 0.0f) }, parent);
 
     RequireNear(OriginOf(mir::ResolveWorld(world, child)), glm::vec3(10.0f, 1.0f, 0.0f));
 }
@@ -350,7 +357,9 @@ TEST_CASE("A destroy hook fires with components still readable", "[ecs][hooks]")
     seen = 0;
 
     world.AddDestroyHook([](World &w, Entity e, void *)
-                         { seen += (w.GetComponent<Transform>(e) != nullptr) ? 1 : 0; });
+        {
+            seen += (w.GetComponent<Transform>(e) != nullptr) ? 1 : 0;
+        });
 
     const Entity a = MakeAt(world, glm::vec3(0.0f));
     const Entity b = MakeAt(world, glm::vec3(0.0f));
@@ -371,7 +380,9 @@ TEST_CASE("The same destroy hook is only installed once", "[ecs][hooks]")
     calls = 0;
 
     void (*hook)(World &, Entity, void *) = [](World &, Entity, void *)
-    { ++calls; };
+        {
+            ++calls;
+        };
     world.AddDestroyHook(hook);
     world.AddDestroyHook(hook);
     world.AddDestroyHook(hook);
@@ -379,6 +390,28 @@ TEST_CASE("The same destroy hook is only installed once", "[ecs][hooks]")
     world.DestroyEntity(world.CreateEntity());
 
     CHECK(calls == 1);
+}
+
+TEST_CASE("A create hook fires once per entity, after it exists", "[ecs][hooks]")
+{
+    World world;
+    static int calls = 0;
+    calls = 0;
+
+    void (*hook)(World &, Entity, void *) = [](World &w, Entity e, void *)
+        {
+            calls += w.IsAlive(e) ? 1 : 0;
+        };
+    world.AddCreateHook(hook);
+    world.AddCreateHook(hook);
+
+    world.CreateEntity();
+    world.CreateEntity();
+    CHECK(calls == 2);
+
+    world.RemoveCreateHook(hook);
+    world.CreateEntity();
+    CHECK(calls == 2);
 }
 
 TEST_CASE("Repeated AddTransform installs one hierarchy hook", "[ecs][hooks]")
@@ -415,7 +448,9 @@ TEST_CASE("ForEachChild visits every direct child and no deeper", "[ecs][transfo
 
     std::vector<Entity> seen;
     mir::ForEachChild(world, root, [&seen](Entity e)
-                      { seen.push_back(e); });
+        {
+            seen.push_back(e);
+        });
 
     CHECK(seen.size() == 3);
     CHECK(Contains(seen, a));
@@ -443,7 +478,9 @@ TEST_CASE("RemoveComponent can no longer corrupt the graph", "[ecs][transform][h
 
     std::vector<Entity> seen;
     mir::ForEachChild(world, root, [&seen](Entity e)
-                      { seen.push_back(e); });
+        {
+            seen.push_back(e);
+        });
 
     CHECK(seen.size() == 3);
     CHECK(Contains(seen, a));
@@ -458,7 +495,9 @@ TEST_CASE("ForEachChild on a leaf visits nothing", "[ecs][transform][hierarchy][
 
     std::size_t count = 0;
     mir::ForEachChild(world, leaf, [&count](Entity)
-                      { ++count; });
+        {
+            ++count;
+        });
 
     CHECK(count == 0);
 }
@@ -478,10 +517,12 @@ TEST_CASE("Unlinking keeps the remaining children in order", "[ecs][transform][h
 
     std::vector<Entity> seen;
     mir::ForEachChild(world, root, [&seen](Entity e)
-                      { seen.push_back(e); });
+        {
+            seen.push_back(e);
+        });
 
-    // Insertion order survives an erase from the middle, which the intrusive
-    // chain this replaced could not promise.
+// Insertion order survives an erase from the middle, which the intrusive
+// chain this replaced could not promise.
     REQUIRE(seen.size() == 2);
     CHECK(seen[0] == a);
     CHECK(seen[1] == c);
@@ -502,7 +543,9 @@ TEST_CASE("Children come back in insertion order", "[ecs][transform][hierarchy][
 
     std::vector<Entity> seen;
     mir::ForEachChild(world, root, [&seen](Entity e)
-                      { seen.push_back(e); });
+        {
+            seen.push_back(e);
+        });
 
     CHECK(seen == added);
 }
@@ -520,13 +563,100 @@ TEST_CASE("Reparenting moves a child between chains", "[ecs][transform][hierarch
     std::vector<Entity> fromFirst;
     std::vector<Entity> fromSecond;
     mir::ForEachChild(world, first, [&fromFirst](Entity e)
-                      { fromFirst.push_back(e); });
+        {
+            fromFirst.push_back(e);
+        });
     mir::ForEachChild(world, second, [&fromSecond](Entity e)
-                      { fromSecond.push_back(e); });
+        {
+            fromSecond.push_back(e);
+        });
 
     CHECK(fromFirst.empty());
     CHECK(fromSecond.size() == 1);
     CHECK(fromSecond.front() == child);
+}
+
+TEST_CASE("Roots come back in creation order", "[ecs][transform][hierarchy][roots]")
+{
+    World world;
+    mir::InstallHierarchy(world);
+
+    const Entity a = world.CreateEntity();
+    const Entity b = world.CreateEntity();
+    const Entity c = world.CreateEntity();
+
+    CHECK(RootsOf(world) == std::vector<Entity>{ a, b, c });
+}
+
+TEST_CASE("Entities made before the install become roots in slot order", "[ecs][transform][hierarchy][roots]")
+{
+    World world;
+    const Entity a = world.CreateEntity();
+    const Entity b = world.CreateEntity();
+
+    mir::InstallHierarchy(world);
+    const Entity c = world.CreateEntity();
+
+    CHECK(RootsOf(world) == std::vector<Entity>{ a, b, c });
+}
+
+TEST_CASE("Parenting leaves the roots and rooting appends", "[ecs][transform][hierarchy][roots]")
+{
+    World world;
+    mir::InstallHierarchy(world);
+    const Entity a = world.CreateEntity();
+    const Entity b = world.CreateEntity();
+    const Entity c = world.CreateEntity();
+
+    REQUIRE(mir::SetParent(world, a, c));
+    CHECK(RootsOf(world) == std::vector<Entity>{ b, c });
+
+    REQUIRE(mir::SetParent(world, a, b));
+    CHECK(RootsOf(world) == std::vector<Entity>{ b, c });
+
+    REQUIRE(mir::SetParent(world, a, mir::kNullEntity));
+    CHECK(RootsOf(world) == std::vector<Entity>{ b, c, a });
+}
+
+TEST_CASE("A refused reparent leaves the roots alone", "[ecs][transform][hierarchy][roots]")
+{
+    World world;
+    mir::InstallHierarchy(world);
+    const Entity a = world.CreateEntity();
+    const Entity b = world.CreateEntity();
+    REQUIRE(mir::SetParent(world, b, a));
+
+    CHECK_FALSE(mir::SetParent(world, a, b));
+    CHECK(RootsOf(world) == std::vector<Entity>{ a });
+}
+
+TEST_CASE("Destroying a root takes it and its subtree out of the roots", "[ecs][transform][hierarchy][roots][destroy]")
+{
+    World world;
+    mir::InstallHierarchy(world);
+    const Entity a = world.CreateEntity();
+    const Entity b = world.CreateEntity();
+    const Entity child = world.CreateEntity();
+    REQUIRE(mir::SetParent(world, child, a));
+
+    world.DestroyEntity(a);
+    CHECK(RootsOf(world) == std::vector<Entity>{ b });
+
+    // a reused slot joins at the end, not at its old place
+    const Entity reused = world.CreateEntity();
+    CHECK(RootsOf(world) == std::vector<Entity>{ b, reused });
+}
+
+TEST_CASE("Destroying a child leaves the roots alone", "[ecs][transform][hierarchy][roots][destroy]")
+{
+    World world;
+    mir::InstallHierarchy(world);
+    const Entity a = world.CreateEntity();
+    const Entity child = world.CreateEntity();
+    REQUIRE(mir::SetParent(world, child, a));
+
+    world.DestroyEntity(child);
+    CHECK(RootsOf(world) == std::vector<Entity>{ a });
 }
 
 TEST_CASE("ForEachDescendant reaches the whole subtree", "[ecs][transform][hierarchy][walk]")
@@ -543,7 +673,9 @@ TEST_CASE("ForEachDescendant reaches the whole subtree", "[ecs][transform][hiera
 
     std::vector<Entity> seen;
     mir::ForEachDescendant(world, root, [&seen](Entity e)
-                           { seen.push_back(e); });
+        {
+            seen.push_back(e);
+        });
 
     CHECK(seen.size() == 3);
     CHECK(Contains(seen, a));
@@ -566,11 +698,11 @@ TEST_CASE("A child may be destroyed inside ForEachChild", "[ecs][transform][hier
 
     std::size_t visited = 0;
     mir::ForEachChild(world, root,
-                      [&world, &visited](Entity child)
-                      {
-                          ++visited;
-                          world.DestroyEntity(child);
-                      });
+        [&world, &visited](Entity child)
+        {
+            ++visited;
+            world.DestroyEntity(child);
+        });
 
     CHECK(visited == 2);
     CHECK_FALSE(world.IsAlive(a));
@@ -597,7 +729,9 @@ TEST_CASE("Destroying a child leaves its siblings walkable", "[ecs][transform][h
 
     std::vector<Entity> seen;
     mir::ForEachChild(world, root, [&seen](Entity e)
-                      { seen.push_back(e); });
+        {
+            seen.push_back(e);
+        });
 
     CHECK(seen.size() == 2);
     CHECK_FALSE(Contains(seen, removed));
@@ -632,8 +766,8 @@ TEST_CASE("AddTransform is idempotent", "[ecs][transform][hierarchy]")
     World world;
     const Entity entity = world.CreateEntity();
 
-    mir::AddTransform(world, entity, Transform{glm::vec3(1.0f, 0.0f, 0.0f)});
-    mir::AddTransform(world, entity, Transform{glm::vec3(0.0f, 2.0f, 0.0f)});
+    mir::AddTransform(world, entity, Transform{ glm::vec3(1.0f, 0.0f, 0.0f) });
+    mir::AddTransform(world, entity, Transform{ glm::vec3(0.0f, 2.0f, 0.0f) });
 
     const Entity bystander = MakeAt(world, glm::vec3(9.0f, 9.0f, 9.0f));
 
@@ -649,7 +783,7 @@ TEST_CASE("Parenting to a bare Transform still links", "[ecs][transform][hierarc
     // structure is not carried by components.
     World world;
     const Entity parent = world.CreateEntity();
-    world.AddComponent<Transform>(parent, Transform{glm::vec3(10.0f, 0.0f, 0.0f)});
+    world.AddComponent<Transform>(parent, Transform{ glm::vec3(10.0f, 0.0f, 0.0f) });
 
     const Entity child = MakeAt(world, glm::vec3(0.0f, 1.0f, 0.0f));
     CHECK(mir::SetParent(world, child, parent));
@@ -659,7 +793,9 @@ TEST_CASE("Parenting to a bare Transform still links", "[ecs][transform][hierarc
 
     std::vector<Entity> seen;
     mir::ForEachChild(world, parent, [&seen](Entity e)
-                      { seen.push_back(e); });
+        {
+            seen.push_back(e);
+        });
     CHECK(seen.size() == 1);
 }
 
@@ -693,14 +829,18 @@ TEST_CASE("AddTransform relinks an already-parented entity", "[ecs][transform][h
     const Entity b = MakeAt(world, glm::vec3(0.0f));
 
     mir::SetParent(world, b, a);
-    mir::AddTransform(world, b, Transform{glm::vec3(1.0f, 0.0f, 0.0f)}, c);
+    mir::AddTransform(world, b, Transform{ glm::vec3(1.0f, 0.0f, 0.0f) }, c);
 
     std::vector<Entity> fromA;
     std::vector<Entity> fromC;
     mir::ForEachChild(world, a, [&fromA](Entity e)
-                      { fromA.push_back(e); });
+        {
+            fromA.push_back(e);
+        });
     mir::ForEachChild(world, c, [&fromC](Entity e)
-                      { fromC.push_back(e); });
+        {
+            fromC.push_back(e);
+        });
 
     CHECK(fromA.empty());
     CHECK(fromC.size() == 1);
@@ -726,15 +866,15 @@ TEST_CASE("ForEachChild survives fn touching other children", "[ecs][transform][
 
     std::vector<Entity> seen;
     mir::ForEachChild(world, root,
-                      [&](Entity child)
-                      {
-                          seen.push_back(child);
-                          if (child == b)
-                          {
-                              mir::SetParent(world, a, elsewhere);
-                              world.DestroyEntity(b);
-                          }
-                      });
+        [&](Entity child)
+        {
+            seen.push_back(child);
+            if (child == b)
+            {
+                mir::SetParent(world, a, elsewhere);
+                world.DestroyEntity(b);
+            }
+        });
 
     CHECK(Contains(seen, c)); // the one a position-resume walk would skip
     CHECK(Contains(seen, d));
@@ -807,7 +947,7 @@ TEST_CASE("A Transform without a WorldTransform still resolves", "[ecs][transfor
     const Entity parent = MakeAt(world, glm::vec3(10.0f, 0.0f, 0.0f));
 
     const Entity child = world.CreateEntity();
-    world.AddComponent<Transform>(child, Transform{glm::vec3(0.0f, 1.0f, 0.0f)}); // no cache component
+    world.AddComponent<Transform>(child, Transform{ glm::vec3(0.0f, 1.0f, 0.0f) }); // no cache component
     mir::SetParent(world, child, parent);
 
     RequireNear(OriginOf(mir::ResolveWorld(world, child)), glm::vec3(10.0f, 1.0f, 0.0f));
@@ -822,7 +962,7 @@ TEST_CASE("An uncached ancestor does not let a descendant go stale", "[ecs][tran
     const Entity root = MakeAt(world, glm::vec3(1.0f, 0.0f, 0.0f));
 
     const Entity middle = world.CreateEntity();
-    world.AddComponent<Transform>(middle, Transform{glm::vec3(1.0f, 0.0f, 0.0f)});
+    world.AddComponent<Transform>(middle, Transform{ glm::vec3(1.0f, 0.0f, 0.0f) });
     mir::SetParent(world, middle, root);
 
     const Entity leaf = MakeAt(world, glm::vec3(1.0f, 0.0f, 0.0f));
@@ -845,7 +985,7 @@ TEST_CASE("TransformPropagateSystem refreshes every cache", "[ecs][transform][hi
     const Entity child = MakeAt(world, glm::vec3(0.0f, 1.0f, 0.0f));
     mir::SetParent(world, child, parent);
 
-    mir::SystemContext context{world, commands};
+    mir::SystemContext context{ world, commands };
     scheduler.Start(context);
     scheduler.Update(context);
 
@@ -862,9 +1002,9 @@ TEST_CASE("TransformPropagateSystem refreshes every cache", "[ecs][transform][hi
 namespace
 {
     // Map-edge points from the terrain plan's ~150 km map, both signs on X/Z.
-    constexpr mir::WorldVec3 kEdgeA{-150000.125, 350.5, 75000.5};
-    constexpr mir::WorldVec3 kEdgeB{150000.625, -20.0, -75000.25};
-    constexpr mir::WorldVec3 kStep{0.001, -0.002, 0.003};
+    constexpr mir::WorldVec3 kEdgeA{ -150000.125, 350.5, 75000.5 };
+    constexpr mir::WorldVec3 kEdgeB{ 150000.625, -20.0, -75000.25 };
+    constexpr mir::WorldVec3 kStep{ 0.001, -0.002, 0.003 };
 
     // Largest per-axis absolute error, in meters; Catch prints it with -s.
     double MaxError(const mir::WorldVec3 &actual, const mir::WorldVec3 &expected)
@@ -878,7 +1018,7 @@ namespace
     Entity MakeAtD(World &world, const mir::WorldVec3 &position, Entity parent = mir::kNullEntity)
     {
         const Entity entity = world.CreateEntity();
-        mir::AddTransform(world, entity, Transform{position}, parent);
+        mir::AddTransform(world, entity, Transform{ position }, parent);
         return entity;
     }
 }
@@ -888,7 +1028,7 @@ TEST_CASE("A far root keeps a millimeter move", "[ecs][transform][hierarchy][lwc
     if (!mir::kLargeWorld)
         SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
 
-    for (const mir::WorldVec3 &at : {kEdgeA, kEdgeB, mir::WorldVec3(3.0, 0.0, 0.0)})
+    for (const mir::WorldVec3 &at :{ kEdgeA, kEdgeB, mir::WorldVec3(3.0, 0.0, 0.0) })
     {
         World world;
         const Entity root = MakeAtD(world, at);
@@ -1041,7 +1181,7 @@ TEST_CASE("TryComposePose places a float child under a far parent", "[ecs][trans
     const std::optional<mir::WorldPosition> at = mir::WorldPosition::FromMeters(kEdgeA);
     REQUIRE(at);
     const glm::mat3 turnAndScale = glm::mat3_cast(QuarterTurnZ()) * glm::mat3(2.0f);
-    const mir::WorldPose parent{*at, turnAndScale};
+    const mir::WorldPose parent{ *at, turnAndScale };
 
     const std::optional<mir::WorldPose> child =
         mir::TryComposePose(parent, glm::mat3(1.0f), glm::vec3(1.0005f, 0.0f, 0.0f));
@@ -1057,7 +1197,7 @@ TEST_CASE("TryComposePose places a float child under a far parent", "[ecs][trans
 
     // a float child cannot push a double past overflow, so only non-finite input fails
     CHECK_FALSE(mir::TryComposePose(parent, glm::mat3(1.0f), glm::vec3(std::nanf(""), 0.0f, 0.0f)));
-    const mir::WorldPose badParent{*at, glm::mat3(std::numeric_limits<float>::infinity())};
+    const mir::WorldPose badParent{ *at, glm::mat3(std::numeric_limits<float>::infinity()) };
     CHECK_FALSE(mir::TryComposePose(badParent, glm::mat3(1.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
 }
 
@@ -1097,6 +1237,6 @@ TEST_CASE("TryWorldToParentLocal inverts a far parent's composition", "[ecs][tra
     REQUIRE(rootLocal);
     CHECK(rootLocal->Meters() == moved->Meters());
 
-    const mir::WorldPose flat{parentPose.position, glm::mat3(0.0f)};
+    const mir::WorldPose flat{ parentPose.position, glm::mat3(0.0f) };
     CHECK_FALSE(mir::TryWorldToParentLocal(flat, *moved));
 }

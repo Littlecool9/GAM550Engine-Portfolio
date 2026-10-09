@@ -16,6 +16,7 @@
 #include "Signature.h"
 #include "core/log/Assert.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -37,14 +38,14 @@ namespace mir
         struct QueryIterationGuard;
     }
 
-    // Fn called before an entity is torn down.
-    // Fn should not add or destroy hooks
-    struct EntityDestroyHook
+    // Fn called right after an entity is created, or before it is torn down.
+    // Fn should not add or remove hooks
+    struct EntityHook
     {
         void (*fn)(World &world, Entity entity, void *user);
         void *user = nullptr;
 
-        bool operator==(const EntityDestroyHook &) const = default;
+        bool operator==(const EntityHook &) const = default;
     };
 
     // entity position of entity's archetype
@@ -117,26 +118,33 @@ namespace mir
 
             // no defer needed
             mRecords[entity.mIndex] = EntityRecord{ mEmptyArchetype, mEmptyArchetype->AddRow(entity) };
+
+            for (std::size_t i = 0; i < mCreateHooks.size(); ++i)
+                mCreateHooks[i].fn(*this, entity, mCreateHooks[i].user);
+
             return entity;
+        }
+
+        // registers a hook to run after entity create
+        void AddCreateHook(void (*fn)(World &, Entity, void *), void *user = nullptr)
+        {
+            AddHook(mCreateHooks, EntityHook{ fn, user });
+        }
+
+        void RemoveCreateHook(void (*fn)(World &, Entity, void *), void *user = nullptr)
+        {
+            std::erase(mCreateHooks, EntityHook{ fn, user });
         }
 
         // registers a hook to run before entity destroy
         void AddDestroyHook(void (*fn)(World &, Entity, void *), void *user = nullptr)
         {
-            const EntityDestroyHook hook{ fn, user };
-            for (const EntityDestroyHook &existing : mDestroyHooks)
-            {
-                if (existing == hook)
-                    return;
-            }
-
-            mDestroyHooks.push_back(hook);
+            AddHook(mDestroyHooks, EntityHook{ fn, user });
         }
 
         void RemoveDestroyHook(void (*fn)(World &, Entity, void *), void *user = nullptr)
         {
-            const EntityDestroyHook hook{ fn, user };
-            std::erase(mDestroyHooks, hook);
+            std::erase(mDestroyHooks, EntityHook{ fn, user });
         }
 
         // reset record, remove from both storages, remove from pool
@@ -489,6 +497,12 @@ namespace mir
             RemoveTableComponentRaw(entity, TypeIdOf<T>());
         }
 
+        static void AddHook(std::vector<EntityHook> &hooks, const EntityHook &hook)
+        {
+            if (std::find(hooks.begin(), hooks.end(), hook) == hooks.end())
+                hooks.push_back(hook);
+        }
+
         // like merging in merge sort
         static void CopySharedColumns(Archetype &from, uint32_t fromRow, Archetype &to, uint32_t toRow)
         {
@@ -595,7 +609,8 @@ namespace mir
         std::unordered_map<Signature, std::unique_ptr<Archetype>> mArchetypes;
         Archetype *mEmptyArchetype = nullptr;
         std::unordered_map<uint32_t, std::unique_ptr<detail::IQuery>> mQueries; // by detail::QueryKeyOf
-        std::vector<EntityDestroyHook> mDestroyHooks;
+        std::vector<EntityHook> mCreateHooks;
+        std::vector<EntityHook> mDestroyHooks;
 
         // intentionally declared last as it must be destroyed first.
         std::unordered_map<uint32_t, std::unique_ptr<detail::IResource>> mResources; // by detail::ResourceIdOf

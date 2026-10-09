@@ -62,6 +62,8 @@ namespace mir
             {
                 return index.DetachChildren(entity);
             }
+
+            static void AddRoot(HierarchyIndex &index, Entity entity) { index.AddRoot(entity); }
         };
     }
 
@@ -95,6 +97,12 @@ namespace mir
             return WorldPose{ parent.position, parent.linear * local.LinearMatrix() };
         }
 
+        void OnEntityCreated(World &world, Entity entity, void *)
+        {
+            if (HierarchyIndex *index = world.TryResource<HierarchyIndex>())
+                detail::HierarchyMutator::AddRoot(*index, entity);
+        }
+
         // destroy all destroyed entity's children
         void OnEntityDestroyed(World &world, Entity entity, void *)
         {
@@ -119,8 +127,14 @@ namespace mir
     HierarchyIndex &InstallHierarchy(World &world)
     {
         if (!world.HasResource<HierarchyIndex>())
-            world.EmplaceResource<HierarchyIndex>();
+        {
+            HierarchyIndex &index = world.EmplaceResource<HierarchyIndex>();
 
+            // entities made before install are roots, in slot order
+            world.ForEachAliveEntity([&index](Entity entity) { detail::HierarchyMutator::AddRoot(index, entity); });
+        }
+
+        world.AddCreateHook(&OnEntityCreated);
         world.AddDestroyHook(&OnEntityDestroyed);
 
         return world.Resource<HierarchyIndex>();

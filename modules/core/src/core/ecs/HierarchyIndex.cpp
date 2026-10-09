@@ -63,6 +63,11 @@ namespace mir
         return node ? std::span<const Entity>(node->children) : std::span<const Entity>{};
     }
 
+    std::span<const Entity> HierarchyIndex::Roots() const
+    {
+        return mRoots;
+    }
+
     uint32_t HierarchyIndex::DepthOf(Entity entity) const
     {
         uint32_t depth = 0;
@@ -123,6 +128,19 @@ namespace mir
             node->children.erase(found);
     }
 
+    void HierarchyIndex::EraseRoot(Entity entity)
+    {
+        const auto found = std::find(mRoots.begin(), mRoots.end(), entity);
+        if (found != mRoots.end())
+            mRoots.erase(found);
+    }
+
+    void HierarchyIndex::AddRoot(Entity entity)
+    {
+        GetNode(entity);
+        mRoots.push_back(entity);
+    }
+
     bool HierarchyIndex::SetParent(Entity child, Entity parent)
     {
         if (child.IsNull())
@@ -148,11 +166,15 @@ namespace mir
 
         if (!previous.IsNull())
             Unlink(child, previous);
+        else
+            EraseRoot(child);
 
         GetNode(child).parent = parent;
 
         if (!parent.IsNull())
             GetNode(parent).children.push_back(child);
+        else
+            mRoots.push_back(child);
 
         return true;
     }
@@ -182,6 +204,8 @@ namespace mir
 
         if (!parent.IsNull())
             Unlink(entity, parent);
+        else
+            EraseRoot(entity);
 
         for (const Entity child : node->children)
         {

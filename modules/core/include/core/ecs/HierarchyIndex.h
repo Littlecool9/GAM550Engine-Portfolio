@@ -34,6 +34,9 @@ namespace mir
         // Direct children in insertion order
         std::span<const Entity> ChildrenOf(Entity entity) const;
 
+        // Entities with no parent, in creation order; a reparent to root appends
+        std::span<const Entity> Roots() const;
+
         // True if `ancestor` is `entity` or any transitive parent of it.
         bool IsAncestorOf(Entity ancestor, Entity entity) const;
 
@@ -58,6 +61,9 @@ namespace mir
 
         std::vector<Entity> DetachChildren(Entity entity);
 
+        // Appends a newly created entity to the roots
+        void AddRoot(Entity entity);
+
         struct Node
         {
             Entity owner;
@@ -76,7 +82,11 @@ namespace mir
 
         void Unlink(Entity child, Entity parent);
 
+        void EraseRoot(Entity entity);
+
         // Dense, indexed by Entity::mIndex
         std::vector<Node> mNodes;
+
+        std::vector<Entity> mRoots;
     };
 }
