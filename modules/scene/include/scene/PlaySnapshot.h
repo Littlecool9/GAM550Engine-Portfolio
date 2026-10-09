@@ -18,9 +18,10 @@ namespace mir
     struct PlaySnapshot
     {
         std::filesystem::path mDir;
+        LoadedScene mScene;
     };
 
-    PlaySnapshot CaptureWorld(World &world);
+    PlaySnapshot CaptureWorld(World &world, const LoadedScene &scene);
 
     LoadedScene RestoreWorld(World &world, const PlaySnapshot &snapshot);
 

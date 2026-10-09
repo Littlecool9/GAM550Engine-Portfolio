@@ -36,15 +36,17 @@ fields.
 
 `PlaySnapshot` is `SaveScene`/`LoadScene` reused for a second purpose: a
 whole-World capture and restore around a Play session, rather than an
-author's save file. `CaptureWorld` builds a throwaway `LoadedScene` covering
-every entity `World::ForEachAliveEntity` finds — not just ones some other
-`LoadedScene` tracks — and saves it to a scratch directory in the temp
-directory, named by the process id, so two copies of a game entering Play at
-once (a game build plays from its first frame) do not overwrite each other.
-`DiscardSnapshot` removes it; `App` calls it at shutdown. `RestoreWorld`
-destroys every entity currently alive, then `LoadScene`s that directory back,
-returning the fresh `LoadedScene` identity (new `Entity` handles) for the
-caller to adopt.
+author's save file. `CaptureWorld` takes the edit scene and saves every entity
+`World::ForEachAliveEntity` finds, not just the scene's. Scene entities keep
+their `StableId`s, and the rest take ids above `mNextId`. It writes to a scratch
+directory in the temp directory, named by the process id, so two copies of a
+game entering Play at once (a game build plays from its first frame) do not
+overwrite each other. The snapshot also keeps a copy of the edit scene.
+`DiscardSnapshot` removes both; `App` calls it at shutdown. `RestoreWorld`
+destroys every entity currently alive, then `LoadScene`s that directory back.
+It returns the edit scene's name, `mNextId` and `mDeletedIds` with only the
+scene's ids registered, under new `Entity` handles. A save after Stop therefore
+writes the same files a save before Play would.
 
 `EntitySnapshot` is the same per-entity data, cut down to one entity and its
 descendants. Duplicate, undo of delete and prefabs build on it. `CaptureEntity`
@@ -198,6 +200,14 @@ module does not link (see [app.md](app.md)). Scripts resolve in
    file shows a delete plus an add.
 
 ## Changed
+
+*2026-10-08* � **Play and Stop keep the edit scene's identity.** Was:
+`CaptureWorld` gave every alive entity a fresh id from 1 under the name
+`__play_snapshot`, and `StopScene` adopted that scene. A save after any Play
+wrote that name and renumbered ids, orphaned the old files, and forgot deletes
+made before Play. Now: `CaptureWorld` takes the edit scene, keeps its ids, and
+`RestoreWorld` returns its name, next id and deleted ids. Entities outside the
+scene at capture come back unregistered.
 
 *2026-10-08* — **`SaveScene` deletes the files of deleted entities, and entity
 files are named `<id>.json`.** Was: save wrote one file per entity still in the

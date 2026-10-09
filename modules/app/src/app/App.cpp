@@ -306,7 +306,7 @@ namespace mir
         if (IsPlaying(mWorld))
             return;
 
-        mPlaySnapshot = CaptureWorld(mWorld);
+        mPlaySnapshot = CaptureWorld(mWorld, mScene);
 
         SetPlayState(mWorld, PlayState::Running);
         SetEngineMode(mWorld, EngineMode::Play);

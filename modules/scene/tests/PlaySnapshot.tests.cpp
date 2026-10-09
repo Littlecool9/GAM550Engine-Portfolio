@@ -46,7 +46,7 @@ TEST_CASE("RestoreWorld reverts a Transform mutated after CaptureWorld", "[scene
     Entity entity = CreateSceneEntity(world, scene);
     AddTransform(world, entity, Transform{ glm::vec3(1.0f, 2.0f, 3.0f) });
 
-    PlaySnapshot snapshot = CaptureWorld(world);
+    PlaySnapshot snapshot = CaptureWorld(world, scene);
 
     // "Play" mutates it.
     Transform *transform = world.GetComponent<Transform>(entity);
@@ -79,7 +79,7 @@ TEST_CASE("RestoreWorld reverts a far root and its child exactly", "[scene]")
     AddTransform(world, child, Transform{ childLocal }, root);
     const mir::WorldVec3 childWorld = mir::ResolveWorld(world, child).position.Meters();
 
-    const PlaySnapshot snapshot = CaptureWorld(world);
+    const PlaySnapshot snapshot = CaptureWorld(world, scene);
 
     // "Play" moves both by an amount a float at this distance cannot hold
     REQUIRE(world.GetComponent<Transform>(root)->Translate(mir::WorldVec3(0.004)));
@@ -108,7 +108,7 @@ TEST_CASE("RestoreWorld destroys an entity Play spawned that CaptureWorld never 
     Entity original = CreateSceneEntity(world, scene);
     AddTransform(world, original);
 
-    PlaySnapshot snapshot = CaptureWorld(world);
+    PlaySnapshot snapshot = CaptureWorld(world, scene);
 
     // "Play" spawns something the edit-time scene never tracked.
     Entity spawned = world.CreateEntity();
@@ -130,7 +130,7 @@ TEST_CASE("The snapshot's directory is this process's own, and DiscardSnapshot r
     LoadedScene scene = NewScene("test");
     AddTransform(world, CreateSceneEntity(world, scene));
 
-    PlaySnapshot snapshot = CaptureWorld(world);
+    PlaySnapshot snapshot = CaptureWorld(world, scene);
     const std::filesystem::path dir = snapshot.mDir;
     CHECK(dir.filename().string() == "mjolnir_play_snapshot_" + std::to_string(mir::CurrentProcessId()));
     REQUIRE(std::filesystem::exists(dir));
@@ -141,4 +141,48 @@ TEST_CASE("The snapshot's directory is this process's own, and DiscardSnapshot r
 
     // twice is harmless
     DiscardSnapshot(snapshot);
+}
+
+TEST_CASE("RestoreWorld hands back the scene's name, ids, next id and deleted ids", "[scene]")
+{
+    mir::RegisterCoreComponents();
+
+    World world;
+    LoadedScene scene = NewScene("level");
+    Entity doomed = CreateSceneEntity(world, scene); // id 1
+    AddTransform(world, doomed);
+    AddTransform(world, CreateSceneEntity(world, scene)); // id 2
+    AddTransform(world, CreateSceneEntity(world, scene)); // id 3
+    REQUIRE(mir::DestroySceneEntity(world, scene, doomed));
+
+    PlaySnapshot snapshot = CaptureWorld(world, scene);
+    const LoadedScene restored = RestoreWorld(world, snapshot);
+    DiscardSnapshot(snapshot);
+
+    CHECK(restored.mName == "level");
+    CHECK(restored.mNextId == scene.mNextId);
+    CHECK(restored.mDeletedIds == scene.mDeletedIds);
+    REQUIRE(restored.mEntities.size() == 2);
+    CHECK(restored.mEntities.contains(2));
+    CHECK(restored.mEntities.contains(3));
+}
+
+TEST_CASE("RestoreWorld brings back an entity outside the scene without registering it", "[scene]")
+{
+    mir::RegisterCoreComponents();
+
+    World world;
+    LoadedScene scene = NewScene("test");
+    AddTransform(world, CreateSceneEntity(world, scene));
+    Entity outsider = world.CreateEntity();
+    AddTransform(world, outsider, Transform{ glm::vec3(7.0f, 0.0f, 0.0f) });
+
+    PlaySnapshot snapshot = CaptureWorld(world, scene);
+    const LoadedScene restored = RestoreWorld(world, snapshot);
+    DiscardSnapshot(snapshot);
+
+    REQUIRE(restored.mEntities.size() == 1);
+    int alive = 0;
+    world.ForEachAliveEntity([&](Entity) { ++alive; });
+    CHECK(alive == 2);
 }
