@@ -405,7 +405,6 @@ TEST_CASE("the physics bindings are inert on an entity with no RigidBody", "[scr
 
 namespace
 {
-    // A terrain-like height field: 128 m square at 4 m, a gentle plane in shape space.
     constexpr uint32_t kFieldSide = 33;
     constexpr double kFieldSpacing = 4.0;
     constexpr double kPlaneX = -0.08, kPlaneZ = -0.03;
@@ -426,7 +425,7 @@ namespace
         return mir::ComponentRegistry::Instance().RegisterRuntime("RaycastProbe", fields);
     }
 
-    // args is spliced into world:raycast(...); every field the result has is copied to the probe.
+    // A std::format string: {} takes the raycast arguments, {{}} is a Lua table.
     constexpr std::string_view kRaycastScript = R"LUA(
 local T = {{}}
 
@@ -501,7 +500,6 @@ return T
 
         mir::PhysicsWorld &Physics() { return world.Resource<mir::PhysicsWorld>(); }
 
-        // The shape path terrain colliders take, tagged as TerrainRuntime tags them.
         mir::BodyHandle AddField(const glm::dvec3 &origin, mir::Entity tag)
         {
             const std::optional<mir::WorldPosition> at = mir::WorldPosition::FromDoubleMeters(origin);
@@ -577,7 +575,7 @@ TEST_CASE("world:raycast hits a terrain height field and names its entity", "[sc
     CHECK(hit.entity == terrain);
 }
 
-TEST_CASE("world:raycast at ~150 km is as precise as at the origin", "[script][physics][lwc]")
+TEST_CASE("world:raycast far from the origin is as precise as at the origin","[script][physics][lwc]")
 {
     if (!mir::kLargeWorld)
         SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
@@ -597,7 +595,6 @@ TEST_CASE("world:raycast hits a dynamic RigidBody and names its entity", "[scrip
     const mir::Entity box = fixture.world.CreateEntity();
     mir::AddTransform(fixture.world, box, mir::Transform{ mir::WorldVec3(2.0, 5.0, -1.0) });
     fixture.world.AddComponent<mir::RigidBody>(box, kDynamicBox);
-    // PhysicsSystem builds and tags the body on its first substep.
     fixture.scheduler.Update(fixture.context, 1, kStep);
 
     const RaycastResult hit = fixture.Cast("{ x = 2, y = 10, z = -1 }, { x = 0, y = -1, z = 0 }, 20");
@@ -608,7 +605,6 @@ TEST_CASE("world:raycast hits a dynamic RigidBody and names its entity", "[scrip
     CHECK(hit.hasEntity);
     CHECK(hit.entity == box);
 
-    // From inside the body: Jolt treats it as solid.
     const RaycastResult inside = fixture.Cast("{ x = 2, y = 5, z = -1 }, { x = 0, y = -1, z = 0 }");
     REQUIRE(inside.hit);
     CHECK(inside.distance == 0.0f);
@@ -630,19 +626,17 @@ TEST_CASE("world:raycast reports a clean miss", "[script][physics]")
     CHECK_FALSE(beside.hit);
 }
 
-TEST_CASE("world:raycast stops at maxDistance, 1000 m when omitted", "[script][physics]")
+TEST_CASE("world:raycast stops at maxDistance or its default", "[script][physics]")
 {
     RaycastFixture fixture;
     fixture.AddField(glm::dvec3(0.0), fixture.world.CreateEntity());
 
-    // The ground is ~55 m below.
     CHECK_FALSE(fixture.Cast("{ x = 37.5, y = 100, z = 61.25 }, { x = 0, y = -1, z = 0 }, 10").hit);
     CheckFieldHit(fixture.Cast("{ x = 37.5, y = 100, z = 61.25 }, { x = 0, y = -1, z = 0 }"), glm::dvec3(0.0), 37.5,
                   61.25, 100.0);
     CheckFieldHit(fixture.Cast("{ x = 37.5, y = 100, z = 61.25 }, { x = 0, y = -1, z = 0 }, nil"), glm::dvec3(0.0),
                   37.5, 61.25, 100.0);
 
-    // ~1055 m below: past the default, within an explicit 2000 m.
     CHECK_FALSE(fixture.Cast("{ x = 37.5, y = 1100, z = 61.25 }, { x = 0, y = -1, z = 0 }").hit);
     CHECK(fixture.Cast("{ x = 37.5, y = 1100, z = 61.25 }, { x = 0, y = -1, z = 0 }, 2000").hit);
 }

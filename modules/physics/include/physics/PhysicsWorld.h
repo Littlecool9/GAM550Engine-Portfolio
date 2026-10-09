@@ -129,8 +129,7 @@ namespace mir
         void AddForceAtOffset(BodyHandle body, const glm::vec3 &force, const glm::vec3 &localOffset);
         void AddImpulseAtOffset(BodyHandle body, const glm::vec3 &impulse, const glm::vec3 &localOffset);
 
-        // The entity a body stands for, so a query can name what it hit. kNullEntity for an
-        // untagged body or an invalid or destroyed handle; the entity is not checked for liveness.
+        // kNullEntity for an untagged body or a bad handle; the entity is not checked for liveness.
         void SetBodyEntity(BodyHandle body, Entity entity);
         Entity BodyEntity(BodyHandle body) const;
 

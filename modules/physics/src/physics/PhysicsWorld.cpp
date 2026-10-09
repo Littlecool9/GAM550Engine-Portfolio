@@ -151,8 +151,7 @@ namespace
     // Covers resting contact plus Jolt's 2 cm speculative distance.
     constexpr float kWakeMargin = 0.1f;
 
-    // Jolt's default user data is 0 and Entity{0, 0} packs to 0, so store the complement:
-    // 0 then unpacks to the null index.
+    // Complemented so Jolt's default user data reads as no entity, not Entity{0, 0}.
     uint64_t EntityToUserData(mir::Entity entity)
     {
         return entity.IsNull() ? 0 : ~mir::PackEntity(entity);

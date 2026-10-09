@@ -28,7 +28,6 @@ namespace mir
 {
     namespace
     {
-        // Jolt's hit fraction is a float, so the hit point resolves to ~6e-8 of this (0.06 mm).
         constexpr float kRaycastDefaultMaxDistance = 1000.0f;
 
         sol::table Vec3ToLua(sol::state_view lua, const glm::vec3 &value)
@@ -241,7 +240,6 @@ namespace mir
             result["point"] = WorldVec3ToLua(lua, hit->mPoint.Meters());
             result["normal"] = Vec3ToLua(lua, hit->mNormal);
             result["distance"] = hit->mDistance;
-            // A terrain collider's tag can name an entity destroyed during Play.
             const Entity entity = physics->BodyEntity(hit->mBody);
             if (!entity.IsNull() && world.IsAlive(entity))
                 result["entity"] = entity;

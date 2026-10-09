@@ -216,7 +216,7 @@ TEST_CASE("A far TerrainInstance saves and reloads with its placement exact and 
     CHECK(EntityCount(reloaded.world) == 1);
     const TerrainSceneSpec restoredSpec = CollectTerrainScene(reloaded.world, kIdRoot);
     CHECK(restoredSpec == authoredSpec);
-    // The restore recreates the entity; the spec still compares equal, carrying the new one.
+    // operator== ignores the entity, which the restore recreates.
     REQUIRE(restoredSpec.instances.size() == 1);
     CHECK(restoredSpec.instances[0].entity == restored.mEntities.begin()->second);
     CHECK(restoredSpec.instances[0].entity != spec.instances[0].entity);

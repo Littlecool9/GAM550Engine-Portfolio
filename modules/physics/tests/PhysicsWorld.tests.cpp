@@ -229,7 +229,7 @@ TEST_CASE("A body carries the entity it was tagged with", "[physics]")
     const mir::BodyHandle sphere = world.CreateDynamicSphere(At(0.0, 3.0, 0.0), 0.5f);
     CHECK(world.BodyEntity(floor) == mir::kNullEntity);
 
-    // Entity{0, 0} packs to Jolt's default user data, so it must still read back.
+    // Entity{0, 0} packs to Jolt's default user data.
     world.SetBodyEntity(floor, mir::Entity{ 0, 0 });
     CHECK(world.BodyEntity(floor) == mir::Entity{ 0, 0 });
 
@@ -238,7 +238,6 @@ TEST_CASE("A body carries the entity it was tagged with", "[physics]")
     CHECK(world.BodyEntity(sphere) == high);
     CHECK(world.BodyEntity(floor) == mir::Entity{ 0, 0 });
 
-    // A raycast's body maps back to its entity.
     const std::optional<mir::RayHit> hit = world.RayCast(At(0.0, 5.0, 0.0), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
     REQUIRE(hit);
     CHECK(world.BodyEntity(hit->mBody) == high);
