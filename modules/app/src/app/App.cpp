@@ -30,6 +30,8 @@
 #include <input/InputMap.h>
 #include <input/InputState.h>
 #include <input/InputSystem.h>
+#include <physics/CollisionEventSystem.h>
+#include <physics/CollisionEvents.h>
 #include <physics/ComponentRegistration.h>
 #include <physics/PhysicsSystem.h>
 #include <physics/PhysicsWorld.h>
@@ -199,6 +201,7 @@ namespace mir
 
         // physcis world - currently Jolt
         mWorld.EmplaceResource<PhysicsWorld>();
+        mWorld.EmplaceResource<CollisionEvents>();
 
         mScheduler.AddSystem<InputSystem>(SystemPhase::PreUpdate, *mWindow);
 
@@ -218,6 +221,9 @@ namespace mir
         // after TransformPropagateSystem: it reads the WorldTransform that system writes
         mScheduler.AddSystem<AudioEmitterSystem>(SystemPhase::PostUpdate);
         mScheduler.AddSystem<AudioListenerSystem>(SystemPhase::PostUpdate);
+
+        // the frame's collision events, read by next frame's scripts
+        mScheduler.AddSystem<CollisionEventSystem>(SystemPhase::PostUpdate);
 
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
