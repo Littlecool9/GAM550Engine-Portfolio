@@ -9,9 +9,7 @@
 #pragma once
 
 #include <core/math/WorldReal.h>
-
 #include <glm/vec3.hpp>
-
 #include <sol/sol.hpp>
 
 #include <optional>
