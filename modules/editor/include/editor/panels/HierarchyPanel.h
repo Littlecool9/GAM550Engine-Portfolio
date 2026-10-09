@@ -11,6 +11,7 @@
 #include <core/ecs/EntityPresetRegistry.h>
 #include <core/ecs/World.h>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -54,6 +55,12 @@ namespace mir
 
         // dropped last frame; App moved them after that Draw, so they are revealed in this one
         std::vector<Entity> mReveal;
+
+        // a collapsed row hovered this long during a drag opens; a failed drop closes it again
+        Entity mHoverRow = kNullEntity;
+        double mHoverStart = 0.0;
+        std::vector<uint32_t> mOpenedDuringDrag; // ImGuiID
+        bool mDropDelivered = false;
     };
 
     Entity NeighborInHierarchy(const World &world, Entity entity);

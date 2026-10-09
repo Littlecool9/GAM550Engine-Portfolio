@@ -68,6 +68,12 @@ namespace mir
         return mRoots;
     }
 
+    std::span<const Entity> HierarchyIndex::SiblingsOf(Entity entity) const
+    {
+        const std::vector<Entity> *siblings = FindSiblingsUnder(ParentOf(entity));
+        return siblings ? std::span<const Entity>(*siblings) : std::span<const Entity>{};
+    }
+
     uint32_t HierarchyIndex::DepthOf(Entity entity) const
     {
         uint32_t depth = 0;

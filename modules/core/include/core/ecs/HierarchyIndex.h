@@ -37,6 +37,9 @@ namespace mir
         // Entities with no parent, in creation order; a reparent to root appends
         std::span<const Entity> Roots() const;
 
+        // The list entity sits in: its parent's children, or the roots
+        std::span<const Entity> SiblingsOf(Entity entity) const;
+
         // True if `ancestor` is `entity` or any transitive parent of it.
         bool IsAncestorOf(Entity ancestor, Entity entity) const;
 

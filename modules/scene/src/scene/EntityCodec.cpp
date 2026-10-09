@@ -207,11 +207,8 @@ namespace mir
             if (index == nullptr)
                 return 0;
 
-            const Entity parent = index->ParentOf(entity);
-            const std::span<const Entity> siblings = parent.IsNull() ? index->Roots() : index->ChildrenOf(parent);
-
             uint32_t position = 0;
-            for (const Entity sibling : siblings)
+            for (const Entity sibling : index->SiblingsOf(entity))
             {
                 if (sibling == entity)
                     break;

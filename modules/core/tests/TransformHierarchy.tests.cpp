@@ -1430,6 +1430,14 @@ TEST_CASE("DecomposeRotationScale splits a rotation and a scale", "[ecs][transfo
         CHECK(std::isfinite(rotation.w));
         CHECK(std::isfinite(rotation.x));
     }
+    SECTION("a mirror goes on x and the rotation stays unit length")
+    {
+        const Transform t{ glm::vec3(0.0f), QuarterTurnZ(), glm::vec3(2.0f, -3.0f, 4.0f) };
+        mir::DecomposeRotationScale(t.LinearMatrix(), rotation, scale);
+        CHECK(scale.x < 0.0f);
+        CHECK(glm::length(rotation) == Approx(1.0f).margin(1e-4));
+        RequireSameLinear(Transform{ glm::vec3(0.0f), rotation, scale }.LinearMatrix(), t.LinearMatrix());
+    }
 }
 
 TEST_CASE("Keep-world reparent holds the world pose", "[ecs][transform][hierarchy][keepworld]")
@@ -1492,6 +1500,41 @@ TEST_CASE("A zero-scale parent counts as translation only", "[ecs][transform][hi
     const Transform &local = *world.GetComponent<Transform>(child);
     RequireNear(glm::vec3(local.Position()), glm::vec3(1.0f, 2.0f, 3.0f) - glm::vec3(10.0f, 0.0f, 0.0f));
     RequireSameLinear(local.LinearMatrix(), start.linear);
+}
+
+TEST_CASE("Keep-world reparent under a sheared result still holds the position", "[ecs][transform][hierarchy][keepworld]")
+{
+    // A tilted child under a turned, non-uniformly scaled parent needs shear, which TRS drops
+    World world;
+    const Entity parent = world.CreateEntity();
+    const glm::quat turn = glm::angleAxis(glm::quarter_pi<float>(), glm::vec3(0.0f, 0.0f, 1.0f));
+    mir::AddTransform(world, parent, Transform{ glm::vec3(5.0f, -2.0f, 1.0f), turn, glm::vec3(1.0f, 3.0f, 0.5f) });
+    const Entity child = MakePosed(world);
+    const mir::WorldPose start = mir::ResolveWorld(world, child);
+
+    REQUIRE(mir::SetParent(world, child, parent));
+
+    const mir::WorldPose end = mir::ResolveWorld(world, child);
+    RequireNear(OriginOf(end), OriginOf(start));
+    for (int axis = 0; axis < 3; ++axis)
+        for (int row = 0; row < 3; ++row)
+            CHECK(std::isfinite(end.linear[axis][row]));
+}
+
+TEST_CASE("Keep-world reparent keeps a mirrored entity mirrored", "[ecs][transform][hierarchy][keepworld]")
+{
+    World world;
+    const Entity turned = MakeTurnedParent(world);
+    const Entity child = world.CreateEntity();
+    mir::AddTransform(world, child, Transform{ glm::vec3(1.0f, 2.0f, 3.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), glm::vec3(-1.0f, 1.0f, 1.0f) });
+    const mir::WorldPose start = mir::ResolveWorld(world, child);
+
+    REQUIRE(mir::SetParent(world, child, turned));
+
+    const mir::WorldPose end = mir::ResolveWorld(world, child);
+    RequireNear(OriginOf(end), OriginOf(start));
+    RequireSameLinear(end.linear, start.linear);
+    CHECK(glm::length(world.GetComponent<Transform>(child)->Rotation()) == Approx(1.0f).margin(1e-4));
 }
 
 TEST_CASE("A reparent without keep-world leaves the local values", "[ecs][transform][hierarchy][keepworld]")

@@ -49,6 +49,10 @@ namespace mir
 
         constexpr const char *kEntityPayload = "MIR_HIERARCHY_ENTITIES";
 
+        constexpr double kOpenOnHoverSeconds = 0.7;
+        constexpr float kAutoScrollBand = 8.0f;
+        constexpr float kAutoScrollSpeed = 960.0f;
+
         enum class DropKind
         {
             None,
@@ -81,6 +85,18 @@ namespace mir
             // rows forced open this frame, and the row to scroll into view
             const std::unordered_set<uint64_t> &openRows;
             Entity scrollTo;
+
+            // open-on-hover: the row hovered since hoverStart, and this frame's hovered row
+            Entity hoverRow;
+            double hoverStart;
+            Entity hoveredRow = kNullEntity;
+            std::vector<uint32_t> &openedDuringDrag;
+            bool &dropDelivered;
+
+            // drawn rows top to bottom; a shift-click waits for all of them before taking its range
+            std::vector<Entity> visibleRows;
+            Entity rangeClick = kNullEntity;
+            bool rangeKeep = false;
         };
 
         std::string LabelOf(const World &world, Entity entity)
@@ -124,16 +140,10 @@ namespace mir
                 drawList->AddRect(r.Min, r.Max, color, 0.0f, 0, 2.0f);
         }
 
-        std::span<const Entity> SiblingsOf(const HierarchyIndex &index, Entity entity)
-        {
-            const Entity parent = index.ParentOf(entity);
-            return parent.IsNull() ? index.Roots() : index.ChildrenOf(parent);
-        }
-
         // The first sibling after row that is not being dragged, or null for last
         Entity NextUndragged(const HierarchyIndex &index, Entity row, const std::vector<Entity> &dragged)
         {
-            const std::span<const Entity> siblings = SiblingsOf(index, row);
+            const std::span<const Entity> siblings = index.SiblingsOf(row);
             auto it = std::find(siblings.begin(), siblings.end(), row);
             if (it != siblings.end())
                 ++it;
@@ -151,14 +161,22 @@ namespace mir
             if (!ImGui::IsItemClicked())
                 return;
 
-            const bool additive = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift;
+            const ImGuiIO &io = ImGui::GetIO();
+            if (io.KeyShift)
+            {
+                context.rangeClick = entity;
+                context.rangeKeep = io.KeyCtrl;
+                return;
+            }
+
+            const bool additive = io.KeyCtrl;
             if (!additive && context.selection.Contains(entity) && context.selection.mSelected.size() > 1)
                 context.deferredClick = entity;
             else
                 ApplyClick(context.selection, entity, additive);
         }
 
-        void DragSourceForRow(DrawContext &context, Entity entity, const Name *name)
+        void DragSourceForRow(DrawContext &context, Entity entity)
         {
             if (!ImGui::BeginDragDropSource())
                 return;
@@ -173,10 +191,8 @@ namespace mir
 
             if (context.dragged.size() > 1)
                 ImGui::Text("%zu entities", context.dragged.size());
-            else if (name != nullptr)
-                ImGui::TextUnformatted(name->mValue);
             else
-                ImGui::Text("Entity %u", entity.mIndex);
+                ImGui::TextUnformatted(LabelOf(context.world, entity).c_str());
 
             // last frame's target: this frame's is found after the rows
             if (!context.dropHint.empty())
@@ -185,8 +201,16 @@ namespace mir
             ImGui::EndDragDropSource();
         }
 
+        void DeliverDrop(DrawContext &context, Entity parent, Entity before)
+        {
+            context.action = { EntityActionKind::Reparent, nullptr, kNullEntity, context.dragged, parent, before };
+            context.reveal = std::move(context.dragged);
+            context.dragged.clear();
+            context.dropDelivered = true;
+        }
+
         // Before, child or after, split 25 / 50 / 25 over the row and half the gap on each side
-        void DropTargetForRow(DrawContext &context, Entity entity)
+        void DropTargetForRow(DrawContext &context, Entity entity, bool collapsed)
         {
             if (context.index == nullptr)
                 return;
@@ -195,7 +219,8 @@ namespace mir
             const ImVec2 itemMin = ImGui::GetItemRectMin();
             const ImVec2 itemMax = ImGui::GetItemRectMax();
             const ImRect rect(itemMin.x, itemMin.y - halfGap, itemMax.x, itemMax.y + halfGap);
-            if (!ImGui::BeginDragDropTargetCustom(rect, ImGui::GetItemID()))
+            // ImGui never lets the drag source be its own target, so the row needs a separate id
+            if (!ImGui::BeginDragDropTargetCustom(rect, ImGui::GetIDWithSeed("##RowDrop", nullptr, ImGui::GetItemID())))
                 return;
 
             const float t = (ImGui::GetMousePos().y - rect.Min.y) / rect.GetHeight();
@@ -220,6 +245,13 @@ namespace mir
                 ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
             if (payload != nullptr)
             {
+                context.hoveredRow = entity;
+                if (collapsed && entity == context.hoverRow && ImGui::GetTime() - context.hoverStart >= kOpenOnHoverSeconds)
+                {
+                    ImGui::TreeNodeSetOpen(ImGui::GetItemID(), true);
+                    context.openedDuringDrag.push_back(ImGui::GetItemID());
+                }
+
                 if (!CanSetParentAll(context.world, context.dragged, parent, before))
                 {
                     ImGui::SetMouseCursor(ImGuiMouseCursor_NotAllowed);
@@ -229,11 +261,7 @@ namespace mir
                 {
                     context.preview = { kind, kind == DropKind::Child ? ImRect(itemMin, itemMax) : rect, entity };
                     if (payload->IsDelivery())
-                    {
-                        context.action = { EntityActionKind::Reparent, nullptr, kNullEntity, context.dragged, parent, before };
-                        context.reveal = std::move(context.dragged);
-                        context.dragged.clear();
-                    }
+                        DeliverDrop(context, parent, before);
                 }
             }
 
@@ -254,11 +282,7 @@ namespace mir
                 {
                     context.preview = { DropKind::Root, window->InnerRect, kNullEntity };
                     if (payload->IsDelivery())
-                    {
-                        context.action = { EntityActionKind::Reparent, nullptr, kNullEntity, context.dragged, kNullEntity, kNullEntity };
-                        context.reveal = std::move(context.dragged);
-                        context.dragged.clear();
-                    }
+                        DeliverDrop(context, kNullEntity, kNullEntity);
                 }
             }
 
@@ -289,12 +313,13 @@ namespace mir
                 ? ImGui::TreeNodeEx(id, flags, "%s", name->mValue)
                 : ImGui::TreeNodeEx(id, flags, "Entity %u", entity.mIndex);
 
+            context.visibleRows.push_back(entity);
             if (entity == context.scrollTo)
                 ImGui::ScrollToItem(ImGuiScrollFlags_KeepVisibleEdgeY);
 
             HandleRowClick(context, entity);
-            DragSourceForRow(context, entity, name);
-            DropTargetForRow(context, entity);
+            DragSourceForRow(context, entity);
+            DropTargetForRow(context, entity, !children.empty() && !open);
 
             DrawEntityMenu(selection, entity, context.action);
 
@@ -345,6 +370,22 @@ namespace mir
         std::erase_if(selection.mSelected, [&](Entity e) { return !world.IsAlive(e); });
 
         const HierarchyIndex *index = world.TryResource<HierarchyIndex>();
+        const ImGuiPayload *activePayload = ImGui::GetDragDropPayload();
+        const bool dragging = activePayload != nullptr && activePayload->IsDataType(kEntityPayload);
+
+        // the drag ended: rows it opened stay open only if it dropped
+        if (!dragging)
+        {
+            if (!mDropDelivered)
+            {
+                for (const uint32_t opened : mOpenedDuringDrag)
+                    ImGui::TreeNodeSetOpen(opened, false);
+            }
+            mOpenedDuringDrag.clear();
+            mDropDelivered = false;
+            mHoverRow = kNullEntity;
+        }
+
         // reveal last frame's drop: open every ancestor, scroll to the last moved entity
         std::unordered_set<uint64_t> openRows;
         Entity scrollTo = kNullEntity;
@@ -362,7 +403,8 @@ namespace mir
         mReveal.clear();
 
         DropPreview preview;
-        DrawContext context{ world, index, selection, action, mDeferredClick, mDragged, mDropHint, preview, mReveal, openRows, scrollTo };
+        DrawContext context{ world, index, selection, action, mDeferredClick, mDragged, mDropHint, preview, mReveal, openRows,
+            scrollTo, mHoverRow, mHoverStart, kNullEntity, mOpenedDuringDrag, mDropDelivered };
 
         if (index != nullptr)
         {
@@ -374,11 +416,31 @@ namespace mir
             world.ForEachAliveEntity([&](Entity entity) { DrawEntity(context, entity); });
         }
 
+        if (!context.rangeClick.IsNull())
+            ApplyRangeClick(selection, context.rangeClick, context.visibleRows, context.rangeKeep);
+
         // after the rows, so a row's smaller target wins the payload over this one
         DropTargetForRoot(context);
 
         DrawDropPreview(preview);
         mDropHint = HintFor(world, preview);
+
+        if (context.hoveredRow != mHoverRow)
+        {
+            mHoverRow = context.hoveredRow;
+            mHoverStart = ImGui::GetTime();
+        }
+
+        if (dragging)
+        {
+            const ImRect &inner = ImGui::GetCurrentWindow()->InnerRect;
+            const ImVec2 mouse = ImGui::GetMousePos();
+            const float step = kAutoScrollSpeed * ImGui::GetIO().DeltaTime;
+            if (inner.Contains(mouse) && mouse.y < inner.Min.y + kAutoScrollBand)
+                ImGui::SetScrollY(ImGui::GetScrollY() - step);
+            else if (inner.Contains(mouse) && mouse.y > inner.Max.y - kAutoScrollBand)
+                ImGui::SetScrollY(ImGui::GetScrollY() + step);
+        }
 
         if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
         {
@@ -444,7 +506,7 @@ namespace mir
         std::vector<Entity> siblings;
         if (index != nullptr)
         {
-            const std::span<const Entity> listed = SiblingsOf(*index, entity);
+            const std::span<const Entity> listed = index->SiblingsOf(entity);
             siblings.assign(listed.begin(), listed.end());
         }
         else

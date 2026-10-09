@@ -15,8 +15,11 @@
 
 #include <serial/JsonFile.h>
 
+#include <algorithm>
+#include <iterator>
 #include <map>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -94,6 +97,22 @@ namespace mir
         if (!world.IsAlive(source))
             return kNullEntity;
 
-        return RestoreEntity(world, CaptureEntity(world, source), scene, ParentOf(world, source));
+        // read before the restore, which appends the copy to the same list
+        Entity next = kNullEntity;
+        if (const HierarchyIndex *index = world.TryResource<HierarchyIndex>())
+        {
+            const std::span<const Entity> siblings = index->SiblingsOf(source);
+            const auto it = std::find(siblings.begin(), siblings.end(), source);
+            if (it != siblings.end() && std::next(it) != siblings.end())
+                next = *std::next(it);
+        }
+
+        const Entity parent = ParentOf(world, source);
+        const Entity copy = RestoreEntity(world, CaptureEntity(world, source), scene, parent);
+
+        // right after the source, as Unity's Ctrl+D
+        if (!copy.IsNull() && !next.IsNull())
+            SetParent(world, copy, parent, next, false);
+        return copy;
     }
 }

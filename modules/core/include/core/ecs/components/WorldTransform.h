@@ -17,6 +17,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/mat3x3.hpp>
 #include <glm/mat4x4.hpp>
+#include <glm/matrix.hpp>
 #include <optional>
 
 namespace mir
@@ -30,7 +31,7 @@ namespace mir
     struct WorldPose
     {
         WorldPosition position;
-        glm::mat3 linear{1.0f};
+        glm::mat3 linear{ 1.0f };
 
         // The only way to a float 4x4: the translation is position - origin,
         // subtracted in world precision. nullopt if that offset does not fit a float.
@@ -70,11 +71,15 @@ namespace mir
         return offset ? TryWorldOffsetToParentLocal(WorldMat3(parent.linear), *offset) : std::nullopt;
     }
 
-    // Shear is dropped. A zero-length axis divides by 1 so the rotation stays finite.
+    // Shear dropped, mirror goes on scale.x
     inline void DecomposeRotationScale(const glm::mat3 &linear, glm::quat &rotation, glm::vec3 &scale)
     {
         scale = { glm::length(linear[0]), glm::length(linear[1]), glm::length(linear[2]) };
+        // mirror
+        if (glm::determinant(linear) < 0.0f)
+            scale.x = -scale.x;
 
+        // a zero-length axis divides by 1 so the rotation stays finite.
         const glm::mat3 rotationMatrix(linear[0] / (scale.x != 0.0f ? scale.x : 1.0f),
             linear[1] / (scale.y != 0.0f ? scale.y : 1.0f),
             linear[2] / (scale.z != 0.0f ? scale.z : 1.0f));
@@ -117,9 +122,11 @@ namespace mir
 
     // only getter, set is only to be done by Hierarchy System
     inline constexpr FieldDesc kWorldTransformFields[] = {
-        {"position", FieldKind::WorldPosition, 0,
+        { "position", FieldKind::WorldPosition, 0,
          [](const void *component, void *out)
-         { *static_cast<WorldVec3 *>(out) = static_cast<const WorldTransform *>(component)->Position().Meters(); },
-         nullptr},
+         {
+ *static_cast<WorldVec3 *>(out) = static_cast<const WorldTransform *>(component)->Position().Meters();
+},
+nullptr },
     };
 }
