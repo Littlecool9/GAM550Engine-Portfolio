@@ -25,9 +25,9 @@ namespace mir
         struct TransformResolver
         {
             static void Store(WorldTransform &target,
-                              const WorldPose &pose,
-                              uint32_t localVersion,
-                              uint32_t parentVersion)
+                const WorldPose &pose,
+                uint32_t localVersion,
+                uint32_t parentVersion)
             {
                 target.mPose = pose;
                 target.mLocalVersion = localVersion;
@@ -41,8 +41,8 @@ namespace mir
             static bool IsClean(const WorldTransform &target, uint32_t localVersion, uint32_t parentVersion)
             {
                 return !target.mDirty &&
-                       target.mLocalVersion == localVersion &&
-                       target.mParentVersion == parentVersion;
+                    target.mLocalVersion == localVersion &&
+                    target.mParentVersion == parentVersion;
             }
 
             static void Invalidate(WorldTransform &target) { target.mDirty = true; }
@@ -51,9 +51,14 @@ namespace mir
         // Only thing allowed to call HierarchyIndex's private mutators
         struct HierarchyMutator
         {
-            static bool SetParent(HierarchyIndex &index, Entity child, Entity parent)
+            static bool SetParent(HierarchyIndex &index, Entity child, Entity parent, Entity before)
             {
-                return index.SetParent(child, parent);
+                return index.SetParent(child, parent, before);
+            }
+
+            static bool MoveToLastSibling(HierarchyIndex &index, Entity entity)
+            {
+                return index.MoveToLastSibling(entity);
             }
 
             static void Remove(HierarchyIndex &index, Entity entity) { index.Remove(entity); }
@@ -93,8 +98,33 @@ namespace mir
                 return *pose;
 
             MIR_LOG_WARN("ResolveWorld: entity {} leaves the finite world; kept at its parent's position",
-                         entity.mIndex);
+                entity.mIndex);
             return WorldPose{ parent.position, parent.linear * local.LinearMatrix() };
+        }
+
+        constexpr float kMinParentAxis = 1e-12f;
+
+        // The local values that hold `child`'s world pose under `parent`. A zero-scale
+        // parent counts as translation only. nullopt when the position does not fit.
+        std::optional<Transform> TryKeepWorld(World &world, Entity child, Entity parent)
+        {
+            const WorldPose childPose = ResolveWorld(world, child);
+            WorldPose parentPose = parent.IsNull() ? WorldPose{} : ResolveWorld(world, parent);
+
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                if (glm::length(parentPose.linear[axis]) < kMinParentAxis)
+                    parentPose.linear = glm::mat3(1.0f);
+            }
+
+            const std::optional<ParentLocalTranslation> position = TryWorldToParentLocal(parentPose, childPose.position);
+            if (!position)
+                return std::nullopt;
+
+            glm::quat rotation{};
+            glm::vec3 scale{};
+            DecomposeRotationScale(glm::inverse(parentPose.linear) * childPose.linear, rotation, scale);
+            return Transform(position->Meters(), rotation, scale);
         }
 
         void OnEntityCreated(World &world, Entity entity, void *)
@@ -172,8 +202,8 @@ namespace mir
         for (Entity cursor = entity; !cursor.IsNull(); cursor = LiveParentOf(world, index, cursor))
         {
             MIR_ASSERT(depth < kMaxHierarchyDepth,
-                       "ResolveWorld: hierarchy deeper than {} - the graph should have refused this",
-                       kMaxHierarchyDepth);
+                "ResolveWorld: hierarchy deeper than {} - the graph should have refused this",
+                kMaxHierarchyDepth);
 
             if (depth >= kMaxHierarchyDepth)
                 break;
@@ -220,7 +250,7 @@ namespace mir
         return accumulated;
     }
 
-    bool SetParent(World &world, Entity child, Entity parent)
+    bool SetParent(World &world, Entity child, Entity parent, Entity before, bool keepWorld)
     {
         if (!world.IsAlive(child))
         {
@@ -235,15 +265,49 @@ namespace mir
         }
 
         HierarchyIndex &index = InstallHierarchy(world);
-        if (!detail::HierarchyMutator::SetParent(index, child, parent))
+
+        // a reorder under the same parent keeps local values, so it never round-trips them
+        std::optional<Transform> kept;
+        if (keepWorld && index.ParentOf(child) != parent && world.Has<Transform>(child))
         {
-            MIR_LOG_WARN("SetParent: refused - self-parenting, a cycle, or deeper than "
-                         "kMaxHierarchyDepth ({})",
-                         kMaxHierarchyDepth);
+            kept = TryKeepWorld(world, child, parent);
+            if (!kept)
+            {
+                MIR_LOG_WARN("SetParent: refused - the child's world position does not fit under the new parent");
+                return false;
+            }
+        }
+
+        if (!detail::HierarchyMutator::SetParent(index, child, parent, before))
+        {
+            MIR_LOG_WARN("SetParent: refused - self-parenting, a cycle, deeper than "
+                "kMaxHierarchyDepth ({}), or `before` is not a sibling under the parent",
+                kMaxHierarchyDepth);
             return false;
         }
+
+        if (kept)
+        {
+            // setters, not assignment, so the version bumps
+            Transform &local = *world.GetComponent<Transform>(child);
+            local.SetPosition(kept->Position());
+            local.SetRotation(kept->Rotation());
+            local.SetScale(kept->Scale());
+        }
+
         InvalidateCache(world, child);
         return true;
+    }
+
+    bool MoveToLastSibling(World &world, Entity entity)
+    {
+        if (!world.IsAlive(entity))
+        {
+            MIR_LOG_WARN("MoveToLastSibling: entity is not alive");
+            return false;
+        }
+
+        return detail::HierarchyMutator::MoveToLastSibling(InstallHierarchy(world), entity);
     }
 
     Transform &AddTransform(World &world, Entity entity, const Transform &transform, Entity parent)
@@ -259,7 +323,7 @@ namespace mir
             world.AddComponent<WorldTransform>(entity, WorldTransform{});
 
         if (!parent.IsNull())
-            SetParent(world, entity, parent);
+            SetParent(world, entity, parent, kNullEntity, false);
 
         return *world.GetComponent<Transform>(entity);
     }
@@ -273,6 +337,8 @@ namespace mir
     {
         World &world = context.world;
         mQuery->ForEach([&world](Entity entity, Transform &, WorldTransform &)
-                        { ResolveWorld(world, entity); });
+            {
+                ResolveWorld(world, entity);
+            });
     }
 }

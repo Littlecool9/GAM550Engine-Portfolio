@@ -51,9 +51,11 @@ namespace mir
     private:
         friend struct detail::HierarchyMutator;
 
-        // Links `child` under `parent`, or roots it when `parent` is null.
-        // False when refused - self-parenting, a cycle, or a kMaxHierarchyDepth => no change
-        bool SetParent(Entity child, Entity parent);
+        // Links `child` under `parent` before sibling `before`, or last when `before` is null.
+        bool SetParent(Entity child, Entity parent, Entity before);
+
+        // False when `entity` is not in the graph
+        bool MoveToLastSibling(Entity entity);
 
         // Detatches `entity` from hierarchy
         // children are removed through hook
@@ -83,6 +85,10 @@ namespace mir
         void Unlink(Entity child, Entity parent);
 
         void EraseRoot(Entity entity);
+
+        // The children of `parent`, or the roots when `parent` is null
+        std::vector<Entity> &SiblingsUnder(Entity parent);
+        const std::vector<Entity> *FindSiblingsUnder(Entity parent) const;
 
         // Dense, indexed by Entity::mIndex
         std::vector<Node> mNodes;

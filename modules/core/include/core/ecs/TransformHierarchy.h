@@ -31,8 +31,12 @@ namespace mir
         const Transform &transform = Transform{},
         Entity parent = kNullEntity);
 
-// child local transform is left untouched
-    bool SetParent(World &world, Entity child, Entity parent);
+    // Inserts `child` before sibling `before`, or last when null. Same parent with
+    // null `before` is a no-op. `keepWorld` rewrites the local Transform so the world
+    // pose holds (shear is dropped); false leaves it untouched
+    bool SetParent(World &world, Entity child, Entity parent, Entity before = kNullEntity, bool keepWorld = true);
+
+    bool MoveToLastSibling(World &world, Entity entity);
 
     // Parent of `entity`, or null. Reads the graph without creating it.
     Entity ParentOf(const World &world, Entity entity);

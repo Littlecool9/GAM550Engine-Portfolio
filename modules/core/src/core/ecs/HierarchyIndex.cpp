@@ -141,10 +141,34 @@ namespace mir
         mRoots.push_back(entity);
     }
 
-    bool HierarchyIndex::SetParent(Entity child, Entity parent)
+    std::vector<Entity> &HierarchyIndex::SiblingsUnder(Entity parent)
+    {
+        return parent.IsNull() ? mRoots : GetNode(parent).children;
+    }
+
+    const std::vector<Entity> *HierarchyIndex::FindSiblingsUnder(Entity parent) const
+    {
+        if (parent.IsNull())
+            return &mRoots;
+
+        const Node *node = Find(parent);
+        return node ? &node->children : nullptr;
+    }
+
+    bool HierarchyIndex::SetParent(Entity child, Entity parent, Entity before)
     {
         if (child.IsNull())
             return false;
+
+        if (!before.IsNull())
+        {
+            if (before == child)
+                return false;
+
+            const std::vector<Entity> *siblings = FindSiblingsUnder(parent);
+            if (siblings == nullptr || std::find(siblings->begin(), siblings->end(), before) == siblings->end())
+                return false;
+        }
 
         if (!parent.IsNull())
         {
@@ -161,7 +185,7 @@ namespace mir
         }
 
         const Entity previous = ParentOf(child);
-        if (previous == parent)
+        if (previous == parent && before.IsNull())
             return true;
 
         if (!previous.IsNull())
@@ -171,11 +195,24 @@ namespace mir
 
         GetNode(child).parent = parent;
 
-        if (!parent.IsNull())
-            GetNode(parent).children.push_back(child);
-        else
-            mRoots.push_back(child);
+        // `before` was checked above; the erase cannot have removed it
+        std::vector<Entity> &siblings = SiblingsUnder(parent);
+        siblings.insert(before.IsNull() ? siblings.end() : std::find(siblings.begin(), siblings.end(), before), child);
 
+        return true;
+    }
+
+    bool HierarchyIndex::MoveToLastSibling(Entity entity)
+    {
+        if (Find(entity) == nullptr)
+            return false;
+
+        std::vector<Entity> &siblings = SiblingsUnder(ParentOf(entity));
+        const auto found = std::find(siblings.begin(), siblings.end(), entity);
+        if (found == siblings.end())
+            return false;
+
+        std::rotate(found, found + 1, siblings.end());
         return true;
     }
 

@@ -85,7 +85,7 @@ namespace mir
             return kNullEntity;
 
         if (!parent.IsNull())
-            SetParent(world, root->second, parent);
+            SetParent(world, root->second, parent, kNullEntity, false);
         return root->second;
     }
 

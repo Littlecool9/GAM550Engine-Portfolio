@@ -367,7 +367,8 @@ namespace mir
                 MIR_LOG_WARN("SpawnEntities: parent id {} not found in this set, leaving unparented", p.mParent);
                 continue;
             }
-            SetParent(world, p.mEntity, it->second);
+            // saved values are already parent-local
+            SetParent(world, p.mEntity, it->second, kNullEntity, false);
         }
 
         // 3. patch EntityRef fields
