@@ -23,38 +23,33 @@
     },
     {
       "fields": {
-        "matrix": [
-          1.0,
-          0.0,
-          0.0,
-          0.0,
+        "position": [
           0.0,
           1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0,
-          0.0,
-          0.0,
-          0.0,
-          0.0,
-          1.0
+          0.0
         ]
       },
       "type": "WorldTransform"
     },
     {
       "fields": {
-        "modelName": "Duck.glb"
-      },
-      "type": "ModelPlayer"
-    },
-    {
-      "fields": {
         "name": "Duck_Entity7"
       },
       "type": "Name"
+    },
+    {
+      "fields": {
+        "animationAsset": "",
+        "clip": 0,
+        "loop": true,
+        "modelAsset": "5bd8a9fb91edd938",
+        "modelName": "Duck.glb",
+        "playing": true,
+        "scene": -1,
+        "speed": 1.0,
+        "time": 0.0
+      },
+      "type": "ModelPlayer"
     }
   ],
   "id": 7,

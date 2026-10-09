@@ -178,6 +178,15 @@ replaces whatever `Scene()` currently holds. `NewScene`, `LoadScene` and
 `StopScene` release the discarded entities' GPU meshes and materials. Game
 control is `RequestOpenProject(dir)`, and the switch itself is a restart.
 
+In an editor build, `ApplyEditorActions` passes the frame's `EntityAction` (see
+[editor.md](editor.md)) to the private `ApplyEntityAction`. Create runs
+`CreateSceneEntity`, then the preset, then `AddMissingBaseline`. Delete runs
+`DestroySceneEntity`, and Duplicate runs `DuplicateSceneEntity` (see
+[scene.md](scene.md)). Each one goes through `Scene()`, so the entity is saved or
+dropped with the scene, and the result becomes the `Selection`. Unlike
+`NewScene`/`SaveScene`/`LoadScene`, these run during Play too, and Stop discards
+them with the rest of Play's changes.
+
 ### Ownership and order
 
 | Member | Created | Destroyed | Because |
@@ -207,13 +216,31 @@ them without a lookup.
 A `LoadedScene` file (see [scene.md](scene.md)) round-trips a `MeshRenderer`'s
 `meshName`/`materialShader` and a `ScriptRef`'s `scriptName` — strings, not the
 live `MeshHandle`/`instanceRef` `RenderSystem`/`ScriptSystem` actually need.
-`ResolveSceneMeshes`/`ResolveSceneScripts` turn one into the other by asset id
-under the game's `mAssetIdRoot`, and run at the end of both places entities come
-from a `LoadedScene` file: `LoadScene()` and `StopScene()` (via `PlaySnapshot::
-RestoreWorld`). Neither call site can skip them independently — both live
-inside the same two methods. A `materialShader` whose `CreateMaterial` fails
-logs an error and resolves to the renderer's error material. The mesh then
-draws magenta, rather than the default grey a null handle would give it.
+Both turn names into handles by asset id under the game's `mAssetIdRoot`.
+
+`ResolveSceneScripts`, in the private `SceneResolve.cpp`, runs at the end of both
+places entities come from a `LoadedScene` file: `LoadScene()` and `StopScene()`
+(via `PlaySnapshot::RestoreWorld`). Neither call site can skip it independently,
+because both live inside the same two methods.
+
+Meshes and materials resolve in `MeshResolveSystem`, a private `PostUpdate`
+system registered after `ModelSystem`. Entities also get a `MeshRenderer` outside
+a load: from Duplicate, Paste, Add Component and Inspector edits. A load-time pass
+would leave their handles stale or null, so this runs every frame. It remembers
+the `meshName` and `materialShader` each entity was last resolved from, keyed by
+`PackEntity`. It resolves again only when one of them changes. Handles and
+`MeshBounds` come from caches keyed by name, so renderers naming the same mesh
+share one upload.
+
+A renderer whose names are both empty is never touched, so a handle set from code
+keeps its value. Clearing `meshName` nulls the mesh and removes `MeshBounds`.
+Removing the `MeshRenderer` removes `MeshBounds` too. `Reset()` empties the
+caches and runs wherever `ReleaseSceneResources` does: `StopScene` and
+`UnloadCurrentScene`.
+
+A `materialShader` whose `CreateMaterial` fails logs an error and resolves to the
+renderer's error material. The mesh then draws magenta, rather than the default
+grey a null handle would give it.
 
 ### Terrain (private glue)
 
@@ -390,6 +417,15 @@ is tested in `terrain` (`TerrainScene.tests.cpp`) and the collider assembly in
    cheap for a large scene.
 
 ## Changed
+
+*2026-10-08* — **Meshes resolve every frame in `MeshResolveSystem`, and `App`
+carries out the editor's entity actions.** Was: `ResolveSceneMeshes` ran once,
+at the end of `LoadScene` and `StopScene`. A `MeshRenderer` that appeared or
+changed later, from Duplicate, Paste, Add Component or an Inspector edit, kept a
+stale or null handle. The editor's Create also built entities outside `Scene()`,
+so Save dropped them (#96). Now: `MeshResolveSystem` replaces
+`ResolveSceneMeshes` and re-resolves a renderer whenever its names change.
+`ApplyEntityAction` creates, deletes and duplicates through `Scene()`.
 
 *2026-10-08* — **A failed `materialShader` resolves to the error material.**
 Was: `ResolveSceneMeshes` stored the null handle from a failed

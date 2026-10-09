@@ -13,7 +13,7 @@ A scene is a directory, not a file.
 scenes/<scene>/
   scene.json              manifest: ordered StableId array, mNextId, scene settings
   entities/
-    <id>-<name>.json      one entity: {id, name, parent, components[]}
+    <id>.json             one entity: {id, name, parent, components[]}
 ```
 
 Splitting by entity keeps a diff proportional to what changed. Adding or removing
@@ -70,13 +70,22 @@ around them.
 |---|---|---|
 | `StableId`, `kNullStableId` | `scene/SceneAsset.h` | `uint64_t` save-file identity, distinct from `Entity` |
 | `LoadedScene` | `scene/SceneAsset.h` | `{mName, std::map<StableId, Entity>, mNextId}` |
-| `NewScene`, `AllocateStableId`, `CreateSceneEntity` | `scene/SceneAsset.h` | Authoring entry points |
+| `NewScene`, `AllocateStableId`, `CreateSceneEntity`, `DestroySceneEntity` | `scene/SceneAsset.h` | Authoring entry points |
 | `SaveScene`, `LoadScene`, `UnloadScene` | `scene/SceneIO.h` | Directory in, directory out, scoped destroy |
 | `PlaySnapshot`, `CaptureWorld`, `RestoreWorld`, `DiscardSnapshot` | `scene/PlaySnapshot.h` | Whole-World capture/restore around a Play session, built on `SaveScene`/`LoadScene`; `DiscardSnapshot` removes its directory |
-| `EntitySnapshot`, `CaptureEntity`, `RestoreEntity` | `scene/EntitySnapshot.h` | One entity and its descendants as in-memory data, restored into new entities registered in a `LoadedScene` |
+| `EntitySnapshot`, `CaptureEntity`, `RestoreEntity`, `DuplicateSceneEntity` | `scene/EntitySnapshot.h` | One entity and its descendants as in-memory data, restored into new entities registered in a `LoadedScene` |
 
 `CreateSceneEntity` is the one call an editor's "add entity" needs, so allocation
 and registration cannot happen for one without the other.
+
+`DestroySceneEntity` is its opposite. It removes the entity and every descendant
+from `LoadedScene::mEntities`, then destroys the root, and the hierarchy's destroy
+hook takes the descendants with it. It returns `false` for an entity that is not
+alive.
+
+`DuplicateSceneEntity` is `CaptureEntity` followed by `RestoreEntity` under the
+source's own parent. The copy is appended as that parent's last child, not placed
+next to the source. It returns null for an entity that is not alive.
 
 ## Rules
 
@@ -120,9 +129,9 @@ because a handle from a file names a different run's entity, so it loads null
 with a warning.
 
 **`RestoreEntity` does not resolve runtime handles.** Script instances, meshes
-and materials are left out of the field tables. The caller runs
-`ResolveSceneScripts` and `ResolveSceneMeshes` afterwards, as `App` does after
-`LoadScene`.
+and materials are left out of the field tables. In `App`, `MeshResolveSystem`
+picks up a restored `MeshRenderer` on the next frame, and `ResolveSceneScripts`
+runs after a load (see [app.md](app.md)).
 
 **`UnloadScene` destroys exactly what that load created**, each entity guarded by
 `IsAlive` since destroying a parent already cascades. It never touches entities
@@ -130,8 +139,17 @@ that another loaded scene owns.
 
 **`SaveScene` overwrites the directory** and returns `false` on any I/O failure.
 
-The entity filename carries a name for humans, but the loader trusts only the
-`id` inside the file, so a file renamed on disk still loads correctly.
+**An entity file is named by its `StableId`, and `LoadScene` finds it by that
+name.** The manifest lists ids, and each id maps to `entities/<id>.json`.
+
+**`SaveScene` deletes the file of every entity no longer in the scene.** A deleted
+entity's file would otherwise stay on disk and in version control. `LoadScene`
+would never read it, but a reader of the directory would take it for a live
+entity. The sweep runs after the manifest is written, so the manifest on disk
+never lists a file the sweep removed. A crash before the sweep leaves stale
+files, which load ignores. Only names of the
+form `<number>.json` are touched, so anything else put in `entities/` survives. A
+file that cannot be deleted logs a warning, and the save still succeeds.
 
 ## State
 
@@ -142,7 +160,11 @@ capture, restore, check it reverted) rather than through files.
 
 *As of 2026-10-07.* `EntitySnapshot` captures and restores a subtree,
 including sibling order, `EntityRef`s inside the snapshot, and live references
-leaving it. Nothing calls it yet; duplicate, undo and prefabs are separate work.
+leaving it. The editor's Duplicate calls it through `DuplicateSceneEntity`;
+undo and prefabs are separate work.
+
+*As of 2026-10-08.* `DestroySceneEntity` backs the editor's Delete, and a save
+after it removes the deleted entities' files.
 
 Tests in `modules/scene/tests/SceneIO.tests.cpp`,
 `modules/scene/tests/PlaySnapshot.tests.cpp` and
@@ -154,30 +176,37 @@ a `TerrainInstance.recipePath` into a pinned terrain release with its meshes and
 height field. `App` does that, through `ResolveSceneScripts` and
 `ResolveSceneMeshes` in `app`'s private `SceneResolve.cpp` and through its private
 `TerrainRuntime` (see [app.md](app.md)), because it needs the
-renderer and the script host that this module does not link — and because `App`
-is the one place both of this module's load paths (`LoadScene`, `RestoreWorld`)
-converge.
+renderer and the script host that this module does not link. Scripts resolve in
+`ResolveSceneScripts`, after both of this module's load paths (`LoadScene`,
+`RestoreWorld`), which converge in `App`. Meshes resolve every frame in
+`MeshResolveSystem`, so it also covers entities that `RestoreEntity` creates.
 
 ## Backlog
 
 1. **A defined failure mode for a missing entity file** whose `StableId` is still
    listed in the manifest. Skip with a warning, or abort the load — undecided.
-2. **`StableId` assignment tooling.** Nothing generates or garbage-collects ids
-   outside `CreateSceneEntity`, and that is authoring tooling that does not
-   exist.
-3. **Cross-scene references.** They need either a global id namespace or an
+2. **Cross-scene references.** They need either a global id namespace or an
    explicit external-reference `FieldKind`, decided before any save file starts
    relying on today's silent-null behaviour.
-4. **Load is O(entities × registered components)** for the `Has` sweep. If that
+3. **Load is O(entities × registered components)** for the `Has` sweep. If that
    shows up in a profile on a large scene, have each entity file list its
    component names ahead of the blobs, so load can call `Find` per name instead
    of sweeping the whole registry per entity.
-5. **Undo of delete needs more than `EntitySnapshot`.** References into the
+4. **Undo of delete needs more than `EntitySnapshot`.** References into the
    subtree from outside it stay dead after a restore. The sibling position is
    lost, since `SetParent` only appends. The `StableId` changes, so the scene
    file shows a delete plus an add.
 
 ## Changed
+
+*2026-10-08* — **`SaveScene` deletes the files of deleted entities, and entity
+files are named `<id>.json`.** Was: save wrote one file per entity still in the
+scene and never removed any. A deleted entity's file stayed in `entities/` and in
+version control. This doc also still described the old `<id>-<name>.json` naming.
+Now: after the manifest is written, `SaveScene` deletes every `<number>.json`
+whose id is not in the scene, and the Model and Rules describe the naming the
+code uses. `DestroySceneEntity` and `DuplicateSceneEntity` were added for the
+editor's Delete and Duplicate.
 
 *2026-10-07* — **A non-integer `EntityRef` in a scene file loads null.** Was:
 `LoadScene` read every `EntityRef` with `get<StableId>()`, so a `null` or a

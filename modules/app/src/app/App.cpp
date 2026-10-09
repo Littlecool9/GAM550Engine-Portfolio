@@ -9,6 +9,7 @@
 
 #include <app/App.h>
 
+#include "MeshResolveSystem.h"
 #include "SceneResolve.h"
 #include "TerrainRuntime.h"
 #include <animation/ModelPlayer.h>
@@ -35,11 +36,17 @@
 #include <renderer/ComponentRegistration.h>
 #include <renderer/RenderSettings.h>
 #include <renderer/RenderSystem.h>
+#include <scene/EntitySnapshot.h>
 #include <scene/SceneIO.h>
 #include <script/ComponentRegistration.h>
 #include <script/ScriptSystem.h>
 #include <terrain/ComponentRegistration.h>
 #include <terrain/TerrainScene.h>
+
+#if MIR_WITH_EDITOR
+#include <editor/EntityBaseline.h>
+#include <editor/Selection.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -51,18 +58,18 @@ namespace mir
 {
     namespace
     {
-#if MIR_WITH_EDITOR
+    #if MIR_WITH_EDITOR
         UIRect ToUIRect(const VkRect2D &rect)
         {
-            return UIRect{static_cast<float>(rect.offset.x), static_cast<float>(rect.offset.y),
-                          static_cast<float>(rect.extent.width), static_cast<float>(rect.extent.height)};
+            return UIRect{ static_cast<float>(rect.offset.x), static_cast<float>(rect.offset.y),
+                          static_cast<float>(rect.extent.width), static_cast<float>(rect.extent.height) };
         }
-#endif
+    #endif
 
         UIPointer ToUIPointer(const RawInputSnapshot &input)
         {
-            return UIPointer{static_cast<float>(input.mouseX), static_cast<float>(input.mouseY),
-                             input.IsDown(MouseButton::Left)};
+            return UIPointer{ static_cast<float>(input.mouseX), static_cast<float>(input.mouseY),
+                             input.IsDown(MouseButton::Left) };
         }
     }
 
@@ -80,31 +87,32 @@ namespace mir
         mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
 
         //audio teardown to call when other things fail to initialize
-        const auto fail = [this] {
-#if MIR_WITH_EDITOR
-            mAssetImport.Shutdown();
-#endif
-            audio::Terminate();
-            return false;
-        };
+        const auto fail = [this]
+            {
+            #if MIR_WITH_EDITOR
+                mAssetImport.Shutdown();
+            #endif
+                audio::Terminate();
+                return false;
+            };
 
-#if MIR_WITH_EDITOR
+    #if MIR_WITH_EDITOR
         mAssetImport.Initialize(mProject);
-#else
-        //no editor to lay out, the window is the game
+    #else
+            //no editor to lay out, the window is the game
         mDesc.mEnableEditorLayout = false;
         MIR_LOG_INFO("Built without the editor; running the game");
-#endif
+    #endif
 
         audio::Init(mProject.mSoundBankDir);
 
         EnsureDpiAware();
 
-        if (!mSplash.Show({.mEngineName = desc.mAppName,
+        if (!mSplash.Show({ .mEngineName = desc.mAppName,
                            .mVersion = kEngineVersion,
                            .mCopyright = kEngineCopyright,
                            .mStatus = "Creating window...",
-                           .mProgress = 0.0f}))
+                           .mProgress = 0.0f }))
         {
             MIR_LOG_WARN("Splash screen failed to show, continuing without it");
         }
@@ -126,7 +134,7 @@ namespace mir
 
         mSplash.SetProgress("Initializing renderer...", 0.2f);
         if (!mRenderer.Initialize(
-                {.window = mWindow.get(), .appName = desc.mAppName, .enableValidation = desc.mEnableValidation}))
+            { .window = mWindow.get(), .appName = desc.mAppName, .enableValidation = desc.mEnableValidation }))
         {
             MIR_LOG_ERROR("Renderer initialization failed");
             // Frees whatever Initialize created before it failed; the window must outlive the surface.
@@ -144,7 +152,7 @@ namespace mir
             return fail();
         }
 
-#if MIR_WITH_EDITOR
+    #if MIR_WITH_EDITOR
         mSplash.SetProgress("Initializing editor...", 0.5f);
         if (!mEditor.Initialize(mImGui, *mWindow, mProject.mProjectSettingsPath, mWorld))
         {
@@ -154,7 +162,7 @@ namespace mir
             mWindow.reset();
             return fail();
         }
-#endif
+    #endif
 
         mInitialized = true;
 
@@ -179,7 +187,7 @@ namespace mir
         mWorld.EmplaceResource<TerrainWorld>();
 
         // defers structural change
-        mWorld.EmplaceResource<FrameCommands>(FrameCommands{&mCommands});
+        mWorld.EmplaceResource<FrameCommands>(FrameCommands{ &mCommands });
 
         InputMap inputMap = InputMap::LoadFile(mProject.mProjectSettingsPath).value_or(InputMap{});
         AddDefaultActions(inputMap);
@@ -204,6 +212,8 @@ namespace mir
         mScheduler.AddSystem<TransformPropagateSystem>(SystemPhase::PostUpdate);
         mModelSystem =
             &mScheduler.AddSystem<ModelSystem>(SystemPhase::PostUpdate, mRenderer, Assets(), mProject.mAssetIdRoot);
+        mMeshResolveSystem = &mScheduler.AddSystem<MeshResolveSystem>(SystemPhase::PostUpdate, mRenderer, Assets(),
+            mProject.mAssetIdRoot);
 
         // after TransformPropagateSystem: it reads the WorldTransform that system writes
         mScheduler.AddSystem<AudioEmitterSystem>(SystemPhase::PostUpdate);
@@ -218,11 +228,11 @@ namespace mir
 
         // scanned once: a new game needs a build to cook its assets anyway
         mAvailableProjects = DiscoverGameProjects();
-#if MIR_WITH_EDITOR
+    #if MIR_WITH_EDITOR
         mProjectMenu.clear();
         for (const GameProject &project : mAvailableProjects)
             mProjectMenu.push_back(ProjectMenuEntry{ project.mDir, project.mName });
-#endif
+    #endif
 
         mSplash.SetProgress("Loading scene...", 0.9f);
         mScene = mir::NewScene("untitled");
@@ -297,9 +307,8 @@ namespace mir
         UnloadCurrentScene();
         mScene = mir::LoadScene(mWorld, mProject.mSceneDir);
 
-        // saved names to script instances and GPU handles
+        // saved names to script instances
         ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
-        ResolveSceneMeshes(mWorld, mRenderer, Assets(), mProject.mAssetIdRoot);
         mTerrain->Load();
         return true;
     }
@@ -330,13 +339,13 @@ namespace mir
 
         // Play's entities are gone and the restored ones hold no handles yet
         mModelSystem->Reset();
+        mMeshResolveSystem->Reset();
         mWorld.Resource<ModelDrawItems>().items.clear();
         mWorld.Resource<ModelMorphOverrides>().instances.clear();
         mTerrain->ForgetMeshes();
         mRenderer.ReleaseSceneResources();
 
         ResolveSceneScripts(mWorld, mScriptHost, mScriptReloadWatcher, Assets(), mProject.mAssetIdRoot);
-        ResolveSceneMeshes(mWorld, mRenderer, Assets(), mProject.mAssetIdRoot);
 
         SetEngineMode(mWorld, EngineMode::Edit);
         SetPlayState(mWorld, PlayState::Running);
@@ -398,6 +407,8 @@ namespace mir
         // no scene entity holds a mesh or material handle now
         if (mModelSystem)
             mModelSystem->Reset();
+        if (mMeshResolveSystem)
+            mMeshResolveSystem->Reset();
         if (auto *draws = mWorld.TryResource<ModelDrawItems>())
             draws->items.clear();
         if (auto *overrides = mWorld.TryResource<ModelMorphOverrides>())
@@ -452,7 +463,7 @@ namespace mir
         return &*mAssetCache;
     }
 
-    SystemContext App::MakeContext(float dt) { return SystemContext{mWorld, mCommands, dt, mElapsed, mFrame}; }
+    SystemContext App::MakeContext(float dt) { return SystemContext{ mWorld, mCommands, dt, mElapsed, mFrame }; }
 
     void App::Run()
     {
@@ -475,11 +486,11 @@ namespace mir
             previous = now;
             mElapsed += dt;
 
-#if MIR_WITH_EDITOR
+        #if MIR_WITH_EDITOR
             mAssetImport.Update(IsEditing(mWorld));
             if (mAssetImport.PendingApply() && IsEditing(mWorld))
                 ApplyImportedAssets();
-#endif
+        #endif
 
             // Edit, between frames, before any system runs
             if (IsEditing(mWorld))
@@ -489,15 +500,15 @@ namespace mir
 
             if (mWindow->Width() != 0 && mWindow->Height() != 0)
             {
-#if MIR_WITH_EDITOR
+            #if MIR_WITH_EDITOR
                 const EditorActions actions = mEditor.DrawLayout(
                     mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<RenderSettings>(),
                     mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir, mWorld, mAssetImport.View(),
                     mRenderer);
-#endif
+            #endif
 
                 mGameUI.BeginFrame(GameUIArea(), mWorld.Resource<InputState>(), mWorld.Resource<InputMap>(),
-                                   ToUIPointer(mWindow->RawInput()));
+                    ToUIPointer(mWindow->RawInput()));
                 GameShellAction shellAction = GameShellAction::None;
                 if (mDesc.mUIDemo)
                     mUIDemo.Draw(mGameUI);
@@ -507,14 +518,14 @@ namespace mir
 
                 ApplyShellAction(shellAction);
 
-#if MIR_WITH_EDITOR
+            #if MIR_WITH_EDITOR
                 ApplyEditorActions(actions);
-#endif
+            #endif
             }
 
             mRenderer.SetImGuiDrawData(mImGui.EndFrame());
 
-#if MIR_WITH_EDITOR
+        #if MIR_WITH_EDITOR
             mRenderSystem->SetViewportRect(0, mDesc.mEnableEditorLayout ? mEditor.SceneViewportRect() : VkRect2D{});
 
             // Only feed EditorCamera input in Edit.
@@ -530,10 +541,10 @@ namespace mir
             }
 
             mWorld.Resource<InputState>().SetUiCapture(mEditor.WantsCaptureKeyboard(), mEditor.WantsCaptureMouse());
-#else
+        #else
             mRenderSystem->SetViewportRect(0, VkRect2D{});
             mRenderSystem->SetViewportCamera(0, kNullEntity);
-#endif
+        #endif
 
             mScriptReloadWatcher.Poll(Assets(), dt);
 
@@ -563,11 +574,11 @@ namespace mir
 
     UIRect App::GameUIArea() const
     {
-#if MIR_WITH_EDITOR
+    #if MIR_WITH_EDITOR
         if (mDesc.mEnableEditorLayout)
             return ToUIRect(mEditor.SceneViewportRect());
-#endif
-        return UIRect{0.0f, 0.0f, static_cast<float>(mWindow->Width()), static_cast<float>(mWindow->Height())};
+    #endif
+        return UIRect{ 0.0f, 0.0f, static_cast<float>(mWindow->Width()), static_cast<float>(mWindow->Height()) };
     }
 
 #if MIR_WITH_EDITOR
@@ -597,25 +608,28 @@ namespace mir
             break;
         }
 
+        ApplyEntityAction(actions.mEntity);
+
         bool assetActionAccepted = true;
         if (actions.mAssetImport.mKind == AssetImportActionKind::Remove)
         {
             AssetId target = MakeAssetId(actions.mAssetImport.mModelPath);
             for (const auto &model : mAssetImport.View().mModels)
                 if (model.mPath == actions.mAssetImport.mModelPath && model.mAssetId != 0)
-                    target = AssetId{model.mAssetId};
-            mWorld.GetOrCreateQuery<const ModelPlayer>().ForEach([&](Entity, const ModelPlayer &player) {
-                AssetId referenced = player.ModelAsset();
-                if (referenced.IsNull() && !player.ModelName().empty())
-                    if (const AssetPathResult logical =
+                    target = AssetId{ model.mAssetId };
+            mWorld.GetOrCreateQuery<const ModelPlayer>().ForEach([&](Entity, const ModelPlayer &player)
+                {
+                    AssetId referenced = player.ModelAsset();
+                    if (referenced.IsNull() && !player.ModelName().empty())
+                        if (const AssetPathResult logical =
                             MakeLogicalAssetPath(mProject.mAssetIdRoot, player.ModelName());
-                        logical.Ok())
-                        referenced = MakeAssetId(logical.path);
-                assetActionAccepted &= referenced != target;
-            });
+                            logical.Ok())
+                            referenced = MakeAssetId(logical.path);
+                    assetActionAccepted &= referenced != target;
+                });
             if (!assetActionAccepted)
                 mAssetImport.Reject(actions.mAssetImport.mModelPath,
-                                    "cannot remove this asset while a scene entity references it");
+                    "cannot remove this asset while a scene entity references it");
         }
         if (assetActionAccepted)
             mAssetImport.Handle(actions.mAssetImport);
@@ -627,6 +641,44 @@ namespace mir
             CreateGameProject(actions.mCreateProjectName, actions.mCreateProjectRayTracing))
         {
             RequestOpenProject("games/" + actions.mCreateProjectName);
+        }
+    }
+
+    void App::ApplyEntityAction(const EntityAction &action)
+    {
+        Selection &selection = mWorld.Resource<Selection>();
+
+        switch (action.mKind)
+        {
+        case EntityActionKind::Create:
+            {
+                const EntityPresetDesc *preset = action.mPreset;
+                if (preset != nullptr && preset->mCanCreate != nullptr && !preset->mCanCreate(mWorld))
+                    return;
+
+                const Entity entity = CreateSceneEntity(mWorld, mScene);
+                if (preset != nullptr)
+                    preset->mCreate(mWorld, entity);
+
+                // after the preset
+                AddMissingBaseline(mWorld, entity);
+
+                selection.mSelected = { entity };
+                break;
+            }
+        case EntityActionKind::Delete:
+            {
+                const Entity neighbor = NeighborInHierarchy(mWorld, action.mTarget);
+                if (DestroySceneEntity(mWorld, mScene, action.mTarget) && selection.Contains(action.mTarget))
+                    selection.mSelected = neighbor.IsNull() ? std::vector<Entity>{} : std::vector<Entity>{ neighbor };
+                break;
+            }
+        case EntityActionKind::Duplicate:
+            if (const Entity copy = DuplicateSceneEntity(mWorld, mScene, action.mTarget); !copy.IsNull())
+                selection.mSelected = { copy };
+            break;
+        case EntityActionKind::None:
+            break;
         }
     }
 
@@ -668,9 +720,9 @@ namespace mir
         SystemContext stopContext = MakeContext(0.0f);
         mScheduler.Stop(stopContext);
 
-#if MIR_WITH_EDITOR
+    #if MIR_WITH_EDITOR
         mAssetImport.Shutdown();
-#endif
+    #endif
 
         audio::Terminate();
 
@@ -683,9 +735,9 @@ namespace mir
 
         DiscardSnapshot(mPlaySnapshot);
 
-#if MIR_WITH_EDITOR
+    #if MIR_WITH_EDITOR
         mEditor.Shutdown();
-#endif
+    #endif
         mImGui.Shutdown(mRenderer);
 
         mRenderer.Shutdown();

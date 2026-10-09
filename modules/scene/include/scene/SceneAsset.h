@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <unordered_set>
 
 namespace mir
 {
@@ -56,5 +57,20 @@ namespace mir
         if (!parent.IsNull())
             SetParent(world, entity, parent);
         return entity;
+    }
+
+    inline bool DestroySceneEntity(World &world, LoadedScene &scene, Entity root)
+    {
+        if (!world.IsAlive(root))
+            return false;
+
+        std::unordered_set<uint64_t> doomed{ PackEntity(root) };
+        ForEachDescendant(world, root, [&](Entity entity) { doomed.insert(PackEntity(entity)); });
+
+        std::erase_if(scene.mEntities, [&](const auto &entry) { return doomed.contains(PackEntity(entry.second)); });
+
+        // the hierarchy's destroy hook takes the descendants with it
+        world.DestroyEntity(root);
+        return true;
     }
 }

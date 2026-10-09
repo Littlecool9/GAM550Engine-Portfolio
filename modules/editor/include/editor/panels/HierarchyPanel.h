@@ -8,13 +8,31 @@
  */
 #pragma once
 
+#include <core/ecs/EntityPresetRegistry.h>
 #include <core/ecs/World.h>
 
 namespace mir
 {
+    enum class EntityActionKind
+    {
+        None,
+        Create,
+        Delete,
+        Duplicate,
+    };
+
+    struct EntityAction
+    {
+        EntityActionKind mKind = EntityActionKind::None;
+        const EntityPresetDesc *mPreset = nullptr; // for create
+        Entity mTarget = kNullEntity;              // for delete, duplicate
+    };
+
     class HierarchyPanel
     {
     public:
-        void Draw(World &world);
+        EntityAction Draw(World &world);
     };
+
+    Entity NeighborInHierarchy(const World &world, Entity entity);
 }

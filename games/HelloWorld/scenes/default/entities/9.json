@@ -1,0 +1,58 @@
+{
+  "components": [
+    {
+      "fields": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "type": "Transform"
+    },
+    {
+      "fields": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "type": "WorldTransform"
+    },
+    {
+      "fields": {
+        "name": "Sun_Entity8"
+      },
+      "type": "Name"
+    },
+    {
+      "fields": {
+        "areaSize": 0.5,
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "intensity": 1.0,
+        "range": 2.5,
+        "spotAngleDegrees": 45.0,
+        "type": 0
+      },
+      "type": "Light"
+    }
+  ],
+  "id": 9,
+  "parent": 0
+}
