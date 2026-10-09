@@ -191,7 +191,6 @@ namespace mir
             return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
         }
 
-        // Closest hit only. A ray that starts inside a body hits it at distance 0.
         sol::table WorldRaycast(World &world, const sol::object &origin, const sol::object &direction,
                                 sol::optional<sol::object> maxDistance, sol::this_state state)
         {

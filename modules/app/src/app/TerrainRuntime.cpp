@@ -364,8 +364,6 @@ namespace mir
         PhysicsWorld *physics = mWorld->TryResource<PhysicsWorld>();
         if (!physics)
             return;
-        // Overlapping instances are refused, so a loaded placement names one instance. One still
-        // waiting to settle matches nothing and keeps its tag.
         for (const InstanceResources &resources : mResources)
             for (const TerrainInstanceSpec &instance : spec.instances)
                 if (SamePlacement(resources.placement, {instance.asset, instance.translation}))

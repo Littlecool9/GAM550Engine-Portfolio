@@ -60,7 +60,6 @@ namespace mir
         std::string logicalPath;
         AssetId asset;
         WorldPosition translation;
-        // Not compared: a Play snapshot restore changes it, not the terrain.
         Entity entity;
 
         bool operator==(const TerrainInstanceSpec &other) const;

@@ -27,7 +27,6 @@ namespace mir
         return out;
     }
 
-    // A missing key reads 0. nullopt for a non-table, a non-finite value or one past WorldReal's range.
     inline std::optional<WorldVec3> WorldVec3FromLua(const sol::object &value)
     {
         if (!value.is<sol::table>())

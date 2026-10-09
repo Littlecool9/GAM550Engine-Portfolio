@@ -72,7 +72,6 @@ namespace mir
                                                          const TerrainInstanceState &instance);
         void RebuildMeshes(TerrainWorld &world);
         void Publish();
-        // Entities change on a Play snapshot restore while the colliders are kept.
         void TagColliders(const TerrainSceneSpec &spec);
         void DestroyCollider(BodyHandle body);
         void Report(const std::string &message);
