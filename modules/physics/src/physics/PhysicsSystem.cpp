@@ -77,6 +77,7 @@ namespace mir
                     // This runs after ScriptSystem PreUpdate phase,
                     // meaning OnStart() in a script can never find a body.
                     rigidBody.body = CreateBodyFor(*physics, rigidBody, transform);
+                    physics->SetBodyEntity(rigidBody.body, entity);
                 }
                 else if (transform.Version() != rigidBody.transformVersion)
                 {

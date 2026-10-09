@@ -208,12 +208,19 @@ TEST_CASE("A far TerrainInstance saves and reloads with its placement exact and 
     CHECK(glm::dvec3(spec.instances[0].translation.Meters()) == kFar);
     CHECK(spec.instances[0].recipePath == kRecipe);
     CHECK(spec.instances[0].asset == TerrainAsset(kRecipe));
+    CHECK(spec.instances[0].entity == loaded.mEntities.begin()->second);
 
     const PlaySnapshot snapshot = CaptureWorld(reloaded.world);
     const LoadedScene restored = RestoreWorld(reloaded.world, snapshot);
     CHECK(restored.mEntities.size() == 1);
     CHECK(EntityCount(reloaded.world) == 1);
-    CHECK(CollectTerrainScene(reloaded.world, kIdRoot) == authoredSpec);
+    const TerrainSceneSpec restoredSpec = CollectTerrainScene(reloaded.world, kIdRoot);
+    CHECK(restoredSpec == authoredSpec);
+    // The restore recreates the entity; the spec still compares equal, carrying the new one.
+    REQUIRE(restoredSpec.instances.size() == 1);
+    CHECK(restoredSpec.instances[0].entity == restored.mEntities.begin()->second);
+    CHECK(restoredSpec.instances[0].entity != spec.instances[0].entity);
+    CHECK(restoredSpec == spec);
 
     if constexpr (mir::kLargeWorld)
     {

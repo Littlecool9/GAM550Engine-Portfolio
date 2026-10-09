@@ -9,6 +9,7 @@
 #pragma once
 
 #include <assets/AssetId.h>
+#include <core/ecs/Entity.h>
 #include <core/math/WorldCoordinates.h>
 #include <terrain/TerrainHeightQuery.h>
 #include <terrain/TerrainIdentity.h>
@@ -59,6 +60,8 @@ namespace mir
         std::string logicalPath;
         AssetId asset;
         WorldPosition translation;
+        // Not compared: a Play snapshot restore changes it, not the terrain.
+        Entity entity;
 
         bool operator==(const TerrainInstanceSpec &other) const;
     };

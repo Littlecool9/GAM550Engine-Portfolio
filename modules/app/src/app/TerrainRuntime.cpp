@@ -69,6 +69,7 @@ namespace mir
         mPendingSpec = CollectTerrainScene(*mWorld, mAssetIdRoot);
         mPendingAge = 0.0f;
         Apply(mPendingSpec);
+        TagColliders(mPendingSpec);
     }
 
     void TerrainRuntime::Refresh(float dt, bool force)
@@ -93,9 +94,13 @@ namespace mir
         const bool moved = poll && TerrainCurrentMoved(mWorld->Resource<TerrainWorld>(), mReleasesRoot);
 
         if (!edited && !moved && !mMeshesForgotten)
+        {
+            TagColliders(spec);
             return;
+        }
         // A moved pointer alone keeps the loaded instances, not a half-typed edit.
-        Apply(edited ? std::move(spec) : mSpec);
+        Apply(edited ? spec : mSpec);
+        TagColliders(spec);
     }
 
     void TerrainRuntime::ForgetMeshes()
@@ -352,6 +357,22 @@ namespace mir
             draws.insert(draws.end(), resources.tiles.DrawItems().begin(), resources.tiles.DrawItems().end());
         }
         PublishTerrainDraws(*mWorld, draws);
+    }
+
+    void TerrainRuntime::TagColliders(const TerrainSceneSpec &spec)
+    {
+        PhysicsWorld *physics = mWorld->TryResource<PhysicsWorld>();
+        if (!physics)
+            return;
+        // Overlapping instances are refused, so a loaded placement names one instance. One still
+        // waiting to settle matches nothing and keeps its tag.
+        for (const InstanceResources &resources : mResources)
+            for (const TerrainInstanceSpec &instance : spec.instances)
+                if (SamePlacement(resources.placement, {instance.asset, instance.translation}))
+                {
+                    physics->SetBodyEntity(resources.collider, instance.entity);
+                    break;
+                }
     }
 
     void TerrainRuntime::DestroyCollider(BodyHandle body)
