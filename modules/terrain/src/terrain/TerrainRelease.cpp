@@ -16,6 +16,7 @@
 #include <core/fs/FileIO.h>
 
 #include <algorithm>
+#include <system_error>
 #include <utility>
 
 namespace mir
@@ -276,5 +277,16 @@ namespace mir
         if (!id)
             return Failure<TerrainReleaseHandle>(id.error, "");
         return OpenTerrainRelease(releasesRoot, asset, *id.value);
+    }
+
+    TerrainResult<TerrainReleaseId> PeekTerrainCurrentPointer(const std::filesystem::path &releasesRoot,
+                                                              AssetId asset)
+    {
+        const std::filesystem::path path = TerrainCurrentPointerPath(releasesRoot, asset);
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(path, ec))
+            return Fail<TerrainReleaseId>(Code::NotFound, "{}: no current release pointer (nothing published?)",
+                                          path.generic_string());
+        return ReadTerrainCurrentPointer(releasesRoot, asset);
     }
 }

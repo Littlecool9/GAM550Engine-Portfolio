@@ -49,6 +49,7 @@ namespace mir
     class RenderSystem;
     class ScriptSystem;
     class ModelSystem;
+    class TerrainRuntime;
 
     struct AppDesc
     {
@@ -88,7 +89,7 @@ namespace mir
         //whether this build has the editor in it at all
         static constexpr bool kHasEditor = MIR_WITH_EDITOR != 0;
 
-        App() = default;
+        App();
         ~App();
 
         App(const App &) = delete;
@@ -204,6 +205,9 @@ namespace mir
         ScriptHost mScriptHost;
         ScriptReloadWatcher mScriptReloadWatcher{mScriptHost};
         LoadedScene mScene;
+
+        // Handles only, freed with the renderer and the World
+        std::unique_ptr<TerrainRuntime> mTerrain;
 
         AppDesc mDesc;
         GameProject mProject;

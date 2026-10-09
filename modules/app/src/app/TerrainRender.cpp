@@ -54,20 +54,56 @@ namespace mir
         draw.material = material;
         draw.translationGrid = kTerrainTranslationGrid;
         mDraws.push_back(draw);
+        mOrigins.push_back(mesh.origin);
         mRelease = mesh.release;
+        return true;
+    }
+
+    bool TerrainRenderTiles::Place(const TerrainPlacement &placement)
+    {
+        if (mRelease && mRelease->asset != placement.asset)
+        {
+            MIR_LOG_ERROR("Terrain tiles of asset {:016x} cannot take a placement of asset {:016x}",
+                          mRelease->asset.value, placement.asset.value);
+            return false;
+        }
+
+        std::vector<WorldPosition> origins;
+        origins.reserve(mOrigins.size());
+        for (const TerrainLocalPosition &local : mOrigins)
+        {
+            const std::optional<WorldPosition> origin = TryTerrainLocalToWorld(local, placement.translation);
+            if (!origin)
+            {
+                MIR_LOG_ERROR("Terrain tiles cannot move past the world range");
+                return false;
+            }
+            origins.push_back(*origin);
+        }
+        for (size_t i = 0; i < mDraws.size(); ++i)
+            mDraws[i].pose = WorldPose{origins[i]};
         return true;
     }
 
     void TerrainRenderTiles::Destroy(VulkanRenderer &renderer)
     {
+        std::vector<MeshHandle> meshes;
+        TakeMeshes(meshes);
+        if (!meshes.empty())
+            renderer.ReleaseModelResources(meshes, {}, {});
+    }
+
+    void TerrainRenderTiles::TakeMeshes(std::vector<MeshHandle> &meshes)
+    {
         for (const WorldDrawItem &draw : mDraws)
-            renderer.DestroyMesh(draw.mesh);
+            meshes.push_back(draw.mesh);
         Forget();
     }
 
     void TerrainRenderTiles::Forget()
     {
         mDraws.clear();
+        mOrigins.clear();
         mRelease.reset();
     }
 

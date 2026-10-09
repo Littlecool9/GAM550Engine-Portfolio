@@ -1,0 +1,43 @@
+{
+  "components": [
+    {
+      "fields": {
+        "position": [
+          150000.5,
+          -20.0,
+          -75000.25
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "type": "Transform"
+    },
+    {
+      "fields": {},
+      "type": "WorldTransform"
+    },
+    {
+      "fields": {
+        "recipePath": "terrain/relief-2x2.terrain.json"
+      },
+      "type": "TerrainInstance"
+    },
+    {
+      "fields": {
+        "name": "Terrain"
+      },
+      "type": "Name"
+    }
+  ],
+  "id": 1,
+  "parent": 0
+}

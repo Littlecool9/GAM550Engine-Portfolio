@@ -1,0 +1,45 @@
+{
+  "components": [
+    {
+      "fields": {
+        "position": [
+          149765.5,
+          5.0,
+          -75040.25
+        ],
+        "rotation": [
+          -0.06175,
+          -0.46526,
+          -0.03255,
+          0.88244
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "type": "Transform"
+    },
+    {
+      "fields": {},
+      "type": "WorldTransform"
+    },
+    {
+      "fields": {
+        "farZ": 0.0,
+        "fovYDegrees": 60.0,
+        "nearZ": 0.1
+      },
+      "type": "Camera"
+    },
+    {
+      "fields": {
+        "name": "Camera"
+      },
+      "type": "Name"
+    }
+  ],
+  "id": 2,
+  "parent": 0
+}

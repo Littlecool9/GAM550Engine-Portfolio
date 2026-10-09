@@ -47,8 +47,15 @@ namespace mir
         const std::optional<TerrainReleaseInfo> &Release() const { return mRelease; }
         bool Empty() const { return mDraws.empty(); }
 
-        // Each DestroyMesh waits for the device.
+        // Moves every draw to another translation of the same asset, keeping the meshes.
+        // False (logged) and unchanged if an origin does not fit.
+        bool Place(const TerrainPlacement &placement);
+
+        // One device wait for all the meshes.
         void Destroy(VulkanRenderer &renderer);
+
+        // Appends the meshes for the caller to release, then forgets them.
+        void TakeMeshes(std::vector<MeshHandle> &meshes);
 
         // Call when ReleaseSceneResources runs: a kept handle would name the next scene's mesh.
         void Forget();
@@ -56,6 +63,8 @@ namespace mir
     private:
         std::optional<TerrainReleaseInfo> mRelease;
         std::vector<WorldDrawItem> mDraws;
+        // Parallel to mDraws.
+        std::vector<TerrainLocalPosition> mOrigins;
     };
 
     // Publish an empty span before the meshes are freed.
