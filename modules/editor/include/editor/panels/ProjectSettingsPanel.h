@@ -20,13 +20,18 @@ namespace mir
     public:
         void Draw(RenderSettings &renderSettings, const std::filesystem::path &savePath, bool &showInputSettings);
 
-        void OnHidden() { mDraftLoaded = false; }
+        void OnHidden()
+        {
+            mDraftLoaded = false;
+            mRenderingStatusMessage.clear();
+        }
 
     private:
         void DrawRendering(RenderSettings &renderSettings, RenderSettings &draftRenderSettings,
             const std::filesystem::path &savePath);
 
         std::string mRenderingStatusMessage;
+        RenderSettings mMessageSnapshot;
 
         bool mDraftLoaded = false;
         RenderSettings mDraftRenderSettings;

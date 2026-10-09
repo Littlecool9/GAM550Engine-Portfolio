@@ -46,6 +46,9 @@ namespace mir
 
     uint64_t CurrentProcessId();
 
+    // Resident/working-set memory of the running process, in bytes. 0 if unsupported.
+    uint64_t CurrentProcessMemoryUsageBytes();
+
     // Starts program with args in the current directory. With waitForExit returns
     // its exit code, otherwise 0 once started. Nullopt (logged) if it cannot start.
     std::optional<int> LaunchProcess(const std::filesystem::path &program, std::span<const std::string> args,

@@ -150,7 +150,7 @@ TEST_CASE("SaveScene then LoadScene keeps a far root and its child exact", "[sce
 
     // map-edge root nudged by a sub-millimetre-scale step a float would drop
     const mir::WorldVec3 rootPosition = mir::WorldVec3(-150000.125, 350.5, 75000.5) + mir::WorldVec3(0.001, -0.002, 0.003);
-    const mir::WorldVec3 childLocal{0.5 + 0.001, 0.0, -0.25};
+    const mir::WorldVec3 childLocal{ 0.5 + 0.001, 0.0, -0.25 };
 
     World world;
     LoadedScene scene = NewScene("test");
@@ -379,7 +379,7 @@ TEST_CASE("LoadScene does not resolve a live-handle EntityRef", "[scene]")
     {
         std::ofstream entityFile(dir.mPath / "entities" / "1.json");
         entityFile << R"({"id":1,"parent":0,"components":[{"type":"SceneIOTestRef","fields":{"target":{"entity":)"
-                   << mir::PackEntity(live) << "}}}]}";
+            << mir::PackEntity(live) << "}}}]}";
     }
 
     LoadedScene loaded = mir::LoadScene(loadedWorld, dir.mPath);
@@ -592,4 +592,87 @@ TEST_CASE("SaveScene then LoadScene round-trips a tag", "[scene]")
     CHECK(tag.Has(loadedWorld, loadedTagged));
     CHECK_FALSE(tag.Has(loadedWorld, loadedPlain));
     CHECK(tag.GetComponent(loadedWorld, loadedTagged) == nullptr);
+}
+
+TEST_CASE("DestroySceneEntity removes the entity and its descendants from the world and the scene", "[scene]")
+{
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity root = CreateSceneEntity(world, scene);
+    Entity child = CreateSceneEntity(world, scene, root);
+    Entity grandchild = CreateSceneEntity(world, scene, child);
+    Entity keeper = CreateSceneEntity(world, scene);
+
+    REQUIRE(mir::DestroySceneEntity(world, scene, root));
+
+    CHECK_FALSE(world.IsAlive(root));
+    CHECK_FALSE(world.IsAlive(child));
+    CHECK_FALSE(world.IsAlive(grandchild));
+    CHECK(world.IsAlive(keeper));
+    REQUIRE(scene.mEntities.size() == 1);
+    CHECK(scene.mEntities.begin()->second == keeper);
+}
+
+TEST_CASE("DestroySceneEntity refuses an entity that is not alive", "[scene]")
+{
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity entity = CreateSceneEntity(world, scene);
+    REQUIRE(mir::DestroySceneEntity(world, scene, entity));
+
+    CHECK_FALSE(mir::DestroySceneEntity(world, scene, entity));
+}
+
+TEST_CASE("SaveScene after DestroySceneEntity writes only the survivors", "[scene]")
+{
+    mir::RegisterCoreComponents();
+
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity root = CreateSceneEntity(world, scene);
+    CreateSceneEntity(world, scene, root);
+    Entity keeper = CreateSceneEntity(world, scene);
+    mir::AddTransform(world, keeper, Transform{ glm::vec3(4.0f, 5.0f, 6.0f) });
+
+    REQUIRE(mir::DestroySceneEntity(world, scene, root));
+
+    TempSceneDir dir("destroy_then_save");
+    REQUIRE(mir::SaveScene(world, dir.mPath, scene));
+
+    World loadedWorld;
+    LoadedScene loaded = mir::LoadScene(loadedWorld, dir.mPath);
+    REQUIRE(loaded.mEntities.size() == 1);
+
+    const Transform *transform = loadedWorld.GetComponent<Transform>(loaded.mEntities.begin()->second);
+    REQUIRE(transform != nullptr);
+    CHECK(transform->Position() == mir::WorldVec3(4.0, 5.0, 6.0));
+}
+
+TEST_CASE("SaveScene removes the file of an entity destroyed since the last save", "[scene]")
+{
+    mir::RegisterCoreComponents();
+
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity doomed = CreateSceneEntity(world, scene);
+    CreateSceneEntity(world, scene);
+
+    // ids ascend, so the first entity created holds the lowest id
+    const StableId doomedId = scene.mEntities.begin()->first;
+    const StableId keptId = std::next(scene.mEntities.begin())->first;
+
+    TempSceneDir dir("destroy_removes_file");
+    REQUIRE(mir::SaveScene(world, dir.mPath, scene));
+
+    const std::filesystem::path entitiesDir = dir.mPath / "entities";
+    std::ofstream(entitiesDir / "notes.json") << "{}";
+    std::ofstream(entitiesDir / "notes.txt") << "keep";
+
+    REQUIRE(mir::DestroySceneEntity(world, scene, doomed));
+    REQUIRE(mir::SaveScene(world, dir.mPath, scene));
+
+    CHECK_FALSE(std::filesystem::exists(entitiesDir / (std::to_string(doomedId) + ".json")));
+    CHECK(std::filesystem::exists(entitiesDir / (std::to_string(keptId) + ".json")));
+    CHECK(std::filesystem::exists(entitiesDir / "notes.json"));
+    CHECK(std::filesystem::exists(entitiesDir / "notes.txt"));
 }

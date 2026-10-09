@@ -88,4 +88,12 @@ namespace mir
             SetParent(world, root->second, parent);
         return root->second;
     }
+
+    Entity DuplicateSceneEntity(World &world, LoadedScene &scene, Entity source)
+    {
+        if (!world.IsAlive(source))
+            return kNullEntity;
+
+        return RestoreEntity(world, CaptureEntity(world, source), scene, ParentOf(world, source));
+    }
 }

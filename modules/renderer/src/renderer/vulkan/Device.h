@@ -46,6 +46,14 @@ namespace mir::vk
         bool RayTracingSupported() const { return mRayTracingSupported; }
         const VkPhysicalDeviceRayTracingPipelinePropertiesKHR &RtProperties() const { return mRtProperties; }
 
+        struct MemoryBudget
+        {
+            uint64_t mUsageBytes = 0;
+            uint64_t mBudgetBytes = 0;
+        };
+
+        MemoryBudget GpuMemoryBudget() const;
+
         bool ValidationEnabled() const { return mValidationEnabled; }
 
         // No-op without validation, so release builds skip the call.
@@ -77,6 +85,8 @@ namespace mir::vk
 
         bool mRayTracingSupported = false;
         VkPhysicalDeviceRayTracingPipelinePropertiesKHR mRtProperties{};
+
+        bool mMemoryBudgetSupported = false;
 
         bool mValidationEnabled = false;
     };

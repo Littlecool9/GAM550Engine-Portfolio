@@ -32,6 +32,8 @@ namespace mir
 
         std::vector<InputAction> &MutableActions() { return mActions; }
 
+        bool operator==(const InputMap &) const = default;
+
         // nullopt only when the file cannot be read as a JSON object at all.
         static std::optional<InputMap> LoadFile(const std::filesystem::path &path);
         bool SaveFile(const std::filesystem::path &path) const;

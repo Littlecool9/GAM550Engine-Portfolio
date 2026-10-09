@@ -21,6 +21,9 @@ namespace mir
         ImGui::Checkbox("Ray Tracing", &draftRenderSettings.rayTracing);
         ImGui::Checkbox("Distance Fog", &draftRenderSettings.fog);
 
+        if (!mRenderingStatusMessage.empty() && draftRenderSettings != mMessageSnapshot)
+            mRenderingStatusMessage.clear();
+
         if (ImGui::Button("Save##Rendering"))
         {
             if (draftRenderSettings.SaveFile(savePath))
@@ -32,6 +35,7 @@ namespace mir
             {
                 mRenderingStatusMessage = "Save failed - see log.";
             }
+            mMessageSnapshot = draftRenderSettings;
         }
 
         if (!mRenderingStatusMessage.empty())

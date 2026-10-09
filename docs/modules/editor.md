@@ -30,13 +30,14 @@ if (IsEditing(world))                                   // Play shows the World'
 ```
 
 `DrawLayout` returns `EditorActions`: the `SceneMenuAction` the File menu or the
-Play/Pause/Stop toolbar picked this frame, and the directory of a game picked
-under Project > Open Project and confirmed. The editor decides what was asked for
-and `App` decides what it means, so this module never touches `SceneIO`,
-`PlaySnapshot` or a `GameProject` — `EngineModeState` is read-only here, just to
-draw the toolbar's current label. `HierarchyPanel` does read the `World`'s
-entities (see below), but only to display and select them; it never creates,
-destroys or reparents one.
+Play/Pause/Stop toolbar picked this frame, the `EntityAction` the Hierarchy asked
+for, and the directory of a game picked under Project > Open Project and
+confirmed. The editor decides what was asked for and `App` decides what it means,
+so this module never touches `SceneIO`, `PlaySnapshot`, a `LoadedScene` or a
+`GameProject` — `EngineModeState` is read-only here, just to draw the toolbar's
+current label. `HierarchyPanel` reads the `World`'s entities (see below) to
+display and select them. It never creates, destroys or duplicates one itself.
+Each of those also changes the `LoadedScene`, and only `App` holds it.
 
 Project > Open Project lists the `ProjectMenuEntry` values `App` passes in — each
 game's name, with its directory in the shortcut column — and ticks the one whose
@@ -88,7 +89,10 @@ EditorCamera &SceneCamera();
 |---|---|---|
 | `SceneMenuAction` | `editor/Editor.h` | `None`/`New`/`Save`/`Load`/`Play`/`TogglePause`/`Stop` |
 | `ProjectMenuEntry` | `editor/Editor.h` | `{mDir, mName}` for one game in Open Project |
-| `EditorActions` | `editor/Editor.h` | `{mScene, mOpenProject}`, what the menus and toolbar asked for this frame |
+| `EditorActions` | `editor/Editor.h` | `{mScene, mEntity, mOpenProject}`, what the menus and toolbar asked for this frame |
+| `EntityAction`, `EntityActionKind` | `editor/panels/HierarchyPanel.h` | `{mKind, mPreset, mTarget}`: `Create` (null `mPreset` = New), `Delete` or `Duplicate`, for `App` to carry out |
+| `NeighborInHierarchy` | `editor/panels/HierarchyPanel.h` | The entity to select after deleting one: next sibling, else previous, else the parent |
+| `IsBaselineComponent`, `AddMissingBaseline` | `editor/EntityBaseline.h` | The components every editor-created entity has: `Transform`, `WorldTransform`, `Name` |
 | `EditorCamera` | `editor/EditorCamera.h` | Free-fly scene camera, `WorldPosition` + yaw/pitch (`Pose()`, `Translate`, `FocusOn`), outside the `World` |
 | `Selection` | `editor/Selection.h` | `{mSelected}` (a `vector<Entity>`, ordered by selection - `.back()` is primary), the `World` resource `Hierarchy` and viewport picking write and `Inspector`/the gizmo read |
 
@@ -128,6 +132,16 @@ builds) over every selected entity, not just the primary - brighter/opaque
 for the primary, dimmer for the rest - since the gizmo alone gives no
 viewport-visible sign that a non-primary entity is still selected.
 
+Right-clicking empty space in `Hierarchy` opens Create. Its first item, New,
+creates an entity from no preset, and the items below it come from
+`EntityPresetRegistry`. Right-clicking a row opens Duplicate and Delete for that
+entity, and selects it first if it was not already selected. The Delete key and
+Ctrl+D do the same for `Selection::Primary()`, while the panel has focus and no
+text field is active. Each of these only fills `EntityAction`.
+`App::ApplyEntityAction` carries it out (see [app.md](app.md)) and selects the
+result. After a delete it selects `NeighborInHierarchy`, computed before the
+entity is gone.
+
 `InspectorPanel` walks every `seq` up to `kMaxComponentTypes`, asking
 `ComponentRegistry::FindBySeq` for each one and skipping those the selection
 doesn't `Has` — the same walk `SceneIO` (see [scene.md](scene.md)) uses to
@@ -139,12 +153,21 @@ Each field reads into a 64-byte scratch buffer (large enough for a `Mat4`,
 control reports an edit — so a component with a custom accessor (`Transform`'s
 `SetPosition` and friends) runs through it rather than being memcpy'd under
 it. A `FieldDesc::ReadOnly` field (`WorldTransform.matrix`) still shows its
-current value, greyed out via `ImGui::BeginDisabled`. No component
-add/remove — numeric/text controls over the existing field tables only, per
-the roadmap's scope cut. (A 3D transform gizmo does exist, drawn over the
-viewport by `DrawViewportGizmo` via ImGuizmo - it's a separate,
-`Selection`-driven overlay, not part of `InspectorPanel`'s field-table
-drawing described here.)
+current value, greyed out via `ImGui::BeginDisabled`. (A 3D transform gizmo
+does exist, drawn over the viewport by `DrawViewportGizmo` via ImGuizmo - it's
+a separate, `Selection`-driven overlay, not part of `InspectorPanel`'s
+field-table drawing described here.)
+
+Component edits happen inside `InspectorPanel`, on the `World` directly. They
+change no `LoadedScene` entry, so unlike entity actions there is nothing for
+`App` to do. The Add Component button below the components lists every
+registered component the entity lacks, except the baseline, and picking one
+calls `ComponentOps::AddDefault`. Right-clicking a component's header opens
+Copy Values, Paste Values and Remove Component. Copy Values reads every field
+through `FieldDesc::Read` into the panel's `Clipboard`. Paste Values is enabled
+only on a component of the copied type. When the entity lacks that type, Add
+Component offers "Paste <type>" at the top instead, which adds the component
+and then pastes into it.
 
 ## Rules
 
@@ -200,6 +223,33 @@ half of the rule; `App` enforces it independently (see [app.md](app.md)) since
 this module only greys out a button, it does not stop another caller from
 reaching `App::SaveScene()` directly.
 
+**Every entity the editor creates has `Transform`, `WorldTransform` and `Name`.**
+The gizmo moves an entity through its `Transform`, and the Hierarchy labels a row
+by its `Name`. `App` runs the preset first and `AddMissingBaseline` after it.
+`AddComponent` keeps a component that already exists, so a preset's own `Name`
+wins over the default `Entity<index>`. `IsBaselineComponent` keeps the three out
+of Add Component and greys out their Remove Component.
+
+**Paste writes field by field through `FieldDesc::Write`, never as raw bytes.**
+Copying `Transform`'s bytes would copy its version stamp too.
+`WorldTransform` is rebuilt only when that stamp differs from the one it was
+built from, so a pasted position could be skipped. Writing each field runs
+`Transform`'s setters instead, and they bump the stamp.
+
+Every writable field is pasted, hidden ones included. `ModelPlayer`'s hidden
+fields are persisted data, so skipping them would paste half a component. A
+`ReadOnly` field is skipped. An `EntityRef` keeps its target, so a pasted
+reference points where the copied one did.
+
+**Remove Component runs after the component loop.** Removing a component moves
+the entity to another archetype, which invalidates the component pointers the
+rest of the loop draws from. Add Component is drawn after the loop for the same
+reason. Paste runs inside the loop, because writing into a component of the same
+type moves nothing.
+
+**Entity and component edits are allowed during Play.** Stop restores the `World`
+from `PlaySnapshot`, so it discards them along with everything else Play changed.
+
 ## State
 
 *As of 2026-09-14.* One fixed layout: `Hierarchy` left, `Inspector` right,
@@ -215,36 +265,46 @@ the process an Open Project restart launches.
 switches viewport 0 to the World's default camera in Play (see
 [app.md](app.md)).
 
+*As of 2026-10-08.* `Hierarchy` creates, duplicates and deletes entities, and
+`Inspector` adds, removes, copies and pastes components. Each acts on one
+entity: the right-clicked row, or `Selection::Primary()`.
+
 No tests. It needs a device and a display. `smoke.switch` covers the restart that
 Open Project asks for, but not the menu or the dialog themselves.
 
 ## Backlog
 
-1. **`Inspector` has no way to add or remove a component.** It only edits the
-   fields of what the selection already has; issue #38 scoped that out
-   explicitly, same as the "no gizmo" cut below.
-2. **`Hierarchy` shows no entity names.** No component carries a display
-   name yet, so each row is just `Entity <index>`.
-3. **No multi-object transform gizmo.** With more than one entity selected,
+1. **No multi-object transform gizmo.** With more than one entity selected,
    `DrawViewportGizmo` only manipulates `Selection::Primary()` - moving
    several selected objects together as a group, preserving their relative
    offsets, needs a shared-pivot gizmo this doesn't have.
-4. **Serialized custom layouts**, beyond whatever `imgui.ini` remembers.
-5. **Input routing**, beyond what `ImGui_ImplGlfw` gives for free.
-6. **Make `Editor` optional on `App`** — a `unique_ptr`, null in a packaged game
+2. **Serialized custom layouts**, beyond whatever `imgui.ini` remembers.
+3. **Input routing**, beyond what `ImGui_ImplGlfw` gives for free.
+4. **Make `Editor` optional on `App`** — a `unique_ptr`, null in a packaged game
    build. This module's boundary is what makes that swap possible without
    touching `RenderSystem` or `VulkanRenderer`.
-7. **A second viewport showing `EditorCamera` during Play+Paused**, so pausing
+5. **A second viewport showing `EditorCamera` during Play+Paused**, so pausing
    lets you look around the live World independent of the game camera. Needs
    `RenderSystem::AddViewport` (see [renderer.md](renderer.md)) wired to a
    second panel; nothing calls it yet.
-8. **Viewport picking only tests axis-aligned bounding boxes**, not actual
+6. **Viewport picking only tests axis-aligned bounding boxes**, not actual
    mesh geometry - a click inside an object's box but over empty space
    between its triangles (e.g. near a corner) still selects it. No
    per-triangle picking, matching the renderer's own choice not to retain
    CPU-side mesh geometry after upload.
+7. **Delete and Duplicate act on one entity, not the whole selection.**
 
 ## Changed
+
+*2026-10-08* — **`Hierarchy` creates, duplicates and deletes entities, and
+`Inspector` adds, removes, copies and pastes components.** Was: the Create menu
+called `World::CreateEntity` and ran the preset inside `HierarchyPanel`. That
+entity never entered the `LoadedScene`, so Save dropped it (#96). `Inspector`
+only edited the fields of components already present. Now: `HierarchyPanel`
+returns an `EntityAction` through `EditorActions`, and `App` creates through
+`CreateSceneEntity`, so every created entity is saved. Delete and Duplicate take
+the same route. Component add, remove, copy and paste stay inside
+`InspectorPanel`, because they change no `LoadedScene` entry.
 
 *2026-10-02* — **Optional.** Was: built and linked into every binary. Now: not
 built at all when `MJOLNIR_WITH_EDITOR` is OFF (the `windows-msvc-game-*`

@@ -2,6 +2,7 @@ engine_add_module_tests(physics
     HeightField.tests.cpp
     PhysicsSystem.tests.cpp
     PhysicsWorld.tests.cpp
+    TerrainCollider.tests.cpp
 )
 
 # Test-only: checks contact against the terrain surface; engine_physics never links terrain.

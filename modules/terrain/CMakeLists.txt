@@ -1,6 +1,8 @@
 ﻿engine_add_module(terrain)
 
 target_sources(engine_terrain PRIVATE
+    src/terrain/ComponentRegistration.cpp
+    src/terrain/TerrainAreaSamples.cpp
     src/terrain/TerrainAssetPath.cpp
     src/terrain/TerrainByteSource.cpp
     src/terrain/TerrainHeightQuery.cpp
@@ -8,6 +10,7 @@ target_sources(engine_terrain PRIVATE
     src/terrain/TerrainPackFormat.cpp
     src/terrain/TerrainPackWriter.cpp
     src/terrain/TerrainRelease.cpp
+    src/terrain/TerrainScene.cpp
     src/terrain/TerrainSurface.cpp
     src/terrain/TerrainTileMesh.cpp
     src/terrain/TileAddressing.cpp

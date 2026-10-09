@@ -1,0 +1,6 @@
+{
+    "name": "TerrainCheck",
+    "title": "MjolnirEngine - TerrainCheck",
+    "assetsRoot": "assets",
+    "sceneDir": "scenes/default"
+}

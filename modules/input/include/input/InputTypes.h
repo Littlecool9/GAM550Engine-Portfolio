@@ -49,6 +49,8 @@ namespace mir
         GamepadAxis gamepadAxis = GamepadAxis::LeftX;
         float deadzone = 0.15f; // only applies when useGamepadAxis is true
         float scale = 1.0f;
+
+        bool operator==(const InputBinding &) const = default;
     };
 
     struct InputAction
@@ -56,6 +58,8 @@ namespace mir
         std::string name;
         InputActionType type = InputActionType::Button;
         std::vector<InputBinding> bindings;
+
+        bool operator==(const InputAction &) const = default;
     };
 
     std::string_view ActionTypeName(InputActionType type);

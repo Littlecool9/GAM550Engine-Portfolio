@@ -21,8 +21,10 @@ target_link_libraries(engine_app
 target_sources(engine_app PRIVATE
     src/app/App.cpp
     src/app/GameProject.cpp
+    src/app/MeshResolveSystem.cpp
     src/app/SceneResolve.cpp
     src/app/TerrainRender.cpp
+    src/app/TerrainRuntime.cpp
 )
 
 # PUBLIC: App.h holds the editor's members only with it, so everything that

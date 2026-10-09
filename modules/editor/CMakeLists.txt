@@ -31,11 +31,13 @@ target_sources(engine_editor PRIVATE
     src/editor/Editor.cpp
     src/editor/EditorCamera.cpp
     src/editor/EditorPreferences.cpp
+    src/editor/EntityBaseline.cpp
     src/editor/panels/HierarchyPanel.cpp
     src/editor/panels/AssetImportPanel.cpp
     src/editor/panels/InputSettingsPanel.cpp
     src/editor/panels/InspectorPanel.cpp
     src/editor/panels/LogPanel.cpp
     src/editor/panels/PreferencesPanel.cpp
+    src/editor/panels/ProfilerPanel.cpp
     src/editor/panels/ProjectSettingsPanel.cpp
 )

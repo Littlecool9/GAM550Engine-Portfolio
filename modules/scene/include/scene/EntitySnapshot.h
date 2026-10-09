@@ -25,4 +25,6 @@ namespace mir
 
     Entity RestoreEntity(World &world, const EntitySnapshot &snapshot, LoadedScene &scene,
         Entity parent = kNullEntity);
+
+    Entity DuplicateSceneEntity(World &world, LoadedScene &scene, Entity source);
 }

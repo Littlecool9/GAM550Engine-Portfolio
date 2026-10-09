@@ -272,3 +272,53 @@ TEST_CASE("CaptureEntity of a dead entity is empty and restores nothing", "[scen
     CHECK(RestoreEntity(world, snapshot, scene).IsNull());
     CHECK(scene.mEntities.size() == 1);
 }
+
+TEST_CASE("DuplicateSceneEntity copies under the same parent and registers the copies", "[scene][snapshot]")
+{
+    mir::RegisterCoreComponents();
+
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity parent = CreateSceneEntity(world, scene);
+    Entity source = CreateSceneEntity(world, scene, parent);
+    Entity child = CreateSceneEntity(world, scene, source);
+    SetName(world, source, "Source");
+    const std::size_t before = scene.mEntities.size();
+
+    const Entity copy = mir::DuplicateSceneEntity(world, scene, source);
+
+    REQUIRE(world.IsAlive(copy));
+    CHECK(copy != source);
+    CHECK(ParentOf(world, copy) == parent);
+    CHECK(std::strcmp(world.GetComponent<Name>(copy)->mValue, "Source") == 0);
+
+    const std::vector<Entity> copiedChildren = ChildrenOf(world, copy);
+    REQUIRE(copiedChildren.size() == 1);
+    CHECK(copiedChildren.front() != child);
+
+    // the copy and its child get StableIds of their own; the originals keep theirs
+    CHECK(scene.mEntities.size() == before + 2);
+    CHECK(ChildrenOf(world, source) == std::vector<Entity>{ child });
+}
+
+TEST_CASE("DuplicateSceneEntity keeps a root entity at the root", "[scene][snapshot]")
+{
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity source = CreateSceneEntity(world, scene);
+
+    const Entity copy = mir::DuplicateSceneEntity(world, scene, source);
+
+    REQUIRE(world.IsAlive(copy));
+    CHECK(ParentOf(world, copy).IsNull());
+}
+
+TEST_CASE("DuplicateSceneEntity returns null for an entity that is not alive", "[scene][snapshot]")
+{
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity source = CreateSceneEntity(world, scene);
+    world.DestroyEntity(source);
+
+    CHECK(mir::DuplicateSceneEntity(world, scene, source).IsNull());
+}
