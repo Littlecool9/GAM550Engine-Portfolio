@@ -51,6 +51,9 @@ namespace mir
 
         // the hovered target's action, shown in the drag tooltip
         std::string mDropHint;
+
+        // dropped last frame; App moved them after that Draw, so they are revealed in this one
+        std::vector<Entity> mReveal;
     };
 
     Entity NeighborInHierarchy(const World &world, Entity entity);
