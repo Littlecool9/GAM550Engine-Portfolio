@@ -9,6 +9,7 @@
 #pragma once
 
 #include <terrain/TerrainPackFormat.h>
+#include <terrain/TerrainPackWriter.h>
 
 #include <array>
 #include <cstddef>
@@ -76,4 +77,9 @@ namespace mir::detail
     }
 
     uint64_t HeightsHashOf(std::span<const TerrainTileRecord> records);
+    uint64_t HeightsHashOf(std::span<const TerrainTileRecord> tiles, std::span<const TerrainTileRecord> regions);
+
+    // Every Region of the grid once, in ordinal order, with lengths and checksums filled.
+    TerrainResult<std::vector<TerrainPayloadWrite>> OrderRegionWrites(const TerrainRegionWrites &regions,
+                                                                      const TerrainLayout &reference);
 }

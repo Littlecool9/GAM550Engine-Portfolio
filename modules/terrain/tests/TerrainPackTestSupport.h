@@ -8,7 +8,9 @@
  */
 #pragma once
 
+#include <terrain/TerrainLod.h>
 #include <terrain/TerrainPackWriter.h>
+#include <terrain/TerrainRegion.h>
 #include <terrain/TerrainRelease.h>
 
 #include <assets/AssetId.h>
@@ -17,6 +19,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +29,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -195,5 +199,109 @@ namespace mir::test
     inline void PointCurrentAt(const std::filesystem::path &root, AssetId asset, TerrainReleaseId release)
     {
         REQUIRE(WriteTextAtomic(TerrainCurrentPointerPath(root, asset), EncodeTerrainCurrentPointer(release)));
+    }
+
+    // Plain grid meshes on every Region's lines, each node at the sample of the tile holding it.
+    inline TerrainRegionWrites BuildTestRegions(const TerrainLayout &layout, std::span<const TileHeights> tiles,
+                                                uint32_t regionTiles, uint32_t cells)
+    {
+        const std::optional<TerrainRegionGrid> grid = TerrainRegionGrid::Create(layout, regionTiles, cells, 1);
+        REQUIRE(grid);
+        std::unordered_map<TileCoord, const TileHeights *> byTile;
+        std::vector<TerrainSourceChecksum> checksums;
+        for (const TileHeights &tile : tiles)
+        {
+            byTile[tile.Tile()] = &tile;
+            checksums.push_back({tile.Tile(), TerrainFinalHeightChecksum(tile)});
+        }
+        const TileRange map = layout.Tiles();
+        const int64_t n = layout.IntervalsPerTile();
+        auto floorDiv = [](int64_t v, int64_t d) { return v / d - ((v % d != 0) && (v < 0) ? 1 : 0); };
+        auto height = [&](int64_t i, int64_t k) {
+            const TileCoord tile{int32_t(std::clamp<int64_t>(floorDiv(i, n), map.min.x, map.max.x)),
+                                 int32_t(std::clamp<int64_t>(floorDiv(k, n), map.min.z, map.max.z))};
+            return byTile.at(tile)->At(int32_t(i - tile.x * n), int32_t(k - tile.z * n));
+        };
+        const TerrainSourceLookup sources = [&](TileCoord tile) {
+            const auto it = byTile.find(tile);
+            return it == byTile.end() ? TerrainSourceTile{} : TerrainSourceTile{&layout, it->second};
+        };
+
+        TerrainRegionWrites writes;
+        writes.grid = grid;
+        for (uint64_t ordinal = 0; ordinal < grid->RegionCount(); ++ordinal)
+        {
+            const TerrainRegionCoord region = grid->AtOrdinal(ordinal);
+            const TerrainLocalBounds rect = grid->Rect(region);
+            TerrainRegionMesh mesh;
+            mesh.region = region;
+            mesh.tiles = grid->MapTiles(region);
+            mesh.cellSpacing = grid->CellSpacing(region.level);
+            mesh.origin = *TerrainLocalPosition::FromMeters({rect.minX, 0.0, rect.minZ});
+            const std::vector<int64_t> lx = grid->LinesX(region), lz = grid->LinesZ(region);
+            for (int64_t k : lz)
+                for (int64_t i : lx)
+                {
+                    mesh.positions.emplace_back(float(layout.SamplePosition(i) - rect.minX), height(i, k),
+                                                float(layout.SamplePosition(k) - rect.minZ));
+                    mesh.normals.emplace_back(0.0f, 1.0f, 0.0f);
+                }
+            const uint32_t row = uint32_t(lx.size());
+            for (uint32_t k = 0; k + 1 < lz.size(); ++k)
+                for (uint32_t i = 0; i + 1 < row; ++i)
+                {
+                    const uint32_t a = k * row + i, b = a + 1, d = a + row, c = d + 1;
+                    for (uint32_t id : {a, d, c, a, c, b})
+                        mesh.indices.push_back(id);
+                }
+            mesh.topologyHash = TerrainTopologyHash(mesh.positions, mesh.indices);
+            mesh.sourceChecksum = TerrainRegionSourceChecksums(*grid, region.level, checksums)
+                [size_t(region.z) * size_t(grid->Count(region.level).x) + size_t(region.x)];
+            const std::optional<double> deviation = TerrainRegionDeviation(*grid, mesh, sources);
+            REQUIRE(deviation);
+            mesh.maxDeviation = *deviation;
+
+            TerrainTileRecord record;
+            record.tile = {region.x, region.z};
+            record.level = region.level;
+            record.kind = TerrainPayloadKind::Region;
+            record.source = false;
+            record.samplesPerSide = grid->SamplesPerSide(region.level);
+            record.sampleSpacing = mesh.cellSpacing;
+            const auto [lo, hi] = std::minmax_element(mesh.positions.begin(), mesh.positions.end(),
+                                                      [](const glm::vec3 &p, const glm::vec3 &q) { return p.y < q.y; });
+            record.minHeight = lo->y;
+            record.maxHeight = hi->y;
+            record.validExtent = grid->ValidExtent(region);
+            record.maxDeviation = mesh.maxDeviation;
+            record.sourceChecksum = mesh.sourceChecksum;
+            record.topologyHash = mesh.topologyHash;
+            record.vertexCount = uint32_t(mesh.positions.size());
+            record.indexCount = uint32_t(mesh.indices.size());
+            writes.payloads.push_back({record, EncodeTerrainRegion(mesh)});
+        }
+        return writes;
+    }
+
+    inline TerrainEncodedRelease EncodeWithRegions(const TerrainReleaseInfo &info, const TerrainLayout &layout,
+                                                   std::span<const TileHeights> tiles,
+                                                   const TerrainRegionWrites &regions,
+                                                   TerrainPackWriteOptions options = {})
+    {
+        std::vector<TerrainTileWrite> inputs;
+        for (const TileHeights &tile : tiles)
+            inputs.push_back({&tile});
+        TerrainResult<TerrainEncodedRelease> encoded =
+            EncodeTerrainRelease(info, std::span(&layout, 1), inputs, {}, regions, options);
+        INFO(encoded.error.message);
+        REQUIRE(encoded);
+        return std::move(*encoded.value);
+    }
+
+    inline size_t RegionRecordAt(const TerrainIndex &index, uint32_t region)
+    {
+        return kTerrainIndexHeaderSize + index.packs.size() * kTerrainPackRecordSize +
+               index.tiles.size() * kTerrainTileRecordSize + index.layers.size() * kTerrainLayerRecordSize +
+               size_t(region) * kTerrainTileRecordSize;
     }
 }

@@ -44,8 +44,8 @@ TEST_CASE("A release round trips every tile through its index and pack", "[terra
     const TerrainEncodedRelease encoded = Encode(info, layout, tiles);
     REQUIRE(encoded.packs.size() == 1);
     CHECK(encoded.packs[0].fileName == "chunk_-1_-1.tpack");
-    // 128 header + 32 pack + 4 * 120 payloads + 16 layer + 8 trailer; 48 header + 4 payloads of 65^2 floats, 16-aligned.
-    CHECK(encoded.index.size() == 760);
+    // 152 header + 32 pack + 4 * 144 payloads + 16 layer + 8 trailer; 48 header + 4 payloads of 65^2 floats, 16-aligned.
+    CHECK(encoded.index.size() == 784);
     CHECK(encoded.packs[0].bytes.size() == 48 + 3 * 16912 + 16900);
 
     auto [source, handle] = OpenInMemory(encoded);
@@ -235,10 +235,10 @@ TEST_CASE("A newer minor with longer header, records and an extension section st
     const uint32_t packCount = 4;
     const uint32_t tileCount = 9;
 
-    // Format 2.1: a longer header and records, and an unknown section before the trailer.
+    // The next minor: a longer header and records, and an unknown section before the trailer.
     std::vector<std::byte> v11(v10.begin(), v10.begin() + kTerrainIndexHeaderSize);
     v11.insert(v11.end(), 16, std::byte{0xAB});
-    StoreU32(v11, 8, 1);
+    StoreU32(v11, 8, kTerrainFormatMinor + 1);
     StoreU32(v11, 12, kTerrainIndexHeaderSize + 16);
     StoreU32(v11, 100, kTerrainPackRecordSize + 8);
     StoreU32(v11, 108, kTerrainTileRecordSize + 8);
@@ -264,7 +264,7 @@ TEST_CASE("A newer minor with longer header, records and an extension section st
     newer.index = v11;
     auto [source, handle] = OpenInMemory(newer);
     auto [baseSource, base] = OpenInMemory(encoded);
-    CHECK(handle.Index().formatMinor == 1);
+    CHECK(handle.Index().formatMinor == kTerrainFormatMinor + 1);
     CHECK(handle.Info() == base.Info());
     CHECK(handle.Index().heightsHash == base.Index().heightsHash);
     for (uint32_t t = 0; t < tileCount; ++t)

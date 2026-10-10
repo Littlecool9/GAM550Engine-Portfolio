@@ -71,6 +71,14 @@ namespace mir
     uint64_t TerrainPayloadsHash(std::span<const TerrainLayout> layers,std::span<const TerrainTileWrite> tiles,
                                 std::span<const TerrainPayloadWrite> derived)
     {
+        return TerrainPayloadsHash(layers, tiles, derived, TerrainRegionWrites{});
+    }
+
+    uint64_t TerrainPayloadsHash(std::span<const TerrainLayout> layers,std::span<const TerrainTileWrite> tiles,
+                                std::span<const TerrainPayloadWrite> derived, const TerrainRegionWrites &regions)
+    {
+        if (layers.empty())
+            return 0;
         std::vector<TerrainTileRecord> records;
         for(const auto &v:tiles)
         {
@@ -82,7 +90,13 @@ namespace mir
         for(const auto &v:derived){auto r=v.record;r.checksum=Fnv1a64(v.bytes);records.push_back(r);}
         std::sort(records.begin(),records.end(),[](const auto &a,const auto &b){
             return std::tuple(a.tile.z,a.tile.x,a.kind,a.level,a.layer)<std::tuple(b.tile.z,b.tile.x,b.kind,b.level,b.layer);});
-        return detail::HeightsHashOf(records);
+        const auto ordered = detail::OrderRegionWrites(regions, layers.front());
+        if (!ordered)
+            return 0;
+        std::vector<TerrainTileRecord> regionRecords;
+        for (const TerrainPayloadWrite &v : *ordered.value)
+            regionRecords.push_back(v.record);
+        return detail::HeightsHashOf(records, regionRecords);
     }
 
     uint64_t TerrainHeightsHash(const TerrainLayout &layout, std::span<const TileHeights> tiles)
@@ -113,6 +127,14 @@ namespace mir
     TerrainResult<TerrainEncodedRelease> EncodeTerrainRelease(const TerrainReleaseInfo &info,
         std::span<const TerrainLayout> layers, std::span<const TerrainTileWrite> tiles,
         std::span<const TerrainPayloadWrite> derived, const TerrainPackWriteOptions &options)
+    {
+        return EncodeTerrainRelease(info, layers, tiles, derived, TerrainRegionWrites{}, options);
+    }
+
+    TerrainResult<TerrainEncodedRelease> EncodeTerrainRelease(const TerrainReleaseInfo &info,
+        std::span<const TerrainLayout> layers, std::span<const TerrainTileWrite> tiles,
+        std::span<const TerrainPayloadWrite> derived, const TerrainRegionWrites &regions,
+        const TerrainPackWriteOptions &options)
     {
         using Code = TerrainPackErrorCode;
         using R = TerrainEncodedRelease;
@@ -181,15 +203,30 @@ namespace mir
                 return Fail<R>(Code::InvalidInput,"invalid or duplicate derived key");
             r.length=inputs[i].bytes.size();r.checksum=Fnv1a64(inputs[i].bytes);
         }
+
+        TerrainResult<std::vector<TerrainPayloadWrite>> ordered = detail::OrderRegionWrites(regions, layout);
+        if (!ordered)
+            return detail::Failure<R>(ordered.error, "");
+        const std::vector<TerrainPayloadWrite> &regionInputs = *ordered.value;
+
+        // Regions go with their first map tile; their ids follow the tile payloads'.
         std::map<std::pair<int32_t, int32_t>, std::vector<uint32_t>> chunks;
         for (uint32_t t = 0; t < inputs.size(); ++t)
         {
             const TerrainChunkCoord chunk = TerrainChunkOf(inputs[t].record.tile, options.chunkTiles);
             chunks[{chunk.z, chunk.x}].push_back(t);
         }
+        for (uint32_t t = 0; t < regionInputs.size(); ++t)
+        {
+            const TerrainTileRecord &r = regionInputs[t].record;
+            const TileCoord first = regions.grid->MapTiles({r.level, r.tile.x, r.tile.z}).min;
+            const TerrainChunkCoord chunk = TerrainChunkOf(first, options.chunkTiles);
+            chunks[{chunk.z, chunk.x}].push_back(static_cast<uint32_t>(inputs.size()) + t);
+        }
 
         TerrainEncodedRelease encoded;
         std::vector<TerrainTileRecord> records(inputs.size());
+        std::vector<TerrainTileRecord> regionRecords(regionInputs.size());
         std::vector<TerrainPackRecord> packs;
         packs.reserve(chunks.size());
         for (const auto &[key, members] : chunks)
@@ -214,16 +251,19 @@ namespace mir
             for (uint32_t t : members)
             {
                 out.PadTo(options.payloadAlignment);
-                TerrainTileRecord &record = records[t];record=inputs[t].record;
+                const bool region = t >= inputs.size();
+                const TerrainPayloadWrite &input = region ? regionInputs[t - inputs.size()] : inputs[t];
+                TerrainTileRecord &record = region ? regionRecords[t - inputs.size()] : records[t];
+                record = input.record;
                 record.pack=packIndex;record.offset=out.Size();
-                out.Bytes(inputs[t].bytes);
+                out.Bytes(input.bytes);
             }
 
             packs.push_back({chunk, static_cast<uint32_t>(members.size()), pack.bytes.size(), Fnv1a64(pack.bytes)});
             encoded.packs.push_back(std::move(pack));
         }
 
-        encoded.heightsHash = detail::HeightsHashOf(records);
+        encoded.heightsHash = detail::HeightsHashOf(records, regionRecords);
         const TerrainLocalBounds &bounds = layout.Bounds();
         LeWriter out(encoded.index);
         out.Bytes(detail::kIndexMagic);
@@ -249,6 +289,12 @@ namespace mir
         out.U64(encoded.heightsHash);
         out.U32(static_cast<uint32_t>(layers.size()));
         out.U32(kTerrainLayerRecordSize);
+        out.U32(static_cast<uint32_t>(regionRecords.size()));
+        out.U32(kTerrainTileRecordSize);
+        out.U32(regions.grid ? regions.grid->RegionTiles() : 0);
+        out.U32(regions.grid ? regions.grid->Cells() : 0);
+        out.U32(regions.grid ? regions.grid->Unit() : 0);
+        out.U32(regions.grid ? regions.grid->Levels() : 0);
         MIR_ASSERT(out.Size() == kTerrainIndexHeaderSize, "index header layout drifted from the spec");
 
         for (const TerrainPackRecord &pack : packs)
@@ -260,8 +306,7 @@ namespace mir
             out.U64(pack.fileSize);
             out.U64(pack.checksum);
         }
-        for (const TerrainTileRecord &r : records)
-        {
+        auto writeRecord = [&](const TerrainTileRecord &r) {
             out.I32(r.tile.x);
             out.I32(r.tile.z);
             out.U32(r.pack);
@@ -284,13 +329,17 @@ namespace mir
             out.U32(0);
             out.F64(r.maxDeviation.value_or(0.0));
             out.U64(r.sourceChecksum);out.U64(r.topologyHash);out.U32(r.vertexCount);out.U32(r.indexCount);
-        }
+        };
+        for (const TerrainTileRecord &r : records)
+            writeRecord(r);
         for (const auto &layer : layers)
         {
             out.F64(layer.SampleSpacing());
             out.I32(layer.IntervalsPerTile());
             out.U32(0);
         }
+        for (const TerrainTileRecord &r : regionRecords)
+            writeRecord(r);
         out.U64(Fnv1a64(encoded.index));
         const auto checked = ParseTerrainIndex(encoded.index);
         if (!checked)

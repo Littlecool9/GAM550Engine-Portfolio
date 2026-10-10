@@ -12,11 +12,13 @@
 #include <terrain/TerrainIdentity.h>
 #include <terrain/TerrainLayout.h>
 #include <terrain/TerrainPackFormat.h>
+#include <terrain/TerrainRegionGrid.h>
 #include <terrain/TileHeights.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -70,6 +72,20 @@ namespace mir
         std::span<const TerrainPayloadWrite> derived, const TerrainPackWriteOptions &options = {});
     uint64_t TerrainPayloadsHash(std::span<const TerrainLayout> layers, std::span<const TerrainTileWrite> tiles,
                                 std::span<const TerrainPayloadWrite> derived);
+
+    // One payload per Region of grid, in any order; a record names its Region by level and x, z as tile.
+    struct TerrainRegionWrites
+    {
+        std::optional<TerrainRegionGrid> grid;
+        std::vector<TerrainPayloadWrite> payloads;
+    };
+
+    TerrainResult<TerrainEncodedRelease> EncodeTerrainRelease(const TerrainReleaseInfo &info,
+        std::span<const TerrainLayout> layers, std::span<const TerrainTileWrite> tiles,
+        std::span<const TerrainPayloadWrite> derived, const TerrainRegionWrites &regions,
+        const TerrainPackWriteOptions &options = {});
+    uint64_t TerrainPayloadsHash(std::span<const TerrainLayout> layers, std::span<const TerrainTileWrite> tiles,
+                                std::span<const TerrainPayloadWrite> derived, const TerrainRegionWrites &regions);
 
     uint64_t TerrainHeightsHash(std::span<const TerrainLayout> layers,
                                 std::span<const TerrainTileWrite> tiles);

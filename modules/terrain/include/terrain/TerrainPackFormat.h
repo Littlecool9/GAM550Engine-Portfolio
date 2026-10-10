@@ -10,6 +10,7 @@
 
 #include <terrain/TerrainIdentity.h>
 #include <terrain/TerrainLayout.h>
+#include <terrain/TerrainRegionGrid.h>
 #include <terrain/TileHeights.h>
 #include <terrain/TileKey.h>
 
@@ -23,25 +24,31 @@
 
 namespace mir
 {
-    // Format 2 only. LE index: 128-byte header, pack table, payload table,
-    // layer table, extension bytes, FNV64 trailer. Minor 1 appends derived provenance.
+    // Format 2 only. LE index: header, pack table, payload table, layer table,
+    // Region table, extension bytes, FNV64 trailer. Minor 1 appends derived provenance.
     // Header fields through 112
     // retain their offsets; 120/124 are layer count/record size (16 bytes).
+    // Minor 2 appends 128 Region count, 132 Region record size, 136 Region tiles,
+    // 140 Region cells, 144 Region unit, 148 Region levels; tiles 0 means no Regions.
     // Layer: spacing f64, intervals i32, reserved u32. Payload fields 0..87
     // retain their offsets; 88 layer, 92 kind, 96 level, 100 source flag,
     // 104 hasDeviation, 108 reserved, 112 deviation f64; minor 1 adds sourceChecksum
     // u64 at 120, topologyHash u64 at 128, vertex/index counts u32 at 136/140.
     // Keys sort by (z, x, kind, level, layer). Every tile has one finest
     // Height source. Height is a regular float grid; LodHeight and Normal use typed v1 headers.
-    // Region stays reserved. Unknown kinds fail, never get skipped.
+    // Region records use the payload layout with the Region's x, z as tile, its level, layer 0
+    // and kind Region; one per Region in (level, z, x) order, in the pack of its first map tile.
+    // Region is refused in the payload table. Unknown kinds fail, never get skipped.
     // New content may extend these keys in a minor without changing addressing.
     inline constexpr TerrainFormatVersion kTerrainFormatVersion{2};
-    inline constexpr uint32_t kTerrainFormatMinor = 1;
+    inline constexpr uint32_t kTerrainFormatMinor = 2;
 
     // Payload: (n + 1)^2 float32 in TileHeights order. A new encoding bumps this, not the format.
     inline constexpr uint32_t kTerrainHeightsContentVersion = 1;
 
-    inline constexpr uint32_t kTerrainIndexHeaderSize = 128;
+    inline constexpr uint32_t kTerrainIndexHeaderSize = 152;
+    // Minors 0 and 1.
+    inline constexpr uint32_t kTerrainLegacyIndexHeaderSize = 128;
     inline constexpr uint32_t kTerrainPackRecordSize = 32;
     inline constexpr uint32_t kTerrainTileRecordSize = 144;
     inline constexpr uint32_t kTerrainLayerRecordSize = 16;
@@ -158,15 +165,22 @@ namespace mir
         uint64_t heightsHash = 0;
         std::vector<TerrainPackRecord> packs;
         std::vector<TerrainTileRecord> tiles;
+        std::optional<TerrainRegionGrid> regionGrid;
+        // Every Region of regionGrid, in its ordinal order.
+        std::vector<TerrainTileRecord> regions;
 
         // The unique source payload.
         const TerrainTileRecord *Find(TileCoord tile) const;
+        // Kind Region names a Region by its x, z in tile and its level, with layer 0.
         const TerrainTileRecord *Find(TileCoord tile, uint32_t layer,
                                        TerrainPayloadKind kind = TerrainPayloadKind::Height,
                                        uint32_t level = 0) const;
+        const TerrainTileRecord *FindRegion(TerrainRegionCoord region) const;
     };
 
     uint64_t TerrainRecordsHeightsHash(std::span<const TerrainTileRecord> records);
+    uint64_t TerrainRecordsHeightsHash(std::span<const TerrainTileRecord> records,
+                                       std::span<const TerrainTileRecord> regions);
 
     // Never returns a partial index.
     TerrainResult<TerrainIndex> ParseTerrainIndex(std::span<const std::byte> bytes);

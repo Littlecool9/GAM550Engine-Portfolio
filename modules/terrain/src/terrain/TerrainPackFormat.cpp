@@ -13,6 +13,7 @@
 #include "PackInternal.h"
 
 #include <assets/AssetId.h>
+#include <terrain/TerrainRegion.h>
 
 #include <algorithm>
 #include <cmath>
@@ -74,6 +75,12 @@ namespace mir
             uint64_t heightsHash = 0;
             uint32_t layerCount = 0;
             uint32_t layerRecordSize = 0;
+            uint32_t regionCount = 0;
+            uint32_t regionRecordSize = 0;
+            uint32_t regionTiles = 0;
+            uint32_t regionCells = 0;
+            uint32_t regionUnit = 0;
+            uint32_t regionLevels = 0;
         };
 
         TerrainResult<Header> ParseHeader(std::span<const std::byte> bytes)
@@ -95,9 +102,10 @@ namespace mir
             Header h;
             h.minor = LoadU32(bytes, 8);
             h.headerSize = LoadU32(bytes, 12);
-            if (h.headerSize < kTerrainIndexHeaderSize || h.headerSize % 8 != 0)
+            const uint32_t minimumHeader = h.minor >= 2 ? kTerrainIndexHeaderSize : kTerrainLegacyIndexHeaderSize;
+            if (h.headerSize < minimumHeader || h.headerSize % 8 != 0)
                 return Fail<Header>(Code::Malformed, "header size {} is invalid (needs >= {} and a multiple of 8)",
-                                    h.headerSize, kTerrainIndexHeaderSize);
+                                    h.headerSize, minimumHeader);
             if (bytes.size() < uint64_t(h.headerSize) + kTerrainIndexTrailerSize)
                 return Fail<Header>(Code::Malformed,
                                     "{} bytes cannot hold a {}-byte header and the checksum (truncated?)",
@@ -134,6 +142,23 @@ namespace mir
             if (h.layerCount == 0 || h.layerRecordSize < kTerrainLayerRecordSize || h.layerRecordSize % 8 != 0)
                 return Fail<Header>(Code::Malformed, "layer count {} or record size {} is invalid",
                                     h.layerCount, h.layerRecordSize);
+            if (h.minor >= 2)
+            {
+                h.regionCount = LoadU32(bytes, 128);
+                h.regionRecordSize = LoadU32(bytes, 132);
+                h.regionTiles = LoadU32(bytes, 136);
+                h.regionCells = LoadU32(bytes, 140);
+                h.regionUnit = LoadU32(bytes, 144);
+                h.regionLevels = LoadU32(bytes, 148);
+                if (h.regionRecordSize < kTerrainTileRecordSize || h.regionRecordSize % 8 != 0)
+                    return Fail<Header>(Code::Malformed, "Region record size {} is invalid (needs >= {}, a multiple of 8)",
+                                        h.regionRecordSize, kTerrainTileRecordSize);
+                if (h.regionTiles == 0 &&
+                    (h.regionCount != 0 || h.regionCells != 0 || h.regionUnit != 0 || h.regionLevels != 0))
+                    return Fail<Header>(Code::Malformed, "an index without Regions has Region count {}, cells {}, "
+                                        "unit {} or levels {}", h.regionCount, h.regionCells, h.regionUnit,
+                                        h.regionLevels);
+            }
 
             if (!IsPowerOfTwo(h.alignment) || h.alignment > kMaxTerrainPayloadAlignment)
                 return Fail<Header>(Code::Malformed, "payload alignment {} is not a power of two up to {}",
@@ -154,9 +179,12 @@ namespace mir
             const uint64_t packBytes = uint64_t(h.packCount) * h.packRecordSize;
             const uint64_t tileBytes = uint64_t(h.tileCount) * h.tileRecordSize;
             const uint64_t layerBytes = uint64_t(h.layerCount) * h.layerRecordSize;
-            if (packBytes > room || tileBytes > room - packBytes || layerBytes > room - packBytes - tileBytes)
-                return Fail<Header>(Code::Malformed, "{} pack and {} tile records do not fit in {} bytes (truncated?)",
-                                    h.packCount, h.tileCount, bytes.size());
+            const uint64_t regionBytes = uint64_t(h.regionCount) * h.regionRecordSize;
+            if (packBytes > room || tileBytes > room - packBytes || layerBytes > room - packBytes - tileBytes ||
+                regionBytes > room - packBytes - tileBytes - layerBytes)
+                return Fail<Header>(Code::Malformed,
+                                    "{} pack, {} tile and {} Region records do not fit in {} bytes (truncated?)",
+                                    h.packCount, h.tileCount, h.regionCount, bytes.size());
 
             if (h.intervals < 1)
                 return Fail<Header>(Code::Malformed, "intervals per tile {} is below 1", h.intervals);
@@ -273,17 +301,85 @@ namespace mir
                              DescribeBounds(r.validExtent), DescribeBounds(extent));
             return {};
         }
+
+        std::string DescribeRegion(TerrainRegionCoord region)
+        {
+            return std::format("Region L{} ({}, {})", region.level, region.x, region.z);
+        }
+
+        std::string DescribeRecord(const TerrainTileRecord &r)
+        {
+            return r.kind == TerrainPayloadKind::Region ? DescribeRegion({r.level, r.tile.x, r.tile.z})
+                                                        : "tile " + Describe(r.tile);
+        }
+
+        TerrainPackError CheckRegionRecord(const Header &h, const TerrainRegionGrid &grid,
+                                           std::span<const TerrainPackRecord> packs, const TerrainTileRecord &r,
+                                           TerrainRegionCoord want, uint64_t sourceChecksum)
+        {
+            const std::string name = DescribeRegion(want);
+            const TerrainRegionCoord have{r.level, r.tile.x, r.tile.z};
+            if (have != want)
+                return Error(Code::Malformed, "Region records must list every Region once in (level, z, x) order: "
+                             "{} is where {} belongs", DescribeRegion(have), name);
+            if (r.kind != TerrainPayloadKind::Region || r.layer != 0 || r.source)
+                return Error(Code::Malformed, "{}: kind, layer or source flag is not a Region's", name);
+            if (r.samplesPerSide != grid.SamplesPerSide(want.level) || r.sampleSpacing != grid.CellSpacing(want.level))
+                return Error(Code::Malformed, "{}: {} nodes per side at {} m, the grid has {} at {} m", name,
+                             r.samplesPerSide, r.sampleSpacing, grid.SamplesPerSide(want.level),
+                             grid.CellSpacing(want.level));
+            const TerrainLocalBounds extent = grid.ValidExtent(want);
+            if (r.validExtent != extent)
+                return Error(Code::Malformed, "{}: valid extent {} differs from the grid's {}", name,
+                             DescribeBounds(r.validExtent), DescribeBounds(extent));
+            if (!std::isfinite(r.minHeight) || !std::isfinite(r.maxHeight) || r.minHeight > r.maxHeight)
+                return Error(Code::Malformed, "{}: height range [{}, {}] is invalid", name, r.minHeight, r.maxHeight);
+            if (!r.maxDeviation || !std::isfinite(*r.maxDeviation) || *r.maxDeviation < 0.0)
+                return Error(Code::Malformed, "{}: error bound is missing or invalid", name);
+            if (r.vertexCount < 3 || r.indexCount < 3 || r.indexCount % 3 != 0 ||
+                r.length != TerrainRegionPayloadLength(r.vertexCount, r.indexCount))
+                return Error(Code::Malformed, "{}: payload length {} does not hold {} vertices and {} indices", name,
+                             r.length, r.vertexCount, r.indexCount);
+            if (r.sourceChecksum != sourceChecksum)
+                return Error(Code::Malformed, "{}: source checksum {} differs from its map tiles' {}", name,
+                             Hex(r.sourceChecksum), Hex(sourceChecksum));
+            if (r.pack >= packs.size())
+                return Error(Code::Malformed, "{}: pack {} is out of range ({} packs)", name, r.pack, packs.size());
+            const TerrainPackRecord &pack = packs[r.pack];
+            const TerrainChunkCoord chunk = TerrainChunkOf(grid.MapTiles(want).min, h.chunkTiles);
+            if (pack.chunk != chunk)
+                return Error(Code::Malformed, "{}: stored in {} but belongs with its first map tile in chunk {}", name,
+                             TerrainPackFileName(pack.chunk), Describe(chunk));
+            if (r.offset % h.alignment != 0 || r.offset < kTerrainPackHeaderSize)
+                return Error(Code::Malformed, "{}: offset {} is unaligned or inside the pack header", name, r.offset);
+            if (r.offset > std::numeric_limits<uint64_t>::max() - r.length || r.offset + r.length > pack.fileSize)
+                return Error(Code::Malformed, "{}: payload [{}, {}) ends past {} ({} bytes)", name, r.offset,
+                             r.offset + r.length, TerrainPackFileName(pack.chunk), pack.fileSize);
+            return {};
+        }
     }
 
     namespace detail
     {
         uint64_t HeightsHashOf(std::span<const TerrainTileRecord> records)
         {
+            return HeightsHashOf(records, {});
+        }
+
+        uint64_t HeightsHashOf(std::span<const TerrainTileRecord> tiles, std::span<const TerrainTileRecord> regions)
+        {
             std::vector<std::byte> bytes;
-            bytes.reserve(records.size() * 56);
+            bytes.reserve((tiles.size() + regions.size()) * 56);
             LeWriter out(bytes);
-            for (const TerrainTileRecord &r : records)
+            std::vector<const TerrainTileRecord *> records;
+            records.reserve(tiles.size() + regions.size());
+            for (const TerrainTileRecord &r : tiles)
+                records.push_back(&r);
+            for (const TerrainTileRecord &r : regions)
+                records.push_back(&r);
+            for (const TerrainTileRecord *record : records)
             {
+                const TerrainTileRecord &r = *record;
                 out.I32(r.tile.x);
                 out.I32(r.tile.z);
                 out.U32(r.layer);
@@ -304,6 +400,12 @@ namespace mir
     uint64_t TerrainRecordsHeightsHash(std::span<const TerrainTileRecord> records)
     {
         return detail::HeightsHashOf(records);
+    }
+
+    uint64_t TerrainRecordsHeightsHash(std::span<const TerrainTileRecord> records,
+                                       std::span<const TerrainTileRecord> regions)
+    {
+        return detail::HeightsHashOf(records, regions);
     }
 
     TerrainChunkCoord TerrainChunkOf(TileCoord tile, int32_t chunkTiles)
@@ -350,12 +452,22 @@ namespace mir
     const TerrainTileRecord *TerrainIndex::Find(TileCoord tile, uint32_t layer, TerrainPayloadKind kind,
                                                uint32_t level) const
     {
+        if (kind == TerrainPayloadKind::Region)
+            return layer == 0 ? FindRegion({level, tile.x, tile.z}) : nullptr;
         TerrainTileRecord key;
         key.tile = tile; key.layer = layer; key.kind = kind; key.level = level;
         auto at = std::lower_bound(tiles.begin(), tiles.end(), key, [](const auto &a, const auto &b) {
             return RecordKey(a) < RecordKey(b);
         });
         return at != tiles.end() && RecordKey(*at) == RecordKey(key) ? &*at : nullptr;
+    }
+
+    const TerrainTileRecord *TerrainIndex::FindRegion(TerrainRegionCoord region) const
+    {
+        if (!regionGrid || !regionGrid->Contains(region))
+            return nullptr;
+        const uint64_t ordinal = regionGrid->Ordinal(region);
+        return ordinal < regions.size() ? &regions[size_t(ordinal)] : nullptr;
     }
 
     TerrainResult<TerrainIndex> ParseTerrainIndex(std::span<const std::byte> bytes)
@@ -476,6 +588,56 @@ namespace mir
                                Describe(r.tile), r.layer, finest[t]);
         }
 
+        std::optional<TerrainRegionGrid> regionGrid;
+        std::vector<TerrainTileRecord> regions;
+        if (h.regionTiles != 0)
+        {
+            regionGrid = TerrainRegionGrid::Create(*layout, h.regionTiles, h.regionCells, h.regionUnit);
+            if (!regionGrid)
+                return Fail<R>(Code::Malformed, "Region grid of {} tiles, {} cells and unit {} does not fit the "
+                               "reference grid", h.regionTiles, h.regionCells, h.regionUnit);
+            if (regionGrid->Levels() != h.regionLevels || regionGrid->RegionCount() != h.regionCount)
+                return Fail<R>(Code::Malformed, "the header lists {} Region levels and {} Regions, the grid has {} and {}",
+                               h.regionLevels, h.regionCount, regionGrid->Levels(), regionGrid->RegionCount());
+            std::vector<TerrainSourceChecksum> sourceChecksums;
+            for (const TerrainTileRecord &r : tiles)
+            {
+                if (!r.source)
+                    continue;
+                // Region grid lines must be nodes of every tile's source grid.
+                const int32_t step = layout->IntervalsPerTile() / layers[r.layer].IntervalsPerTile();
+                if (h.regionUnit % uint32_t(step) != 0)
+                    return Fail<R>(Code::Malformed, "Region unit {} is not a multiple of tile {}'s source step {}",
+                                   h.regionUnit, Describe(r.tile), step);
+                sourceChecksums.push_back({r.tile, r.checksum});
+            }
+
+            const size_t regionTable = layerTable + size_t(h.layerCount) * h.layerRecordSize;
+            regions.resize(h.regionCount);
+            std::vector<uint64_t> levelChecksums;
+            uint32_t checksumLevel = std::numeric_limits<uint32_t>::max();
+            for (uint32_t o = 0; o < h.regionCount; ++o)
+            {
+                const size_t raw = regionTable + size_t(o) * h.regionRecordSize;
+                TerrainTileRecord &r = regions[o];
+                r = ReadTileRecord(bytes, raw, h.regionRecordSize);
+                if (LoadU32(bytes, raw + 100) > 1 || LoadU32(bytes, raw + 104) > 1)
+                    return Fail<R>(Code::Malformed, "Region record {}: invalid source/deviation flag", o);
+                const TerrainRegionCoord want = regionGrid->AtOrdinal(o);
+                if (want.level != checksumLevel)
+                {
+                    levelChecksums = TerrainRegionSourceChecksums(*regionGrid, want.level, sourceChecksums);
+                    checksumLevel = want.level;
+                }
+                const TerrainPackError checked = CheckRegionRecord(
+                    h, *regionGrid, packs, r, want,
+                    levelChecksums[size_t(want.z) * size_t(regionGrid->Count(want.level).x) + size_t(want.x)]);
+                if (checked.code != Code::None)
+                    return detail::Failure<R>(checked, "");
+                ++tilesPerPack[r.pack];
+            }
+        }
+
         for (uint32_t p = 0; p < h.packCount; ++p)
         {
             if (tilesPerPack[p] != packs[p].tileCount)
@@ -484,23 +646,26 @@ namespace mir
         }
 
         // Payloads never share bytes: no two ranges in one pack may overlap.
-        std::vector<uint32_t> byOffset(h.tileCount);
-        for (uint32_t t = 0; t < h.tileCount; ++t)
-            byOffset[t] = t;
-        std::sort(byOffset.begin(), byOffset.end(), [&](uint32_t a, uint32_t b) {
-            return tiles[a].pack != tiles[b].pack ? tiles[a].pack < tiles[b].pack : tiles[a].offset < tiles[b].offset;
+        std::vector<const TerrainTileRecord *> byOffset;
+        byOffset.reserve(tiles.size() + regions.size());
+        for (const TerrainTileRecord &r : tiles)
+            byOffset.push_back(&r);
+        for (const TerrainTileRecord &r : regions)
+            byOffset.push_back(&r);
+        std::sort(byOffset.begin(), byOffset.end(), [](const TerrainTileRecord *a, const TerrainTileRecord *b) {
+            return a->pack != b->pack ? a->pack < b->pack : a->offset < b->offset;
         });
         for (size_t i = 1; i < byOffset.size(); ++i)
         {
-            const TerrainTileRecord &a = tiles[byOffset[i - 1]];
-            const TerrainTileRecord &b = tiles[byOffset[i]];
+            const TerrainTileRecord &a = *byOffset[i - 1];
+            const TerrainTileRecord &b = *byOffset[i];
             if (a.pack == b.pack && a.offset + a.length > b.offset)
-                return Fail<R>(Code::Malformed, "tiles {} and {} overlap in {}: [{}, {}) and [{}, {})",
-                               Describe(a.tile), Describe(b.tile), TerrainPackFileName(packs[a.pack].chunk), a.offset,
+                return Fail<R>(Code::Malformed, "{} and {} overlap in {}: [{}, {}) and [{}, {})", DescribeRecord(a),
+                               DescribeRecord(b), TerrainPackFileName(packs[a.pack].chunk), a.offset,
                                a.offset + a.length, b.offset, b.offset + b.length);
         }
 
-        const uint64_t heightsHash = detail::HeightsHashOf(tiles);
+        const uint64_t heightsHash = detail::HeightsHashOf(tiles, regions);
         if (heightsHash != h.heightsHash)
             return Fail<R>(Code::Corrupt, "heights hash {} does not match the tile records {}", Hex(h.heightsHash),
                            Hex(heightsHash));
@@ -518,6 +683,8 @@ namespace mir
             .heightsHash = heightsHash,
             .packs = std::move(packs),
             .tiles = std::move(tiles),
+            .regionGrid = std::move(regionGrid),
+            .regions = std::move(regions),
         });
         return result;
     }
