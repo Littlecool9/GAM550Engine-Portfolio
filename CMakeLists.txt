@@ -283,6 +283,15 @@ if(BUILD_TESTING)
             TIMEOUT 120)
     endif()
 
+    # TerrainCheck from its scene camera, which sees both terrains: per-viewport selection, streaming and tracing
+    if(EXISTS "${CMAKE_SOURCE_DIR}/games/TerrainCheck/game.json")
+        add_test(NAME smoke.TerrainCheck.game-mode
+            COMMAND MjolnirEngine --game games/TerrainCheck --no-editor --frames 120)
+        set_tests_properties(smoke.TerrainCheck.game-mode PROPERTIES
+            LABELS smoke
+            TIMEOUT 120)
+    endif()
+
     # Restarts HelloWorld -> EmptyScene -> HelloWorld, as Open Project does
     if(EXISTS "${CMAKE_SOURCE_DIR}/games/HelloWorld/game.json"
        AND EXISTS "${CMAKE_SOURCE_DIR}/games/EmptyScene/game.json")

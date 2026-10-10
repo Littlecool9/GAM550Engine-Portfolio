@@ -36,6 +36,7 @@
 #include <renderer/ComponentRegistration.h>
 #include <renderer/RenderSettings.h>
 #include <renderer/RenderSystem.h>
+#include <renderer/ViewDrawSource.h>
 #include <scene/EntitySnapshot.h>
 #include <scene/SceneIO.h>
 #include <script/ComponentRegistration.h>
@@ -183,7 +184,7 @@ namespace mir
 
         mWorld.EmplaceResource<ModelDrawItems>();
         mWorld.EmplaceResource<ModelMorphOverrides>();
-        mWorld.EmplaceResource<TerrainDrawItems>();
+        mWorld.EmplaceResource<ViewDrawSources>();
         mWorld.EmplaceResource<TerrainWorld>();
 
         // defers structural change

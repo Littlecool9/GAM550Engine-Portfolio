@@ -1,0 +1,43 @@
+{
+  "components": [
+    {
+      "fields": {
+        "position": [
+          153000.5,
+          -20.0,
+          -77000.25
+        ],
+        "rotation": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      "type": "Transform"
+    },
+    {
+      "fields": {},
+      "type": "WorldTransform"
+    },
+    {
+      "fields": {
+        "recipePath": "terrain/streamed-16x16.terrain.json"
+      },
+      "type": "TerrainInstance"
+    },
+    {
+      "fields": {
+        "name": "StreamedTerrain"
+      },
+      "type": "Name"
+    }
+  ],
+  "id": 5,
+  "parent": 0
+}

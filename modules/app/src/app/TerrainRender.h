@@ -8,65 +8,90 @@
  */
 #pragma once
 
-#include <renderer/Material.h>
 #include <renderer/Mesh.h>
 #include <renderer/VulkanRenderer.h>
 #include <terrain/TerrainIdentity.h>
+#include <terrain/TerrainPackFormat.h>
 #include <terrain/TerrainPlacement.h>
+#include <terrain/TerrainRegion.h>
+#include <terrain/TerrainStreamer.h>
 #include <terrain/TerrainTileMesh.h>
+#include <terrain/TerrainViewSelection.h>
 
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
+#include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace mir
 {
-    class World;
-
     // P1 diagnostic look: the default material times this tint.
     inline constexpr glm::vec4 kTerrainDiagnosticTint{0.62f, 0.78f, 0.52f, 1.0f};
 
     // Lets neighbouring tiles meet bit for bit near the camera.
     inline constexpr float kTerrainTranslationGrid = 1.0f / 4096.0f;
 
-    // In the mesh's own tile frame; color only feeds the unlit shader.
+    // In the mesh's own frame; color only feeds the unlit shader.
     std::vector<Vertex> MakeTerrainVertices(const TerrainTileMesh &mesh, const glm::vec3 &color = glm::vec3(1.0f));
+    std::vector<Vertex> MakeTerrainVertices(const TerrainRegionMesh &mesh, const glm::vec3 &color = glm::vec3(1.0f));
 
-    // One terrain instance's tile meshes and draws, all from one release.
-    class TerrainRenderTiles
+    // GPU meshes of terrain draw units, made from resident payloads when first drawn and kept until unused for a
+    // while. Every viewport and every instance of a release shares them.
+    class TerrainMeshCache
     {
     public:
-        // False (logged) for another release or asset, an origin that does not fit, or a failed upload.
-        bool Add(VulkanRenderer &renderer, const TerrainTileMesh &mesh, const TerrainPlacement &placement,
-                 MaterialHandle material = kNullMaterial, const glm::vec4 &tint = kTerrainDiagnosticTint);
+        struct Mesh
+        {
+            MeshHandle handle;
+            // Terrain-local origin of the vertex frame.
+            TerrainLocalPosition origin;
+            uint32_t vertices = 0;
+            double lastUsed = 0.0;
+        };
 
-        std::span<const WorldDrawItem> DrawItems() const { return mDraws; }
-        const std::optional<TerrainReleaseInfo> &Release() const { return mRelease; }
-        bool Empty() const { return mDraws.empty(); }
+        struct Counters
+        {
+            uint64_t vertices = 0;
+            uint64_t created = 0;
+            uint64_t retired = 0;
+            uint64_t failed = 0;
+        };
 
-        // Moves every draw to another translation of the same asset, keeping the meshes.
-        // False (logged) and unchanged if an origin does not fit.
-        bool Place(const TerrainPlacement &placement);
+        bool Has(const TerrainPayloadKey &geometry) const { return mMeshes.contains(geometry); }
+        bool Failed(const TerrainPayloadKey &geometry) const { return mFailed.contains(geometry); }
+        size_t Size() const { return mMeshes.size(); }
 
-        // One device wait for all the meshes.
-        void Destroy(VulkanRenderer &renderer);
+        // Uploads the mesh from the streamer's resident payloads the first time. Null while they are not
+        // resident, and for good once they do not make a mesh, which error then says.
+        const Mesh *Acquire(VulkanRenderer &renderer, const TerrainStreamer &streamer, const TerrainIndex &index,
+                            const TerrainDrawUnit &unit, double now, std::string &error);
 
-        // Appends the meshes for the caller to release, then forgets them.
-        void TakeMeshes(std::vector<MeshHandle> &meshes);
-
+        // At most once per retainSeconds, destroys the meshes unused that long, in one device wait.
+        void Retire(VulkanRenderer &renderer, double now, double retainSeconds);
+        // Destroys every mesh of a release not in keep, in one device wait.
+        void RetireReleases(VulkanRenderer &renderer, std::span<const TerrainReleaseInfo> keep);
         // Call when ReleaseSceneResources runs: a kept handle would name the next scene's mesh.
         void Forget();
 
+        const Counters &Stats() const { return mCounters; }
+
     private:
-        std::optional<TerrainReleaseInfo> mRelease;
-        std::vector<WorldDrawItem> mDraws;
-        // Parallel to mDraws.
-        std::vector<TerrainLocalPosition> mOrigins;
+        void Destroy(VulkanRenderer &renderer, std::vector<MeshHandle> &meshes);
+
+        std::unordered_map<TerrainPayloadKey, Mesh> mMeshes;
+        std::unordered_set<TerrainPayloadKey> mFailed;
+        double mLastRetire = -std::numeric_limits<double>::infinity();
+        Counters mCounters;
     };
 
-    // Publish an empty span before the meshes are freed.
-    void PublishTerrainDraws(World &world, std::span<const WorldDrawItem> draws);
+    // A cached mesh drawn at an instance's placement; nullopt when its origin does not fit the world.
+    std::optional<WorldDrawItem> MakeTerrainDraw(const TerrainMeshCache::Mesh &mesh, const TerrainPlacement &placement);
 }

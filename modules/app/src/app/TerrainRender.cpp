@@ -8,9 +8,12 @@
  */
 #include "TerrainRender.h"
 
-#include <core/ecs/World.h>
 #include <core/ecs/components/WorldTransform.h>
-#include <core/log/Log.h>
+#include <terrain/TerrainRenderMesh.h>
+
+#include <algorithm>
+#include <memory>
+#include <utility>
 
 namespace mir
 {
@@ -23,95 +26,145 @@ namespace mir
         return vertices;
     }
 
-    bool TerrainRenderTiles::Add(VulkanRenderer &renderer, const TerrainTileMesh &mesh,
-                                 const TerrainPlacement &placement, MaterialHandle material, const glm::vec4 &tint)
+    std::vector<Vertex> MakeTerrainVertices(const TerrainRegionMesh &mesh, const glm::vec3 &color)
     {
-        if (mRelease && *mRelease != mesh.release)
-        {
-            MIR_LOG_ERROR("Terrain tile ({}, {}) is from release {:016x}, not {:016x}; not drawn", mesh.tile.x,
-                          mesh.tile.z, mesh.release.release.value, mRelease->release.value);
-            return false;
-        }
-
-        const std::optional<WorldPosition> origin = TerrainTileMeshWorldOrigin(mesh, placement);
-        if (!origin)
-        {
-            MIR_LOG_ERROR("Terrain tile ({}, {}) cannot be placed: another asset, or past the world range",
-                          mesh.tile.x, mesh.tile.z);
-            return false;
-        }
-
-        const std::vector<Vertex> vertices = MakeTerrainVertices(mesh);
-        const MeshHandle handle = renderer.CreateMesh(vertices, mesh.indices);
-        if (handle.IsNull())
-            return false;
-
-        // Identity linear part keeps normals as built.
-        WorldDrawItem draw;
-        draw.mesh = handle;
-        draw.pose = WorldPose{*origin};
-        draw.tint = tint;
-        draw.material = material;
-        draw.translationGrid = kTerrainTranslationGrid;
-        mDraws.push_back(draw);
-        mOrigins.push_back(mesh.origin);
-        mRelease = mesh.release;
-        return true;
+        std::vector<Vertex> vertices;
+        vertices.reserve(mesh.positions.size());
+        for (size_t i = 0; i < mesh.positions.size(); ++i)
+            vertices.push_back(Vertex{.pos = mesh.positions[i], .color = color, .normal = mesh.normals[i]});
+        return vertices;
     }
 
-    bool TerrainRenderTiles::Place(const TerrainPlacement &placement)
+    const TerrainMeshCache::Mesh *TerrainMeshCache::Acquire(VulkanRenderer &renderer, const TerrainStreamer &streamer,
+                                                            const TerrainIndex &index, const TerrainDrawUnit &unit,
+                                                            double now, std::string &error)
     {
-        if (mRelease && mRelease->asset != placement.asset)
+        if (const auto found = mMeshes.find(unit.geometry); found != mMeshes.end())
         {
-            MIR_LOG_ERROR("Terrain tiles of asset {:016x} cannot take a placement of asset {:016x}",
-                          mRelease->asset.value, placement.asset.value);
-            return false;
+            found->second.lastUsed = now;
+            return &found->second;
         }
+        if (mFailed.contains(unit.geometry))
+            return nullptr;
 
-        std::vector<WorldPosition> origins;
-        origins.reserve(mOrigins.size());
-        for (const TerrainLocalPosition &local : mOrigins)
+        std::vector<Vertex> vertices;
+        std::vector<uint32_t> indices;
+        TerrainLocalPosition origin;
+        if (unit.kind == TerrainUnitKind::Region)
         {
-            const std::optional<WorldPosition> origin = TryTerrainLocalToWorld(local, placement.translation);
-            if (!origin)
+            const std::shared_ptr<const TerrainRegionMesh> region = streamer.Region(unit.geometry);
+            if (!region)
+                return nullptr;
+            vertices = MakeTerrainVertices(*region);
+            indices = region->indices;
+            origin = region->origin;
+        }
+        else
+        {
+            const std::shared_ptr<const TerrainLodSurface> lod = streamer.Lod(unit.geometry);
+            const std::shared_ptr<const TerrainLodNormals> normals = streamer.Normals(unit.normals);
+            if (!lod || !normals)
+                return nullptr;
+            TerrainResult<TerrainTileMesh> built = MakeTerrainRenderMesh(index, *lod, *normals);
+            if (!built)
             {
-                MIR_LOG_ERROR("Terrain tiles cannot move past the world range");
-                return false;
+                mFailed.insert(unit.geometry);
+                ++mCounters.failed;
+                error = built.error.message;
+                return nullptr;
             }
-            origins.push_back(*origin);
+            vertices = MakeTerrainVertices(*built.value);
+            indices = std::move(built.value->indices);
+            origin = built.value->origin;
         }
-        for (size_t i = 0; i < mDraws.size(); ++i)
-            mDraws[i].pose = WorldPose{origins[i]};
-        return true;
+
+        const MeshHandle handle = renderer.CreateMesh(vertices, indices);
+        if (handle.IsNull())
+        {
+            mFailed.insert(unit.geometry);
+            ++mCounters.failed;
+            error = "the GPU upload failed";
+            return nullptr;
+        }
+        ++mCounters.created;
+        mCounters.vertices += vertices.size();
+        Mesh &mesh = mMeshes[unit.geometry];
+        mesh = {handle, origin, uint32_t(vertices.size()), now};
+        return &mesh;
     }
 
-    void TerrainRenderTiles::Destroy(VulkanRenderer &renderer)
+    void TerrainMeshCache::Retire(VulkanRenderer &renderer, double now, double retainSeconds)
+    {
+        if (now - mLastRetire < retainSeconds)
+            return;
+        mLastRetire = now;
+        std::vector<MeshHandle> meshes;
+        for (auto it = mMeshes.begin(); it != mMeshes.end();)
+        {
+            if (now - it->second.lastUsed < retainSeconds)
+            {
+                ++it;
+                continue;
+            }
+            meshes.push_back(it->second.handle);
+            mCounters.vertices -= it->second.vertices;
+            it = mMeshes.erase(it);
+        }
+        Destroy(renderer, meshes);
+    }
+
+    void TerrainMeshCache::RetireReleases(VulkanRenderer &renderer, std::span<const TerrainReleaseInfo> keep)
     {
         std::vector<MeshHandle> meshes;
-        TakeMeshes(meshes);
-        if (!meshes.empty())
-            renderer.ReleaseModelResources(meshes, {}, {});
+        for (auto it = mMeshes.begin(); it != mMeshes.end();)
+        {
+            const TerrainPayloadKey &key = it->first;
+            const bool kept = std::any_of(keep.begin(), keep.end(), [&](const TerrainReleaseInfo &release) {
+                return release.asset == key.asset && release.release == key.release;
+            });
+            if (kept)
+            {
+                ++it;
+                continue;
+            }
+            meshes.push_back(it->second.handle);
+            mCounters.vertices -= it->second.vertices;
+            it = mMeshes.erase(it);
+        }
+        std::erase_if(mFailed, [&](const TerrainPayloadKey &key) {
+            return std::none_of(keep.begin(), keep.end(), [&](const TerrainReleaseInfo &release) {
+                return release.asset == key.asset && release.release == key.release;
+            });
+        });
+        Destroy(renderer, meshes);
     }
 
-    void TerrainRenderTiles::TakeMeshes(std::vector<MeshHandle> &meshes)
+    void TerrainMeshCache::Forget()
     {
-        for (const WorldDrawItem &draw : mDraws)
-            meshes.push_back(draw.mesh);
-        Forget();
+        mMeshes.clear();
+        mFailed.clear();
+        mCounters.vertices = 0;
     }
 
-    void TerrainRenderTiles::Forget()
+    void TerrainMeshCache::Destroy(VulkanRenderer &renderer, std::vector<MeshHandle> &meshes)
     {
-        mDraws.clear();
-        mOrigins.clear();
-        mRelease.reset();
+        if (meshes.empty())
+            return;
+        mCounters.retired += meshes.size();
+        renderer.ReleaseModelResources(meshes, {}, {});
     }
 
-    void PublishTerrainDraws(World &world, std::span<const WorldDrawItem> draws)
+    std::optional<WorldDrawItem> MakeTerrainDraw(const TerrainMeshCache::Mesh &mesh, const TerrainPlacement &placement)
     {
-        TerrainDrawItems *resource = world.TryResource<TerrainDrawItems>();
-        if (!resource)
-            resource = &world.EmplaceResource<TerrainDrawItems>();
-        resource->items.assign(draws.begin(), draws.end());
+        const std::optional<WorldPosition> origin = TryTerrainLocalToWorld(mesh.origin, placement.translation);
+        if (!origin)
+            return std::nullopt;
+        // Identity linear part keeps normals as built.
+        WorldDrawItem draw;
+        draw.mesh = mesh.handle;
+        draw.pose = WorldPose{*origin};
+        draw.tint = kTerrainDiagnosticTint;
+        draw.translationGrid = kTerrainTranslationGrid;
+        return draw;
     }
 }

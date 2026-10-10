@@ -1,6 +1,6 @@
 {
   "cpu": {
-    "budgetMiB": 256
+    "budgetMiB": 16
   },
   "io": {
     "workerThreads": 2,

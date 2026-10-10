@@ -113,9 +113,6 @@ namespace mir
     // picked up by RenderSystem as a World resource.
     struct ModelDrawItems { std::vector<WorldDrawItem> items; };
 
-    // Terrain tile draws. Unlike ModelDrawItems they persist until their producer clears them.
-    struct TerrainDrawItems { std::vector<WorldDrawItem> items; };
-
     // A Point/Spot/Area light in world space; the renderer narrows it against
     // each view's camera, as it does draw items.
     struct LightItem
