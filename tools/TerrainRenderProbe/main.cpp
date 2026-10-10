@@ -2,6 +2,7 @@
 #include "FrameRegressionProbe.h"
 #include "RasterDepthEnvelope.h"
 #include "RegionProbe.h"
+#include "SelectionProbe.h"
 #include <TerrainBake.h>
 #include <core/fs/FileIO.h>
 #include <core/log/Log.h>
@@ -331,7 +332,7 @@ namespace
 
 int main(int argc,char **argv)
 {
-    bool smoke=false, regressions=false, regions=false;
+    bool smoke=false, regressions=false, regions=false, selection=false;
     std::filesystem::path out="terrain-render-evidence";
     for(int i=1;i<argc;++i)
     {
@@ -339,17 +340,29 @@ int main(int argc,char **argv)
         if(arg=="--smoke")smoke=true;
         else if(arg=="--regressions")regressions=true;
         else if(arg=="--regions")regions=true;
+        else if(arg=="--selection")selection=true;
         else if(arg=="--out"&&i+1<argc)out=argv[++i];
-        else {std::cerr<<"usage: TerrainRenderProbe [--smoke] [--regressions] [--regions] --out directory\n";return 2;}
+        else {std::cerr<<"usage: TerrainRenderProbe [--smoke] [--regressions] [--regions] [--selection] --out directory\n";return 2;}
     }
     std::filesystem::create_directories(out);
     LogConfig config;config.filePath=(out/"gpu.log").string();InitLog(config);
     try
     {
         EnsureDpiAware();
-        auto window=Window::Create({.mWidth=smoke||regressions?320u:regions?1280u:640u,.mHeight=smoke||regressions?180u:regions?720u:360u,.mTitle="Terrain P2 GPU probe",.mResizable=regressions,.mStartHidden=true});
+        const bool large=regions||selection;
+        auto window=Window::Create({.mWidth=smoke||regressions?320u:large?1280u:640u,.mHeight=smoke||regressions?180u:large?720u:360u,.mTitle="Terrain P2 GPU probe",.mResizable=regressions,.mStartHidden=true});
         VulkanRenderer renderer;
         Require(renderer.Initialize({window.get(),"TerrainRenderProbe",true}),"renderer initialization failed");
+        if(selection)
+        {
+            Require(renderer.RayTracingSupported(),"the selection captures include a ray-traced frame");
+            const auto extent=renderer.SwapchainExtent();
+            RunSelectionProbe(renderer,*window,out/"selection",extent.width,extent.height);
+            renderer.Shutdown();
+            for(const auto &entry:LogHistory::Snapshot())
+                Require(entry.level<LogLevel::Error,"renderer logged an error: "+entry.message);
+            ShutdownLog();return 0;
+        }
         if(regions)
         {
             Require(renderer.RayTracingSupported(),"the Region captures include a ray-traced frame");
