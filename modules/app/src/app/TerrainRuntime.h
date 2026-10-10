@@ -70,6 +70,7 @@ namespace mir
         bool MoveCollider(InstanceResources &resources, const TerrainInstanceState &instance);
         void RebuildMeshes(TerrainWorld &world);
         void Publish();
+        void TagColliders(const TerrainSceneSpec &spec);
         void DestroyCollider(BodyHandle body);
         void Report(const std::string &message);
 

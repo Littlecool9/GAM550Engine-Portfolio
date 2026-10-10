@@ -13,6 +13,7 @@
 
 #include <physics/PhysicsTypes.h>
 
+#include <core/ecs/Entity.h>
 #include <core/math/WorldCoordinates.h>
 
 #include <glm/gtc/quaternion.hpp>
@@ -96,10 +97,7 @@ namespace mir
         PhysicsWorld(PhysicsWorld &&) = delete;
         PhysicsWorld &operator=(PhysicsWorld &&) = delete;
 
-        // Bodies live in the fixed Scene world: a position is a WorldPosition
-        // all the way into Jolt (JPH::Real matches WorldReal), never a
-        // camera-relative one. Shape sizes, rotations, velocities and forces
-        // are bounded floats.
+        // Bodies live in the fixed Scene world coordinate system
         BodyHandle CreateStaticBox(WorldPosition position, const glm::vec3 &halfExtent,
                                    const glm::quat &rotation = kIdentityRotation);
         BodyHandle CreateStaticSphere(WorldPosition position, float radius,
@@ -136,6 +134,10 @@ namespace mir
         void AddAngularImpulse(BodyHandle body, const glm::vec3 &angularImpulse);
         void AddForceAtOffset(BodyHandle body, const glm::vec3 &force, const glm::vec3 &localOffset);
         void AddImpulseAtOffset(BodyHandle body, const glm::vec3 &impulse, const glm::vec3 &localOffset);
+
+        // kNullEntity for an untagged body or a bad handle; the entity is not checked for liveness.
+        void SetBodyEntity(BodyHandle body, Entity entity);
+        Entity BodyEntity(BodyHandle body) const;
 
         // Closest hit within maxDistance. Jolt's float fraction resolves ~6e-8 * maxDistance.
         std::optional<RayHit> RayCast(WorldPosition origin, const glm::vec3 &direction, float maxDistance) const;

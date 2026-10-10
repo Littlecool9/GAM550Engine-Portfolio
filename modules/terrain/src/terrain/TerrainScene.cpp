@@ -218,7 +218,7 @@ namespace mir
 
                 const Transform &transform = *world.GetComponent<Transform>(entity);
                 spec.instances.push_back(
-                    {recipe, path.logicalPath, path.asset, *WorldPosition::FromMeters(transform.Position())});
+                    {recipe, path.logicalPath, path.asset, *WorldPosition::FromMeters(transform.Position()), entity});
             });
 
         std::sort(spec.instances.begin(), spec.instances.end(),

@@ -152,6 +152,18 @@ namespace
     // Covers resting contact plus Jolt's 2 cm speculative distance.
     constexpr float kWakeMargin = 0.1f;
 
+    // Complemented so Jolt's default user data reads as no entity, not Entity{0, 0}.
+    uint64_t EntityToUserData(mir::Entity entity)
+    {
+        return entity.IsNull() ? 0 : ~mir::PackEntity(entity);
+    }
+
+    mir::Entity EntityFromUserData(uint64_t data)
+    {
+        const mir::Entity entity = mir::UnpackEntity(~data);
+        return entity.IsNull() ? mir::kNullEntity : entity;
+    }
+
     JPH::RVec3 OffsetToWorldPoint(const JPH::BodyInterface &bodies, JPH::BodyID id,
         const glm::vec3 &localOffset)
     {
@@ -540,6 +552,32 @@ namespace mir
         const JPH::BodyID id = ToBodyId(body);
 
         bodies.AddImpulse(id, ToJolt(impulse), OffsetToWorldPoint(bodies, id, localOffset));
+    }
+
+    void PhysicsWorld::SetBodyEntity(BodyHandle body, Entity entity)
+    {
+        if (!body.IsValid())
+            return;
+
+        JPH::BodyInterface &bodies = mImpl->mSystem.GetBodyInterface();
+        const JPH::BodyID id = ToBodyId(body);
+        if (!bodies.IsAdded(id))
+            return;
+
+        bodies.SetUserData(id, EntityToUserData(entity));
+    }
+
+    Entity PhysicsWorld::BodyEntity(BodyHandle body) const
+    {
+        if (!body.IsValid())
+            return kNullEntity;
+
+        const JPH::BodyInterface &bodies = mImpl->mSystem.GetBodyInterface();
+        const JPH::BodyID id = ToBodyId(body);
+        if (!bodies.IsAdded(id))
+            return kNullEntity;
+
+        return EntityFromUserData(bodies.GetUserData(id));
     }
 
     std::optional<RayHit> PhysicsWorld::RayCast(WorldPosition origin, const glm::vec3 &direction,

@@ -9,6 +9,8 @@
 
 #include "WorldBindings.h"
 
+#include "BindingHelpers.h"
+
 #include <core/ecs/ComponentRegistry.h>
 #include <core/ecs/DeferredAccess.h>
 #include <core/ecs/RuntimeQuery.h>
@@ -60,15 +62,6 @@ namespace mir
             {
             }
         };
-
-        sol::table WorldVec3ToLua(sol::state_view lua, const WorldVec3 &value)
-        {
-            sol::table out = lua.create_table();
-            out["x"] = value.x;
-            out["y"] = value.y;
-            out["z"] = value.z;
-            return out;
-        }
 
         sol::object FieldToLua(sol::state_view lua, const FieldDesc &field, const void *component)
         {
@@ -200,12 +193,8 @@ namespace mir
             }
             case FieldKind::WorldPosition:
             {
-                if (!value.is<sol::table>())
-                    return false;
-                const sol::table t = value.as<sol::table>();
-                const glm::dvec3 v(t.get_or("x", 0.0), t.get_or("y", 0.0), t.get_or("z", 0.0));
                 // Pre-examine valid or not cuz Transform is silent about invalid conversion
-                const std::optional<WorldVec3> position = TryWorldVec3FromDouble(v);
+                const std::optional<WorldVec3> position = WorldVec3FromLua(value);
                 if (!position)
                     return false;
                 scratch.asWorldPosition = *position;

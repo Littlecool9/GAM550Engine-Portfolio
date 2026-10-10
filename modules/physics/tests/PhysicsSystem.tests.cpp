@@ -163,6 +163,20 @@ TEST_CASE("Destroying the entity frees its body", "[physics]")
     REQUIRE(fixture.Physics().BodyCount() == 0);
 }
 
+TEST_CASE("Each created body is tagged with its entity", "[physics]")
+{
+    PhysicsFixture fixture;
+    const mir::Entity floor = fixture.Add(glm::vec3(0.0f, 0.0f, 0.0f), kStaticBox);
+    const mir::Entity sphere = fixture.Add(glm::vec3(0.0f, 3.0f, 0.0f), kDynamicSphere);
+
+    fixture.Run(1);
+
+    const mir::BodyHandle floorBody = fixture.world.GetComponent<mir::RigidBody>(floor)->body;
+    const mir::BodyHandle sphereBody = fixture.world.GetComponent<mir::RigidBody>(sphere)->body;
+    CHECK(fixture.Physics().BodyEntity(floorBody) == floor);
+    CHECK(fixture.Physics().BodyEntity(sphereBody) == sphere);
+}
+
 TEST_CASE("Writing the Transform teleports the body", "[physics]")
 {
     PhysicsFixture fixture;
