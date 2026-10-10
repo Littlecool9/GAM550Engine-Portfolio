@@ -8,6 +8,9 @@
 # Published terrain releases: TerrainTool sync writes them on every build
 /games/*/terrain/releases/
 
+# Machine-local terrain streaming budgets, written per install next to the executable
+terrain_streaming.local.json
+
 # Local code retrieval caches
 /.rag/
 __pycache__/

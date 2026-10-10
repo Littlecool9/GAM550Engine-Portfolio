@@ -1,0 +1,19 @@
+{
+  "cpu": {
+    "budgetMiB": 256
+  },
+  "io": {
+    "workerThreads": 2,
+    "maxInstallsPerFrame": 32
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "firstDelaySeconds": 0.1,
+    "maxDelaySeconds": 2.0,
+    "failedHoldSeconds": 10.0
+  },
+  "residency": {
+    "mode": "Auto",
+    "queryLeaseSeconds": 2.0
+  }
+}

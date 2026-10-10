@@ -187,6 +187,13 @@ foreach(manifest IN LISTS game_manifests)
     list(APPEND game_copy_commands COMMAND "${CMAKE_COMMAND}" -E copy_if_different
          "${manifest}" "$<TARGET_FILE_DIR:MjolnirEngine>/games/${game_name}/game.json")
 
+    # A game with terrain ships its streaming settings; terrain_streaming.local.json is per machine, never copied.
+    if(EXISTS "${game_dir}/terrain_streaming.json")
+        list(APPEND game_copy_commands COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+             "${game_dir}/terrain_streaming.json"
+             "$<TARGET_FILE_DIR:MjolnirEngine>/games/${game_name}/terrain_streaming.json")
+    endif()
+
     set(scene_dest "${CMAKE_BINARY_DIR}/games/${game_name}/scenes")
     if(IS_DIRECTORY "${game_dir}/scenes" AND NOT EXISTS "${scene_dest}")
         file(COPY "${game_dir}/scenes" DESTINATION "${CMAKE_BINARY_DIR}/games/${game_name}")

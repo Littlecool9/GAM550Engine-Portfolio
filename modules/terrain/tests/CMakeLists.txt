@@ -9,6 +9,7 @@ engine_add_module_tests(terrain
     TerrainRegion.tests.cpp
     TerrainRelease.tests.cpp
     TerrainScene.tests.cpp
+    TerrainStreamingSettings.tests.cpp
     TerrainSurface.tests.cpp
     TerrainTileMesh.tests.cpp
     TileAddressing.tests.cpp
