@@ -56,7 +56,8 @@ Programmer error uses assertions instead. `MIR_ASSERT` is for development errors
 ## Module graph
 
 `script` privately links `terrain` for the resident Lua height query (#144);
-`terrain` retains its assets/core dependencies and no script dependency.
+`terrain` retains its assets/core dependencies and no script dependency, and
+links `serial` privately for its streaming settings (#126).
 
 The folder tree is in the [README](../README.md#folder-structure). This is how
 the pieces depend on each other.
@@ -208,6 +209,7 @@ type. The flow is in [A file](#a-file).
 ```
 PollEvents                       close flag and framebuffer size refresh here
 dt = min(elapsed, mMaxDeltaSeconds)
+TerrainRuntime::Update           installs finished terrain reads (every mode); then, in Edit, its Refresh
 ImGuiRuntime::BeginFrame         the NewFrame trio
 Editor::DrawLayout               -> EditorActions (scene action, game to open)
 UIContext::BeginFrame/EndFrame   game UI into the background list, scene viewport or whole window

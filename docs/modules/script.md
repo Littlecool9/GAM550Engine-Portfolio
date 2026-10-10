@@ -128,9 +128,10 @@ layer fields retain C++ defaults on failures and are meaningful with the
 corresponding status. There is no sample/cell field in `TerrainHeightResult`.
 
 Each call looks up the World resource again; it caches no release and performs
-no IO. Controlled loading states may enqueue the C++ query's deduplicated
-payload request, but this binding starts no loader. P1 still preloads whole
-releases. A Play session keeps its release when `current` changes; app's Edit
+no IO. A loading state enqueues the C++ query's deduplicated payload request,
+which the terrain `TerrainStreamer` reads on a worker after its next per-frame
+`Update`; this binding starts no loader itself, and an Eager release is
+already resident when the scene is loaded. A Play session keeps its release when `current` changes; app's Edit
 safe point replaces the resource after Stop. No resource, an empty resource,
 or no instance covering the point gives `OutsideMap` / `None`.
 

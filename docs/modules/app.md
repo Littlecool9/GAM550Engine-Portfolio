@@ -24,6 +24,7 @@ Start(scheduler)                       systems cache their queries
 while not ShouldClose:
     PollEvents                         close flag and size refresh here
     dt = min(elapsed, mMaxDeltaSeconds)
+    TerrainRuntime::Update                   every mode: finished terrain reads are installed here only
     if IsEditing(world): imported assets, then TerrainRuntime::Refresh   the Edit safe point
     ImGuiRuntime::BeginFrame                 the NewFrame trio
     Editor::DrawLayout -> EditorActions      New/Save/Load/Play/TogglePause/Stop and Open Project acted on here
@@ -252,12 +253,30 @@ derived from it, one set per instance: the raster tile meshes and one static
 height field over the whole map, each stamped with the release it came from.
 
 ```
-LoadScene      -> TerrainRuntime::Load      CollectTerrainScene, ResolveTerrainWorld, build, publish
+Initialize     -> TerrainRuntime::Bind      streaming settings -> TerrainStreamingSettings, TerrainStreamer resources
+Run (any mode) -> TerrainRuntime::Update    TerrainStreamer::Update: the one install point per frame
+LoadScene      -> TerrainRuntime::Load      CollectTerrainScene, ResolveTerrainWorld (Eager wait), build, publish
 Run (Edit)     -> TerrainRuntime::Refresh   an edit settled 0.5 s, or a current pointer moved (polled every 1 s)
 PlayScene      -> Refresh(force)            adopt a newer complete release, then the snapshot pins it
 StopScene      -> ForgetMeshes, ReleaseSceneResources, ..., Refresh(force)
 UnloadCurrentScene -> Unload                draws emptied, height fields destroyed, TerrainWorld emptied
 ```
+
+`Bind` reads the game's `terrain_streaming.json` with the machine-local
+`terrain_streaming.local.json` beside the executable layered over it (see
+[terrain.md](terrain.md#streaming-and-cpu-residency-issue-126)). Valid settings
+become the `TerrainStreamingSettings` and `TerrainStreamer` World resources, the
+streamer with its own `TerrainWorkerPool`. Invalid settings, or missing ones in
+a scene with terrain, are one error, and no terrain loads; a game without
+terrain needs no file.
+
+Releases resolve through the streamer. Meshes and the height field still cover
+a whole instance, so only an Eager release loads: resolving waits until all of
+it is resident (blocking the main thread at scene load, on Play entry and at an
+Edit switch, the stop-gap until collision residency), then the tile meshes are
+built from the resident LOD and normal payloads and the height field from the
+resident heights, with no file read. An Interest release (too big for the
+budget, or the game asked for Interest) is reported and not loaded.
 
 A rebuild builds every new mesh and height field first, then swaps in one
 step: the new draws are published, the old meshes and height fields are
@@ -417,6 +436,15 @@ is tested in `terrain` (`TerrainScene.tests.cpp`) and the collider assembly in
    cheap for a large scene.
 
 ## Changed
+
+*2026-10-10* — **Terrain streams through a `TerrainStreamer` (#126).** Was:
+resolving a release read every pack whole and preloaded every tile on the main
+thread, and tile meshes read their LOD and normal payloads synchronously. Now:
+`TerrainRuntime::Bind` loads the game's streaming settings into World
+resources, `Run` calls `TerrainRuntime::Update` once per frame before any
+system, Eager releases are waited for at load (stop-gap until #128) and meshes
+are built from resident payloads. `games/TerrainCheck/terrain_streaming.json`
+is the first settings file; CMake copies a game's file next to the executable.
 
 *2026-10-08* — **Meshes resolve every frame in `MeshResolveSystem`, and `App`
 carries out the editor's entity actions.** Was: `ResolveSceneMeshes` ran once,

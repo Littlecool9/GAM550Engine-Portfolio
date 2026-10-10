@@ -10,15 +10,17 @@ samples on the CPU (plain data; `app` uploads it), the same samples gathered
 into one block for a collider, the one rule from a recipe path to its asset id
 and from a game to its published releases, and the scene side: the
 `TerrainInstance` component and the `TerrainWorld` resource it resolves to,
-which pins one release per asset. It does not bake, publish, stream or collide
-terrain itself; collision is built by physics from these samples, streaming is P3. Generating, baking and publishing
+which pins one release per asset, and the streamer that reads payload ranges on
+a small worker pool and keeps them resident within a data-driven CPU budget
+(#126). It does not bake, publish, draw or collide terrain itself; collision is
+built by physics from these samples. Generating, baking and publishing
 heights is offline work: the `terrain_bake` library and the headless
 `TerrainTool` executable in `tools/TerrainTool/` read a source recipe, produce
 heights on this module's grid, encode a candidate release with this module's
 writer, validate it with its reader and publish it as an immutable release
 (see [TerrainTool CLI](#terraintool-cli)); the engine never links them.
 
-`mir::terrain` · depends `mir::assets`, `mir::core` (public) · API `modules/terrain/include/terrain/` · maintainer Jackey Cen · reviewed 2026-10-08
+`mir::terrain` · depends `mir::assets`, `mir::core` (public), `mir::serial` (private, streaming settings) · API `modules/terrain/include/terrain/` · maintainer Jackey Cen · reviewed 2026-10-10
 
 ## Model
 
@@ -329,7 +331,7 @@ relates to that requirement instead of returning a bare float:
 ```cpp
 const TerrainReleaseHandle &handle = *release.value;
 TerrainHeightQuery query = TerrainHeightQuery::Create(handle);  // reads nothing
-PreloadAllTerrainTiles(query, handle);                          // P1: synchronous, outside queries
+PreloadAllTerrainTiles(query, handle);                          // synchronous, for tools and tests
 const TerrainHeightResult r = query.HeightAt(world, placement, {handle.Info(), 1.0});
 switch (r.status)
 {
@@ -344,14 +346,139 @@ default:                                        Protect(r.failure); break;      
 A query never reads files or blocks. When the data it needs is not resident it
 records a `TerrainPayloadRequest` (release, tile key, layer, spacing) once; a
 loader takes them with `TakePayloadRequests` and hands back `TileHeights` with
-`Insert`, or a failure with `MarkFailed`. In P1 nothing drains the requests:
-the release is preloaded whole. P3's scheduler takes over that loop.
+`Insert`, a failure with `MarkFailed`, or forgets a slot with `Evict`. It also
+lists the resident tiles it answered from (`TakeUsedTiles`, once each per
+take). In the engine that loader is the `TerrainStreamer` of the next section;
+`PreloadTerrainTiles` and `PreloadAllTerrainTiles` stay as synchronous fills
+for tools and tests.
 
 A query has one or more *layers*, finest first, each a layout of one spacing
 over the same tiles. Format 2 permits sparse layers and one source spacing
 per tile; optional coarse payloads can answer while a fine payload loads.
-The P1 runtime still synchronously preloads the release. P2 bakes coarse
-levels and measured per-tile deviation bounds; P3 schedules residency.
+P2 bakes coarse levels and measured per-tile deviation bounds.
+
+### Streaming and CPU residency (issue #126)
+
+A `TerrainStreamer` (`terrain/TerrainStreamer.h`) makes payloads resident.
+Consumers say what they want, a small worker pool reads and decodes, and
+`Update`, called once per frame on the main thread, installs the results. It
+never reads a file or waits.
+
+**Keys and wants.** A `TerrainPayloadKey` names one payload of one published
+release: asset, release, kind, level, layer and tile (or Region `x`, `z`).
+Wants for one key merge into one entry, one read and one shared decoded
+payload, whoever asks: interests (`AddInterest`; `SetInterest` replaces an
+interest's whole list, for a viewport selection or a set of bodies), every
+payload of an Eager release, and height queries (the streamer drains each
+query's `TakePayloadRequests`). An entry takes the highest demand anyone has
+for it, `Required` (collision, Eager) > `Query` > `Visible` > `Prefetch`, and
+the lowest rank within that demand.
+
+```cpp
+TerrainStreamer &streamer = world.Resource<TerrainStreamer>();
+const TerrainInterestId view = streamer.AddInterest();
+const TerrainPayloadKey key = TerrainPayloadKeyOf(info, *index.FindRegion({0, 3, 1}));
+streamer.SetInterest(view, std::vector<TerrainPayloadWant>{{key, TerrainDemand::Visible, distance}});
+// next frame, after streamer.Update():
+if (const std::shared_ptr<const TerrainRegionMesh> mesh = streamer.Region(key))
+    Draw(*mesh);                                     // null until Ready
+```
+
+**States.** `Waiting` (wanted, held back by the budget or a retry delay),
+`Loading` (a worker reads the record's byte range, checks the record checksum
+and decodes the payload with its own checks), `Ready` (installed; a Height
+payload is also inserted into every height query of its release) and `Failed`
+(the error is kept). A worker takes whichever pending read is soonest when it
+starts, so priority holds on a FIFO pool and a raised demand reorders a read
+not yet started. A want that disappears cancels its read if no worker took it
+yet; a started read finishes and its payload stays until evicted. Payloads are
+`shared_ptr`s, so evicting one never invalidates a consumer still using it.
+
+**Failures.** Only an IO failure (a missing, unreadable or truncated range) is
+retried: after `retry.firstDelaySeconds`, doubling up to
+`retry.maxDelaySeconds`, until `retry.maxAttempts` reads have failed. A
+checksum or decode failure fails at once, since the release is immutable. A
+failed payload someone still wants starts a new round of attempts after
+`retry.failedHoldSeconds`, or at the next `Update` after `RetryFailed`. A height
+query answers `Loading` while its tile is read or retried and `Failed` with
+`LoadFailed` once it failed; neither carries a height.
+
+**Budget.** `cpu.budgetBytes` caps the decoded bytes held plus those being
+read; a payload's size (`TerrainPayloadFootprint`) is known from its record
+before any read. To start a read that does not fit, the streamer evicts what
+matters less: payloads nobody wants (least recently wanted first), then reads
+not yet started and payloads of a lower demand (highest rank first). A read
+that still does not fit waits, and lower demands wait behind it. Only
+`Required` reads may pass the budget (`Stats().overBudgetBytes`), and while
+over it everything that is not `Required` is evicted first. A height query's
+tile stays wanted as `Query` for `residency.queryLeaseSeconds` after it was
+last asked for or answered from.
+
+**Residency mode.** `residency.mode` is chosen per release when it is added:
+`Eager` requests every indexed payload (tiles, LOD, normals and Regions) as
+`Required`, through the same asynchronous path; `Interest` holds only what is
+wanted; `Auto` is Eager when the release's payload footprint fits what the
+budget has left after the other Eager releases. Nothing else is pinned: no
+Region level stays resident for a whole map unless the whole release fits.
+
+**Verification.** Opening a release reads and checks its index once; each
+payload is checked against its record when it is read. The engine no longer
+reads packs whole: `VerifyAllPacks` stays in TerrainTool's validate and
+publish.
+
+**Threads.** `TerrainWorkerPool` (`terrain/TerrainExecutor.h`,
+`io.workerThreads` `std::jthread`s) runs posted jobs; tests inject a
+`TerrainManualExecutor` and a manual clock. Workers touch only the byte source,
+the immutable index and the decoders. Entries, height queries and the budget
+change only in `Update`, which installs at most `io.maxInstallsPerFrame`
+finished reads per call.
+
+**Settings.** `TerrainStreamingSettings` (`terrain/TerrainStreamingSettings.h`)
+has no code defaults. `LoadTerrainStreamingSettings` reads the game's
+`terrain_streaming.json` (beside `game.json`) and an optional
+`terrain_streaming.local.json` beside the executable, which overrides it key by
+key: what an installer would write per machine (git-ignored). Every missing,
+unknown or invalid key is reported with its JSON path and the file it is in,
+and then nothing loads. Later P3 issues add their own sections. TerrainCheck
+ships:
+
+```json
+{ "cpu": { "budgetMiB": 256 }, "io": { "workerThreads": 2, "maxInstallsPerFrame": 32 },
+  "retry": { "maxAttempts": 3, "firstDelaySeconds": 0.1, "maxDelaySeconds": 2.0, "failedHoldSeconds": 10.0 },
+  "residency": { "mode": "Auto", "queryLeaseSeconds": 2.0 } }
+```
+
+These are provisional development-machine values, not measured budgets; #130
+measures and replaces them.
+
+**Stop-gap until collision residency (#128).** App's meshes and height field
+still cover a whole instance, so app loads an instance only when its release is
+Eager. `ResolveTerrainWorld` waits for an Eager release (`WaitForEager`, which
+blocks the main thread at scene load, on Play entry and at an Edit switch, never
+during Play) and refuses it when any payload failed; app then builds the tile
+meshes from the resident LOD and normal payloads and the height field from the
+resident heights, without a read. An Interest release still resolves and its
+queries stream, but app reports that it cannot load the instance.
+
+**Measurements** (Ryzen 7 5800H, NVMe; development baselines, not budgets).
+TerrainCheck's release is 35 payloads, 5.77 MiB decoded; resolving it with the
+Eager wait takes 0.03 s in Release (0.25 to 0.30 s in Debug, where the whole
+load is dominated by collider selection), and the Play sphere rests where it
+did before. The hidden `[streaming-measure]` case moves an interest across a
+40 x 40 map of 256 m tiles at 4 m (16.9 KB a tile) with 14 Regions of 128
+cells (0.79 MB each), read from disk through a warm file cache, with a 16 MiB
+budget and two workers. At 200 m/s and 60 frames a second for 9.2 km (2761
+frames, Release), each frame wanting the 3 x 3 tiles under the mover as
+Required, tiles within 1.5 km as Visible, to 2.5 km as Prefetch and the level 0
+Regions within 6 km:
+
+| Update (main thread) P50 / P95 / P99 / max | HeightAt P99 | height available | Visible ready P50 / P95 | peak / budget | reads | evictions | worker read + decode |
+|---|---|---|---|---|---|---|---|
+| 0.094 / 0.142 / 0.219 / 0.81 ms | 8.4 µs | every frame | 24 / 40 ms | 15.99 / 16 MiB | 813 (18.8 MiB) | 177 | 0.35 + 0.06 s |
+
+Latencies are counted in whole frames (16.7 ms) and only for payloads that
+were not already resident (prefetched) when first wanted. Cold-cache IO, more
+viewports and faster movers are #130's.
 
 ### Tile meshes
 
@@ -392,14 +519,16 @@ per instance.
 // TerrainInstance { "recipePath": "terrain/relief-2x2.terrain.json" }
 const TerrainSceneSpec spec = CollectTerrainScene(world, project.mAssetIdRoot);  // ids, placements, refusals
 std::vector<TerrainIssue> issues = spec.issues;
-TerrainWorld terrain = ResolveTerrainWorld(spec, TerrainReleasesRoot(gameDir), &loaded, issues);
+TerrainWorld terrain = ResolveTerrainWorld(spec, TerrainReleasesRoot(gameDir), &loaded, issues, streamer);
 const TerrainHeightResult ground = terrain.HeightAt(position, 4.0);            // the instance holding the point
 ```
 
-`ResolveTerrainWorld` opens the release each asset's `current` names, reads every
-pack whole (`VerifyAllPacks`) and preloads every tile into a
-`TerrainResidentRelease`: handle plus height query, the one source an
-instance's mesh, collider and queries derive from. Given what is loaded, it
+`ResolveTerrainWorld` opens the release each asset's `current` names (its index
+only) as a `TerrainResidentRelease`: handle plus height query, the one source an
+instance's mesh, collider and queries derive from. It reuses one the streamer
+already holds, adds a new one to the streamer, and for an Eager release waits
+until every payload is resident, refusing the release when one fails (see
+[Streaming](#streaming-and-cpu-residency-issue-126)). Given what is loaded, it
 keeps an asset whose pointer has not moved without reading anything, and when a
 moved pointer names a release that does not load, it keeps the old one and
 remembers the refusal. `TerrainCurrentMoved` is the cheap poll that decides
@@ -596,10 +725,14 @@ tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-
 | `CellTriangulation`, `TriangulateCell` | `terrain/TerrainSurface.h` | a cell's diagonal and two triangles as global sample indices, counter-clockwise from +Y |
 | `SurfaceSample`, `SurfaceStatus` | `terrain/TerrainSurface.h` | `EvaluateSurface` (owner tile), `EvaluateSurfaceInCell` (a chosen cell): status, height, normal, tile, cell, triangle |
 | `SurfaceTolerance`, `kTerrainSurfaceVersion` | `terrain/TerrainSurface.h` | agreement bound between two evaluations at one point; the surface contract version derived data records |
-| `TerrainHeightQuery` | `terrain/TerrainHeightQuery.h` | resident heights of one release; `HeightAt` (terrain-local, or world plus placement), `Insert`, `MarkFailed`, `Residency`, `ResidentTile`, `TileError`, `PayloadRequests`, `TakePayloadRequests` |
+| `TerrainHeightQuery` | `terrain/TerrainHeightQuery.h` | resident heights of one release; `HeightAt` (terrain-local, or world plus placement), `Insert`, `MarkFailed`, `Evict`, `Residency`, `ResidentTile`, `TileError`, `PayloadRequests`, `TakePayloadRequests`, `TakeUsedTiles` |
 | `TerrainHeightRequest`, `TerrainHeightResult`, `TerrainHeightStatus`, `TerrainHeightFailure` | `terrain/TerrainHeightQuery.h` | bound release and required spacing in; status, local height, `worldPoint`, spacing, source spacing, known or unknown `maxError`, release, tile and layer out |
 | `TerrainHeightLayer`, `TerrainPayloadRequest`, `TerrainTileResidency` | `terrain/TerrainHeightQuery.h` | one spacing of the release (baked tiles, measured deviation); a missing payload for a loader; a tile's slot state |
-| `PreloadTerrainTiles`, `PreloadAllTerrainTiles` | `terrain/TerrainHeightQuery.h` | P1's synchronous fill of a query from its own release handle, recording per-tile failures |
+| `PreloadTerrainTiles`, `PreloadAllTerrainTiles` | `terrain/TerrainHeightQuery.h` | synchronous fill of a query from its own release handle, recording per-tile failures; tools and tests |
+| `TerrainStreamer` | `terrain/TerrainStreamer.h` | asynchronous payload reads and CPU residency: `Add` (residency mode), `Find`, `ModeOf`, `AddInterest`/`SetInterest`/`RemoveInterest`, `Update` (the per-frame install point), `WaitForEager`, `WaitForCompletion`, `Status`, `Heights`/`Lod`/`Normals`/`Region`, `RetryFailed`, `Stats` |
+| `TerrainPayloadKey`, `TerrainPayloadWant`, `TerrainDemand`, `TerrainPayloadState`, `TerrainPayloadStatus`, `TerrainStreamingStats` | `terrain/TerrainStreamer.h` | the key (asset, release, kind, level, layer, tile or Region), a want with demand and rank, the states, budget and counters; `TerrainPayloadKeyOf`, `TerrainPayloadFootprint`, `DescribeTerrainPayloadKey` |
+| `TerrainExecutor`, `TerrainWorkerPool`, `TerrainManualExecutor` | `terrain/TerrainExecutor.h` | where background jobs run: a pool of `std::jthread`s, or a queue a test runs by hand |
+| `TerrainStreamingSettings`, `TerrainResidencyMode`, `LoadTerrainStreamingSettings`, `ValidateTerrainStreamingSettings` | `terrain/TerrainStreamingSettings.h` | the CPU budget, IO, retry and residency settings with no code defaults; the game file plus the machine-local override, every problem by path and file |
 | `TerrainTileMesh`, `TerrainMeshVertex` | `terrain/TerrainTileMesh.h` | one tile's raster mesh: release, surface version, tile, double origin, sample range, float vertices (position, normal), `TriangulateCell` indices, bounds |
 | `BuildTerrainTileMesh`, `TerrainMeshResult`, `TerrainMeshStatus` | `terrain/TerrainTileMesh.h` | builds it from a `TileSampleLookup`; `MissingTile`, `MissingNeighbour`, `InvalidSamples`, `InvalidInput` instead of a mesh |
 | `TerrainTileMeshWorldOrigin` | `terrain/TerrainTileMesh.h` | placement plus mesh origin in double; nullopt for another asset or an overflow |
@@ -607,9 +740,9 @@ tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-
 | `TerrainInstance`, `RegisterTerrainComponents` | `terrain/components/TerrainInstance.h`, `terrain/ComponentRegistration.h` | the scene component: `recipePath` (String, at most 63 characters) relative to assetsRoot; placement is the root entity's Transform position |
 | `TerrainSceneSpec`, `TerrainInstanceSpec`, `TerrainIssue`, `TerrainIssueKind` | `terrain/TerrainScene.h` | what the World asks for, sorted by content; refusals with a one-line message (`MissingRecipe`, `BadRecipePath`, `InvalidPlacement`, `NoRelease`, `BadRelease`, `Overlap`); `HasTerrain` |
 | `CollectTerrainScene` | `terrain/TerrainScene.h` | reads every `TerrainInstance` and its Transform; resolves the asset id, checks the placement |
-| `TerrainResidentRelease` | `terrain/TerrainScene.h` | one release opened, verified (`VerifyAllPacks`) and preloaded; `Info`, `Layout`, `Query`, `Lookup` |
+| `TerrainResidentRelease` | `terrain/TerrainScene.h` | one release opened (index only) with its height query, filled by a streamer; `Open`, `Create`, `Info`, `Layout`, `Handle`, `SharedHandle`, `Query`, `Lookup` |
 | `TerrainWorld`, `TerrainInstanceState`, `TerrainWorldRect` | `terrain/TerrainScene.h` | World resource: per asset the pinned release and what `current` last named, per instance placement, effective XZ bounds and release; `HeightAt`, `SameDerivedState`, `RemoveInstance` |
-| `ResolveTerrainWorld`, `TerrainCurrentMoved` | `terrain/TerrainScene.h` | resolve a spec against the releases, reusing what is loaded; the Edit poll |
+| `ResolveTerrainWorld`, `TerrainCurrentMoved` | `terrain/TerrainScene.h` | resolve a spec against the releases through a streamer, reusing what is loaded and waiting for Eager releases; the Edit poll |
 | `PeekTerrainCurrentPointer` | `terrain/TerrainRelease.h` | `ReadTerrainCurrentPointer` without the FileIO log line when nothing is published |
 
 ## Rules
@@ -728,7 +861,17 @@ core `ReadBytes`, `ReadByteRange`, `FileSize` and `ReadText`, opening a file
 per read; `PeekTerrainCurrentPointer` checks that the pointer exists first, so
 an Edit poll of an unpublished asset logs nothing. Nothing here writes a release or the `current` pointer: TerrainTool's
 bake writes the encoded bytes itself, into a candidate directory only, and its
-publish copies, verifies and switches the pointer.
+publish copies, verifies and switches the pointer. The one other file the
+module reads is the streaming settings, through `serial`.
+
+**Payload reads run on workers; residency changes on the main thread.** A
+streamer's jobs read one record range and decode it, touching only the byte
+source, the immutable index and the decoders, so concurrent reads are safe for
+both byte sources. Entries, height queries and the budget change only in
+`TerrainStreamer::Update`, which never reads or waits; `WaitForEager` is the
+only blocking call and runs only at Edit frame boundaries. Budgets, IO and
+retry numbers come only from `TerrainStreamingSettings`, which has no code
+defaults.
 
 **A candidate is validated before anyone may call it usable.** The bake
 validates its own output from disk before the directory gets its final name,
@@ -797,9 +940,10 @@ formula changes it.
 **A height query never reads files and never blocks.** `TerrainHeightQuery`
 holds no byte source. It answers from resident tiles or records one
 `TerrainPayloadRequest` per layer and tile, which stays pending after it is
-taken until `Insert` or `MarkFailed` resolves it. Tests check the byte-source
-counters before and after queries. It is not thread-safe: its owner queries,
-inserts and takes requests on one thread.
+taken until `Insert`, `MarkFailed` or `Evict` resolves it. Tests check the
+byte-source counters before and after queries. It is not thread-safe: its
+owner, the streamer's `Update` in the engine, queries, inserts and takes
+requests on one thread.
 
 **A query answers for one release only.** It is created bound to one
 `TerrainReleaseInfo` and keeps it for life: a request bound to another release
@@ -869,11 +1013,12 @@ positive area refuse both instances, whatever their order; sharing an edge or a
 corner is fine, and on the shared edge `TerrainWorld::HeightAt` answers from the
 first instance.
 
-**A release is used whole or not at all.** `TerrainResidentRelease::Load` reads
-every pack whole and every tile before anything derives from it. A failure is a
-`TerrainIssue` naming the recipe, asset, release and cause; for an asset that is
-already loaded, the old release stays and the message says so. No stand-in
-terrain.
+**An Eager release is used whole or not at all.** `ResolveTerrainWorld` waits
+until every payload of an Eager release is resident, each range checked
+against its record, before anything derives from it. A failure is a
+`TerrainIssue` naming the recipe, asset, release, payload and cause; for an
+asset that is already loaded, the old release stays and the message says so.
+No stand-in terrain.
 
 **Resolving reuses what is pinned.** An asset whose `current` still names what
 the previous `TerrainWorld` examined keeps that outcome, a release or a refusal,
@@ -883,16 +1028,20 @@ collider) until `current` moves to one that loads.
 
 ## State
 
-*As of 2026-10-09.* Format 2 supports sparse layers, independent payload
+*As of 2026-10-10.* Format 2 supports sparse layers, independent payload
 ranges and unique per-tile source records (#145). Recipes and runtime meshes
 still use one layer until the remaining P2 issues are integrated. See
 [the P2 summary](../terrain-p2-summary.md) for validation and full-map measurements.
 The accepted P1/P2 size baseline is 256 m tiles and 4096 m chunks; see
 [the measurements](#size-baseline-issue-24). Layout, addressing, placement, identities, the canonical
 surface, the tile mesh builder, the collider block, the release format, its
-in-memory encoder, the synchronous range reader and the resident height query
-with a synchronous preload work; nothing takes the query's payload requests yet
-(P3). Scenes load terrain (#118): app's private `TerrainRuntime` resolves every
+in-memory encoder, the range reader and the resident height query work. Since
+#126 a `TerrainStreamer` reads payload ranges on a worker pool, takes the
+queries' payload requests and keeps decoded payloads within a CPU budget from
+the game's `terrain_streaming.json`; the engine resolves every release through
+it. App still needs a whole release resident (Eager) for its meshes and height
+field and waits for it at load, a stop-gap until #125 selects per viewport and
+#128 adds collision residency. Scenes load terrain (#118): app's private `TerrainRuntime` resolves every
 `TerrainInstance` into the `TerrainWorld` resource and builds tile meshes and
 one height field per instance from the pinned release, and
 `games/TerrainCheck/` (a 2x2 relief at (150000.5, -20, -75000.25), ray tracing
@@ -907,8 +1056,8 @@ yet: scripts have no height query.
 Since #124 every recipe bake also writes the Region hierarchy (format 2.2:
 16-tile level 0, 128 cells; see [Region hierarchy](#region-hierarchy-issue-124)),
 validation rederives it, and sync rebakes a current release without it.
-Nothing in the engine draws Regions yet (#125) or streams them (#126); the
-reader's `ReadRegion`/`ReadPayload` are the addressing path for both.
+Nothing in the engine draws Regions yet (#125); the streamer reads them like
+any payload (an Eager release holds them all).
 Bakes hold every tile in memory, as the encoder takes the whole set; that is
 fine for P1's small maps, not for a 150 km map. Old releases accumulate until a
 cleanup with a cross-process use protocol exists.
@@ -939,9 +1088,23 @@ missing and invalid samples), `TerrainHeightQuery` (every status; dense,
 shared-edge, four-corner, negative and partial-boundary probes against
 `EvaluateSurface` from memory, disk and the committed fixture with zero reads
 during queries; a 4 m layer with its 8 m decimation; a per-tile source limit;
-payload requests; corrupt and missing packs; a query pinned across a pointer
+payload requests; evicted slots requested again and used tiles reported once;
+corrupt and missing packs; a query pinned across a pointer
 switch; world queries near the origin and about ±150 km out; refused layers and
-tiles), `TerrainTileMesh` (a vertex on every sample,
+tiles), `TerrainStreamer` (one read and one shared payload for wants from two
+interests and a query, exact record ranges; cancellation before a read starts
+and a started read kept; demand, rank and raised-demand order; corrupt ranges
+failing at once and truncated ones after the retry policy, never as a height;
+recovery by retry, after the failed hold and by `RetryFailed`; eviction order
+and the budget at every step, a consumer's evicted payload still valid,
+`Required` past the budget; Auto, Eager and Interest modes and payload
+footprints; an Eager wait on the worker pool and its first failure; query
+leases; a dropped release and its discarded read; a key the index lacks;
+concurrent range reads of one file source; a mover crossing a 12 x 12 map
+within the budget with every read on a worker; a hidden `[streaming-measure]`
+case for the numbers below), `TerrainStreamingSettings` (a complete file and
+the key-by-key local override; missing, unknown, mistyped and invalid keys by
+path and file; unset fields of settings built in code), `TerrainTileMesh` (a vertex on every sample,
 `TriangulateCell` order and winding, 20000 random points per block against
 `EvaluateSurface`, shared edges and normals at 4 m near and far and at 0.1 m,
 central-difference normals and missing neighbours, bounds, a clipped boundary
@@ -954,15 +1117,19 @@ with no tile entities, placement and path refusals, the engine and build
 spelling of one asset id, queries/meshes/collider block from one release at the
 far placement, missing/corrupt/incompatible releases next to a working one,
 touching and overlapping instances, a release pinned across a publish and the
-safe-point switch, a broken publish reported once and never re-read).
+safe-point switch, a broken publish reported once and never re-read; every
+resolve goes through a streamer on a worker pool, Eager).
 `engine_terrain_tests` links `mir::scene` for that last file only.
 
 ## Backlog
 
-1. P3 asynchronous range reads, caching and eviction over the same files: take
-   the height query's payload requests, read each record's range, hand the
-   bytes to `DecodeTerrainTile` and `Insert` the result; add eviction, retry
-   and cancellation to the query's slots and decide its threading model.
+1. Streaming after #126: per-viewport selection and prefetch wants (#125), GPU
+   upload and retirement inside its own budget (#127), collision interests
+   and per-body protection that replace the Eager wait at load (#128), release
+   switches verified off the main thread (#129) and measured budgets with
+   telemetry (#130). `Update` walks every entry each frame, so its cost grows
+   with the number of known payloads; the streaming measurement read through a
+   warm file cache.
 2. A script-facing height query over `TerrainWorld::HeightAt`; instances of
    one asset share one release but upload their tile meshes once each.
 3. Per-tile source recipe precision (#119), final seam adjustment (#120) and
@@ -989,8 +1156,7 @@ safe-point switch, a broken publish reported once and never re-read).
 10. A P2 change in how final heights follow from a recipe (the border band)
     must change what sync compares, e.g. by folding a bake version into the
     fingerprint, or sync keeps the old release current.
-11. Regions (#124): per-viewport selection and drawing (#125), scheduled reads
-    and CPU residency (#126); the Region settings are TerrainTool constants
+11. Regions (#124): per-viewport selection and drawing (#125); the Region settings are TerrainTool constants
     (no recipe or CLI field yet); bake cost is per tile and per level, so a
     150 km map needs the bounded bake of item 9; Region normals are point
     samples of the source stencil, an area-averaged normal for far shading was
@@ -998,6 +1164,21 @@ safe-point switch, a broken publish reported once and never re-read).
     out of P3).
 
 ## Changed
+
+*2026-10-10* — **Asynchronous range reads and CPU residency (#126).** Was:
+`ResolveTerrainWorld` read every pack whole (`VerifyAllPacks`) and preloaded
+every tile on the main thread, and nothing took the height query's payload
+requests. Now: a `TerrainStreamer` merges wants from interests, Eager releases
+and height queries per payload key, reads each record's range on a
+`TerrainWorkerPool`, installs at one `Update` per frame, retries IO failures by
+policy and keeps decoded payloads within a CPU budget, evicting speculative
+before visible, query and required data. Budgets and policies come from the
+game's `terrain_streaming.json` plus an optional machine-local override, with
+no code defaults; `terrain` links `serial` privately for it. Residency is Auto,
+Eager or Interest per release; app waits for an Eager release at load (stop-gap
+until #128) and builds meshes from resident payloads. `TerrainHeightQuery`
+gains `Evict` and `TakeUsedTiles`; `TerrainResidentRelease::Load` became
+`Open` (index only) and `Create`.
 
 *2026-10-09* — **Region coarse hierarchy (#124).** Format 2.2: the index header
 gains the Region settings and a Region table; every Region payload (positions,
