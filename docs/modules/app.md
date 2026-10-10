@@ -141,10 +141,10 @@ with the same only-names-round-trip gap.
 Terrain is pinned for the whole Play (terrain ADR 0018, local). `PlayScene` runs
 the terrain safe point once more before the snapshot, so a release published a
 moment earlier is adopted rather than missed; nothing refreshes terrain during
-Play, so a release published then changes no mesh, query or collider. `StopScene`
-rebuilds the terrain meshes `ReleaseSceneResources` freed, or, when `current`
-moved during Play, switches every terrain resource to that release in the same
-call.
+Play, so a release published then changes no mesh, query or collider. After
+`StopScene` the viewports upload again the terrain meshes `ReleaseSceneResources`
+freed, or, when `current` moved during Play, switch to that release, which
+`StopScene` adopts in the same call.
 
 ## API
 
@@ -249,17 +249,23 @@ App is the only place terrain meets the renderer and physics, since neither
 module may link `terrain`. A scene holds terrain as `TerrainInstance`
 components; the `TerrainWorld` World resource holds what they resolve to (see
 [terrain.md](terrain.md)). `src/app/TerrainRuntime.{h,cpp}` owns everything
-derived from it, one set per instance: the raster tile meshes and one static
-height field over the whole map, each stamped with the release it came from.
+derived from it: one static height field over the whole map per Eager
+instance, stamped with the release it came from, and, shared by every
+viewport and every instance of a release, the GPU meshes of the draw units the
+viewports select (#125).
 
 ```
-Initialize     -> TerrainRuntime::Bind      streaming settings -> TerrainStreamingSettings, TerrainStreamer resources
+Initialize     -> TerrainRuntime::Bind      streaming settings -> TerrainStreamingSettings, TerrainStreamer resources;
+                                            registers itself in the ViewDrawSources resource
 Run (any mode) -> TerrainRuntime::Update    TerrainStreamer::Update: the one install point per frame
-LoadScene      -> TerrainRuntime::Load      CollectTerrainScene, ResolveTerrainWorld (Eager wait), build, publish
+LoadScene      -> TerrainRuntime::Load      CollectTerrainScene, ResolveTerrainWorld (Eager wait), colliders
 Run (Edit)     -> TerrainRuntime::Refresh   an edit settled 0.5 s, or a current pointer moved (polled every 1 s)
 PlayScene      -> Refresh(force)            adopt a newer complete release, then the snapshot pins it
 StopScene      -> ForgetMeshes, ReleaseSceneResources, ..., Refresh(force)
-UnloadCurrentScene -> Unload                draws emptied, height fields destroyed, TerrainWorld emptied
+UnloadCurrentScene -> Unload                meshes forgotten, height fields destroyed, TerrainWorld emptied
+Render         -> TerrainRuntime::Prepare   per viewport: select, SetInterest, upload what is drawn first
+                  AppendViewDraws           that view's draws
+                  AppendVolumeDraws         shadow casters at viewport 0's detail
 ```
 
 `Bind` reads the game's `terrain_streaming.json` with the machine-local
@@ -270,29 +276,41 @@ streamer with its own `TerrainWorkerPool`. Invalid settings, or missing ones in
 a scene with terrain, are one error, and no terrain loads; a game without
 terrain needs no file.
 
-Releases resolve through the streamer. Meshes and the height field still cover
-a whole instance, so only an Eager release loads: resolving waits until all of
-it is resident (blocking the main thread at scene load, on Play entry and at an
-Edit switch, the stop-gap until collision residency), then the tile meshes are
-built from the resident LOD and normal payloads and the height field from the
-resident heights, with no file read. An Interest release (too big for the
-budget, or the game asked for Interest) is reported and not loaded.
+Releases resolve through the streamer. The height field still covers a whole
+instance, so an Eager release is waited for until all of it is resident
+(blocking the main thread at scene load, on Play entry and at an Edit switch,
+the stop-gap until collision residency) and gets its height field from the
+resident heights, with no file read. An Interest release (too big for what the
+budget leaves, or the game asked for Interest) loads with a warning and no
+collider: viewports draw it as its payloads arrive, and nothing collides with it
+until collision residency (#128). Either way every map tile must have source
+LOD and normal records in the index, or the instance is dropped with an error.
 
-A rebuild builds every new mesh and height field first, then swaps in one
-step: the new draws are published, the old meshes and height fields are
-destroyed and the `TerrainWorld` value is replaced. Nothing between frames sees
-two releases. A terrain whose mesh or collider cannot be built is dropped whole
-with an error, so the query never answers for ground nothing collides with.
-Each problem is logged once per loaded scene.
+Drawing is per viewport. `RenderSystem` hands `Prepare` every viewport's camera
+each frame; for each one, `TerrainRuntime` keeps a `TerrainViewSelector` and a
+streamer interest (both created on the viewport's first frame and removed when
+it has no camera), updates the selection over every loaded instance, replaces
+the interest's wants with the selection's and turns the drawn units into
+`WorldDrawItem`s. A unit counts as ready once it has a mesh or its payloads are
+resident. `TerrainMeshCache` (`src/app/TerrainRender.{h,cpp}`) uploads a unit's
+mesh the first time it is drawn, from the resident LOD and normal payloads
+(through `MakeTerrainRenderMesh`) or the Region payload, with a BLAS on an RT
+device; meshes are keyed by payload, so instances of one release and all
+viewports share them. The upload is still the synchronous `CreateMesh` (#127
+replaces it). A mesh unused for `view.meshRetainSeconds` is destroyed in one
+batch, at most once per that period; a swap destroys every mesh of a release no
+longer loaded. Each draw sits at placement plus the mesh origin, added in
+double, with the diagnostic tint on the default material and a
+`translationGrid` of 1/4096 m. Each viewport's selection (units per kind and
+level, stand-ins, missing areas, wants, prefetch bytes, meshes made and
+retired, streamer residency) is logged when it changes, at most every
+`kTerrainViewLogSeconds`.
 
-`src/app/TerrainRender.{h,cpp}` uploads a mesh: `TerrainRenderTiles::Add` takes a
-`TerrainTileMesh`, converts it with `MakeTerrainVertices`, uploads it (with a
-BLAS on an RT device) and records a `WorldDrawItem` at placement plus tile
-origin, added in double, with the diagnostic tint on the default material and a
-`translationGrid` of 1/4096 m. All tiles in one `TerrainRenderTiles` must come
-from one release; a mesh from another is refused. `PublishTerrainDraws` copies
-the draws into the `TerrainDrawItems` resource (see [renderer.md](renderer.md));
-the project's ray tracing setting alone decides how they are drawn.
+A swap builds every new height field first, then destroys the old ones and the
+meshes of releases no longer loaded and replaces the `TerrainWorld` value;
+viewports pick the new release from the next frame. A terrain whose collider
+cannot be built is dropped whole with an error, so the query never answers for
+ground nothing collides with. Each problem is logged once per loaded scene.
 The height field is `BuildTerrainAreaSamples`'s block handed to
 `PhysicsWorld::CreateStaticHeightField` at placement plus the block's first
 sample.
@@ -384,10 +402,17 @@ the other value would disagree with `App.cpp` about the class.
 **Terrain meshes do not survive `ReleaseSceneResources`.** It frees every mesh
 without bumping generations, so a kept handle would name the next scene's
 mesh. `TerrainRuntime::ForgetMeshes` (Stop) or `Unload` (scene change) runs
-before every release; the next `Refresh` rebuilds from the same release.
-`Destroy` is for dropping terrain while the scene stays. Height fields live in
-the process-long `PhysicsWorld`, so `Unload` and every swap destroy them
+before every release; the next frame uploads what the viewports draw again.
+Dropping terrain while the scene stays destroys its meshes explicitly (a
+release swap, or a mesh unused for `view.meshRetainSeconds`). Height fields
+live in the process-long `PhysicsWorld`, so `Unload` and every swap destroy them
 explicitly.
+
+**Terrain is drawn per viewport, from what is resident.** Each viewport selects
+its own units and wants their payloads; nothing is drawn that the selection did
+not pick, a unit draws once its mesh exists or its payloads are resident, and an
+area with nothing ready is left out while it loads. Only Eager instances have a
+collider until collision residency.
 
 **Terrain changes only at an Edit frame boundary.** `TerrainRuntime::Refresh`
 runs at the top of an Edit frame, in `PlayScene` before the snapshot and at the
@@ -414,7 +439,10 @@ anything here. Until then the `smoke.<game>` tests run the whole `App` for 120
 frames per game through `mMaxFrames`, and `smoke.switch` restarts from one game
 into another twice through `mSwitchProjectTo`. All of them fail on a crash or a
 logged error. `smoke.TerrainCheck` loads a far-world terrain from the release
-the build just published, with ray tracing requested. The terrain state machine
+the build just published, with ray tracing requested, plus a second terrain
+that streams by interest; `smoke.TerrainCheck.game-mode` plays it from the
+scene camera, which sees both, so the per-viewport selection draws, streams and
+traces them. The terrain state machine
 is tested in `terrain` (`TerrainScene.tests.cpp`) and the collider assembly in
 `physics` (`TerrainCollider.tests.cpp`); the Play/publish/Stop sequence through
 `App` itself was checked once with a local harness (terrain ADR 0018).
@@ -436,6 +464,17 @@ is tested in `terrain` (`TerrainScene.tests.cpp`) and the collider assembly in
    cheap for a large scene.
 
 ## Changed
+
+*2026-10-10* — **Terrain is drawn per viewport (#125).** Was: `TerrainRuntime`
+built every tile mesh of an Eager instance at load and published them all in
+`TerrainDrawItems`; an Interest instance was refused. Now: it is a
+`ViewDrawSource` that selects tiles and Regions per viewport
+(`TerrainViewSelector`), sets each viewport's streamer interest, uploads a
+unit's mesh when first drawn into the shared `TerrainMeshCache` and retires
+unused ones after `view.meshRetainSeconds`; shadow passes get viewport 0's
+detail. Interest instances load without a collider. TerrainCheck gains a 16 x 16
+tile map at 8 m that streams by interest under a 16 MiB budget, and
+`smoke.TerrainCheck.game-mode`.
 
 *2026-10-10* — **Terrain streams through a `TerrainStreamer` (#126).** Was:
 resolving a release read every pack whole and preloaded every tile on the main

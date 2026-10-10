@@ -10,9 +10,10 @@ samples on the CPU (plain data; `app` uploads it), the same samples gathered
 into one block for a collider, the one rule from a recipe path to its asset id
 and from a game to its published releases, and the scene side: the
 `TerrainInstance` component and the `TerrainWorld` resource it resolves to,
-which pins one release per asset, and the streamer that reads payload ranges on
+which pins one release per asset, the streamer that reads payload ranges on
 a small worker pool and keeps them resident within a data-driven CPU budget
-(#126). It does not bake, publish, draw or collide terrain itself; collision is
+(#126), and each viewport's choice of tiles and Regions to draw and payloads to
+want (#125). It does not bake, publish, draw or collide terrain itself; collision is
 built by physics from these samples. Generating, baking and publishing
 heights is offline work: the `terrain_bake` library and the headless
 `TerrainTool` executable in `tools/TerrainTool/` read a source recipe, produce
@@ -443,22 +444,25 @@ and then nothing loads. Later P3 issues add their own sections. TerrainCheck
 ships:
 
 ```json
-{ "cpu": { "budgetMiB": 256 }, "io": { "workerThreads": 2, "maxInstallsPerFrame": 32 },
+{ "cpu": { "budgetMiB": 16 }, "io": { "workerThreads": 2, "maxInstallsPerFrame": 32 },
   "retry": { "maxAttempts": 3, "firstDelaySeconds": 0.1, "maxDelaySeconds": 2.0, "failedHoldSeconds": 10.0 },
-  "residency": { "mode": "Auto", "queryLeaseSeconds": 2.0 } }
+  "residency": { "mode": "Auto", "queryLeaseSeconds": 2.0 },
+  "view": { "refineErrorPixels": 1.0, "mergeErrorPixels": 0.75, "prefetchErrorPixels": 0.5,
+            "prefetchBudgetMiB": 4, "meshRetainSeconds": 2.0 } }
 ```
 
 These are provisional development-machine values, not measured budgets; #130
-measures and replaces them.
+measures and replaces them. The `view` section is #125's (see the next
+section); the 16 MiB budget (256 MiB in #126) keeps TerrainCheck's 2 x 2 map
+Eager while its larger map streams by interest.
 
-**Stop-gap until collision residency (#128).** App's meshes and height field
-still cover a whole instance, so app loads an instance only when its release is
-Eager. `ResolveTerrainWorld` waits for an Eager release (`WaitForEager`, which
-blocks the main thread at scene load, on Play entry and at an Edit switch, never
-during Play) and refuses it when any payload failed; app then builds the tile
-meshes from the resident LOD and normal payloads and the height field from the
-resident heights, without a read. An Interest release still resolves and its
-queries stream, but app reports that it cannot load the instance.
+**Stop-gap until collision residency (#128).** App's height field still covers
+a whole instance, so only an Eager release gets a collider. `ResolveTerrainWorld`
+waits for an Eager release (`WaitForEager`, which blocks the main thread at
+scene load, on Play entry and at an Edit switch, never during Play) and refuses
+it when any payload failed; app then builds the height field from the resident
+heights, without a read. An Interest release resolves, its queries stream and
+the viewports draw it as it loads (#125), but it has no collider yet.
 
 **Measurements** (Ryzen 7 5800H, NVMe; development baselines, not budgets).
 TerrainCheck's release is 35 payloads, 5.77 MiB decoded; resolving it with the
@@ -479,6 +483,117 @@ Regions within 6 km:
 Latencies are counted in whole frames (16.7 ms) and only for payloads that
 were not already resident (prefetched) when first wanted. Cold-cache IO, more
 viewports and faster movers are #130's.
+
+### Per-viewport selection (issue #125)
+
+Each viewport chooses its own draw units, a tile at one LOD (its LodHeight and
+Normal payloads) or a whole Region, with a `TerrainViewSelector`
+(`terrain/TerrainViewSelection.h`). App keeps one per viewport and feeds its
+wants to the streamer through that viewport's interest.
+
+```cpp
+TerrainViewSelector selector(settings.view);              // one per viewport
+const TerrainView view{{cameraPosition, cameraRelativeViewProj}, focalPixels, farOrZero};
+selector.Update(instances, view, ready);                  // ready: a mesh exists or the payloads are resident
+streamer.SetInterest(interest, selector.Wants());         // Visible and Prefetch
+for (const TerrainDrawUnit &unit : selector.Draws())      // disjoint, inside the frustum
+    Draw(unit);
+selector.Collect(shadowVolume, ready, casters);           // the same detail inside another volume
+```
+
+**Detail from projected error.** A unit's error is its indexed bound
+(`maxDeviation` of the Region or of the tile's LOD record) times the
+viewport's focal length in pixels over the distance from the eye to the unit's
+box; a Region's box is widened by its bound, so it also holds the surface it
+stands for. Walking from the root Region, a Region is refined when its error
+passes `view.refineErrorPixels` and, once refined, stays so until it falls
+below `view.mergeErrorPixels`; a tile takes its coarsest LOD within the refine
+bound, with the same hysteresis between levels. The walk covers every
+direction around the eye, so turning the camera never changes detail and a
+Region coming into view already has its state; nothing depends on altitude or
+on fixed distances, and nothing past a finite far plane is refined, drawn or
+wanted.
+
+**Exactly once.** A Region gives way only to all its children: its four
+Regions, or at level 0 all its map tiles, so the drawn units never overlap and
+Region, tile and LOD borders meet with the shared edge nodes #124 bakes. Only
+leaves are culled: a Region's height range does not bound its descendants'
+finer geometry, so a refined Region is always descended, and a leaf is tested
+against the six clip planes with its box grown for float narrowing and the
+translation grid. A unit whose box the frustum holds is never left out.
+
+**Readiness.** A unit draws once it has a mesh or its payloads are resident.
+While a refined Region's visible children are not all ready, the Region itself
+draws if it is (coarse stays until its replacement is usable); a tile draws
+another resident LOD of itself; a Region that just merged draws its ready
+children until it arrives. Where nothing is ready the area is left out while it
+loads, and the coarsest missing Region is wanted first (negative rank), so a
+fresh view fills in coarse to fine.
+
+**Wants.** Everything drawn and every chosen unit in view is `Visible`, ranked
+by distance. Prefetch is separate from the draw list: the chosen units outside
+the frustum (every direction) and the finer units `view.prefetchErrorPixels`
+would pick, nearest first, until their footprints reach
+`view.prefetchBudgetMiB` (zero prefetches nothing). Two viewports want the same
+payloads under their own interests; the streamer reads each once and both draw
+from the same resident data at their own detail.
+
+**Drawing.** App's `TerrainRuntime` is a `ViewDrawSource` (renderer
+`ViewDrawSources`): `RenderSystem` hands it every viewport's camera, then asks
+for each view's draws and for shadow volumes at viewport 0's detail. A traced
+frame holds its single view's selection; more than one viewport keeps the
+whole-frame raster fallback. GPU meshes are uploaded with the synchronous
+`CreateMesh` when a unit is first drawn, shared by all viewports and instances,
+and destroyed in one batch after `view.meshRetainSeconds` unused (#127 brings
+budgeted asynchronous upload and retirement).
+
+**TerrainCheck** gains `assets/terrain/streamed-16x16.terrain.json`: 16 x 16
+tiles of 256 m at 8 m (one LOD), a level 0 Region over each quarter and one
+root, placed at (153000.5, -20, -77000.25) beside the 2 x 2 map in the scene
+camera's view. Its 14.5 MiB of payloads do not fit what the 16 MiB budget leaves
+after the Eager 2 x 2 map, so it streams by interest (no collider until #128).
+From the scene camera (`smoke.TerrainCheck.game-mode`) the 2 x 2 map draws as
+four source-LOD tiles and the streamed map, after about a second of loading
+from nothing, as its four level 0 Regions; the coarse root fills in first.
+
+**Measurements** (`TerrainRenderProbe --selection`, Release, RTX 3070 Laptop,
+1280 x 720, 60 degree vertical field of view; TerrainCheck's `view` values; the
+#124 prototype map of 64 x 64 tiles with 1 to 8 m sources and three Region
+levels, streamed by interest from memory with two workers; development
+baselines, not budgets):
+
+| View | Above ground | Draws: tiles (by LOD) + Regions | Vertices | Max projected error | Settled after | Background pixels |
+|---|---:|---|---:|---:|---:|---:|
+| high altitude | 3000 m | 38 (22 L0, 7 L1, 5 L2, 4 L3) + 9 L0 | 211 k | 0.86 px | 7 frames | 440126 (sky) |
+| low approach | 90 m | 425 (393, 14, 10, 8) + 10 L0 | 655 k | 0.74 px | 25 frames | 440806 (sky) |
+| tilted, rolled 35 degrees | 400 m | 450 (415, 12, 18, 5) + 3 L0 | 590 k | 0.98 px | 17 frames | |
+| map edge, looking out | 60 m | 206 (206 L0) + 3 L0 | 270 k | 0.74 px | 8 frames | |
+| nadir, ground only | 3500 m | 132 (116, 7, 5, 4) + 3 L0 | 209 k | 0.92 px | 3 frames | 0 |
+
+The projected error counts only units coarser than their source. #124's
+unculled whole-Region mix drew 2311 units (4.0 M vertices) and 1546 (2.5 M) for
+the first two views, with the same background pixel counts as here. Two
+viewports in one frame, a 90 degree view 120 m up and a 12 degree view from
+6 km away aimed at the same ground, draw 338 and 374 units; of the 345 map
+tiles both draw, 172 are drawn at different detail (a Region in one, tiles in
+the other, or another LOD), and the 404 payloads both want are read once.
+
+A flight at a steady 60 Hz from 6000 m up and 9.9 km out down to 25 m over a
+1 m source tile (1801 frames, 35 s), starting with nothing resident:
+
+| CPU budget | Frames with missing areas | Frames with stand-ins | Units changed per frame (mean, P95 / P99 / max) | Selection P50 / P95 / P99 | Frame P50 / P95 / P99 / max | Peak resident | Reads | Evictions |
+|---|---:|---:|---|---|---|---:|---:|---:|
+| 512 MiB | 2 (the first two) | 112 | 0.79, 2 / 5 / 257 | 1.19 / 2.39 / 2.60 ms | 5.3 / 10.7 / 16.0 / 538 ms | 104.9 MiB | 2399 | 0 |
+| 64 MiB | 2 (the first two) | 113 | 0.79, 2 / 5 / 257 | 1.22 / 2.50 / 2.70 ms | 5.2 / 10.7 / 18.2 / 569 ms | 64.0 MiB | 2401 | 1005 |
+
+The worst frames upload a refined level 0 Region's 256 tiles at once (up to
+256 synchronous `CreateMesh` calls with their BLAS); #127's budgeted
+asynchronous upload is what removes those spikes. In the engine (TerrainCheck,
+Release, a temporary local harness): a 60 degree and a 20 degree viewport side
+by side draw the streamed map as four level 0 Regions and as 110 tiles, and ray
+tracing falls back to raster with its one warning; a camera flying from 3000 m
+to 700 m over it goes from two Regions to 107 tiles within the 16 MiB budget,
+retiring meshes as it goes.
 
 ### Tile meshes
 
@@ -732,7 +847,9 @@ tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-
 | `TerrainStreamer` | `terrain/TerrainStreamer.h` | asynchronous payload reads and CPU residency: `Add` (residency mode), `Find`, `ModeOf`, `AddInterest`/`SetInterest`/`RemoveInterest`, `Update` (the per-frame install point), `WaitForEager`, `WaitForCompletion`, `Status`, `Heights`/`Lod`/`Normals`/`Region`, `RetryFailed`, `Stats` |
 | `TerrainPayloadKey`, `TerrainPayloadWant`, `TerrainDemand`, `TerrainPayloadState`, `TerrainPayloadStatus`, `TerrainStreamingStats` | `terrain/TerrainStreamer.h` | the key (asset, release, kind, level, layer, tile or Region), a want with demand and rank, the states, budget and counters; `TerrainPayloadKeyOf`, `TerrainPayloadFootprint`, `DescribeTerrainPayloadKey` |
 | `TerrainExecutor`, `TerrainWorkerPool`, `TerrainManualExecutor` | `terrain/TerrainExecutor.h` | where background jobs run: a pool of `std::jthread`s, or a queue a test runs by hand |
-| `TerrainStreamingSettings`, `TerrainResidencyMode`, `LoadTerrainStreamingSettings`, `ValidateTerrainStreamingSettings` | `terrain/TerrainStreamingSettings.h` | the CPU budget, IO, retry and residency settings with no code defaults; the game file plus the machine-local override, every problem by path and file |
+| `TerrainStreamingSettings`, `TerrainResidencyMode`, `LoadTerrainStreamingSettings`, `ValidateTerrainStreamingSettings` | `terrain/TerrainStreamingSettings.h` | the CPU budget, IO, retry, residency and per-viewport detail (`view`) settings with no code defaults; the game file plus the machine-local override, every problem by path and file |
+| `TerrainViewSelector` | `terrain/TerrainViewSelection.h` | one viewport's selection over placed releases: `Update` (detail in every direction with hysteresis, frustum draws, wants), `Draws`, `Collect` (the same detail in another volume), `Wants`, `Stats` |
+| `TerrainView`, `TerrainCullVolume`, `TerrainSelectionInstance`, `TerrainDrawUnit`, `TerrainUnitKind`, `TerrainUnitReady`, `TerrainViewStats` | `terrain/TerrainViewSelection.h` | the eye, camera-relative clip volume, focal length in pixels and far distance; a release at a placement; a tile at a LOD or a Region with its payload keys, distance and projected error; whether a unit can be drawn; drawn, stand-in, missing, wanted and prefetch counts |
 | `TerrainTileMesh`, `TerrainMeshVertex` | `terrain/TerrainTileMesh.h` | one tile's raster mesh: release, surface version, tile, double origin, sample range, float vertices (position, normal), `TriangulateCell` indices, bounds |
 | `BuildTerrainTileMesh`, `TerrainMeshResult`, `TerrainMeshStatus` | `terrain/TerrainTileMesh.h` | builds it from a `TileSampleLookup`; `MissingTile`, `MissingNeighbour`, `InvalidSamples`, `InvalidInput` instead of a mesh |
 | `TerrainTileMeshWorldOrigin` | `terrain/TerrainTileMesh.h` | placement plus mesh origin in double; nullopt for another asset or an overflow |
@@ -872,6 +989,16 @@ both byte sources. Entries, height queries and the budget change only in
 only blocking call and runs only at Edit frame boundaries. Budgets, IO and
 retry numbers come only from `TerrainStreamingSettings`, which has no code
 defaults.
+
+**A viewport's draw set covers each point at most once.** A Region is replaced
+only by all its children, so drawn units never overlap; a unit that is not
+ready is stood in for by a ready unit covering the same area (its Region, its
+children, or another LOD of the tile), never by one that overlaps a neighbour.
+Detail comes from indexed error bounds and the viewport's projection with the
+`view` thresholds, around the eye in every direction, never from altitude or
+fixed distances; the frustum decides only what is drawn and culls leaves only,
+with boxes grown for float narrowing, so a unit the frustum holds is never left
+out. Prefetch never enters the draw list.
 
 **A candidate is validated before anyone may call it usable.** The bake
 validates its own output from disk before the directory gets its final name,
@@ -1039,13 +1166,17 @@ in-memory encoder, the range reader and the resident height query work. Since
 #126 a `TerrainStreamer` reads payload ranges on a worker pool, takes the
 queries' payload requests and keeps decoded payloads within a CPU budget from
 the game's `terrain_streaming.json`; the engine resolves every release through
-it. App still needs a whole release resident (Eager) for its meshes and height
-field and waits for it at load, a stop-gap until #125 selects per viewport and
-#128 adds collision residency. Scenes load terrain (#118): app's private `TerrainRuntime` resolves every
-`TerrainInstance` into the `TerrainWorld` resource and builds tile meshes and
-one height field per instance from the pinned release, and
-`games/TerrainCheck/` (a 2x2 relief at (150000.5, -20, -75000.25), ray tracing
-requested) runs as `smoke.TerrainCheck`. Offline callers: the `terrain_bake`
+it. Since #125 every viewport selects its own tiles and Regions
+(`TerrainViewSelector`) and wants their payloads; app draws what is resident and
+uploads meshes when first drawn. App still needs a whole release resident
+(Eager) for its height field and waits for it at load, a stop-gap until #128
+adds collision residency; an Interest release is drawn but has no collider.
+Scenes load terrain (#118): app's private `TerrainRuntime` resolves every
+`TerrainInstance` into the `TerrainWorld` resource and builds one height field
+per Eager instance from the pinned release, and `games/TerrainCheck/` (a 2x2
+relief at (150000.5, -20, -75000.25), ray tracing requested, plus a 16 x 16
+tile map that streams by interest) runs as `smoke.TerrainCheck` and
+`smoke.TerrainCheck.game-mode`. Offline callers: the `terrain_bake`
 library (#113: recipe, fingerprint, "mir.relief" generator; #115: bake,
 candidate directory, validation; #116: publish, sync, the per-asset lock) and
 the `TerrainTool` executable over it, tested by `terrain_tool_tests` (the CLI
@@ -1056,8 +1187,8 @@ yet: scripts have no height query.
 Since #124 every recipe bake also writes the Region hierarchy (format 2.2:
 16-tile level 0, 128 cells; see [Region hierarchy](#region-hierarchy-issue-124)),
 validation rederives it, and sync rebakes a current release without it.
-Nothing in the engine draws Regions yet (#125); the streamer reads them like
-any payload (an Eager release holds them all).
+The engine draws Regions per viewport since #125; the streamer reads them like
+any payload.
 Bakes hold every tile in memory, as the encoder takes the whole set; that is
 fine for P1's small maps, not for a 150 km map. Old releases accumulate until a
 cleanup with a cross-process use protocol exists.
@@ -1104,7 +1235,18 @@ concurrent range reads of one file source; a mover crossing a 12 x 12 map
 within the budget with every read on a worker; a hidden `[streaming-measure]`
 case for the numbers below), `TerrainStreamingSettings` (a complete file and
 the key-by-key local override; missing, unknown, mistyped and invalid keys by
-path and file; unset fields of settings built in code), `TerrainTileMesh` (a vertex on every sample,
+path and file; unset fields of settings built in code), `TerrainViewSelection`
+(a 9 x 9 map of three tile LODs and four Region levels: every point drawn once
+from eyes high, low, at the edge and outside the map at three focal lengths;
+near fine and far coarse within the refine bound; LOD hysteresis while the focal
+length rises and falls; turning and projection changes never dropping a unit
+with a vertex in the frustum; stand-ins of another LOD, of the Region and of
+the children, holes only where nothing is ready and the coarsest Region wanted
+first; Visible and budgeted Prefetch wants including finer units; the far
+plane; another volume at the view's detail; two viewports at different detail
+sharing one read per payload through a streamer; a budgeted streamed flight
+covered at most once every frame and fully once settled; a far placement
+selecting what one near the origin does), `TerrainTileMesh` (a vertex on every sample,
 `TriangulateCell` order and winding, 20000 random points per block against
 `EvaluateSurface`, shared edges and normals at 4 m near and far and at 0.1 m,
 central-difference normals and missing neighbours, bounds, a clipped boundary
@@ -1123,15 +1265,18 @@ resolve goes through a streamer on a worker pool, Eager).
 
 ## Backlog
 
-1. Streaming after #126: per-viewport selection and prefetch wants (#125), GPU
-   upload and retirement inside its own budget (#127), collision interests
-   and per-body protection that replace the Eager wait at load (#128), release
-   switches verified off the main thread (#129) and measured budgets with
-   telemetry (#130). `Update` walks every entry each frame, so its cost grows
-   with the number of known payloads; the streaming measurement read through a
-   warm file cache.
-2. A script-facing height query over `TerrainWorld::HeightAt`; instances of
-   one asset share one release but upload their tile meshes once each.
+1. Streaming after #125: GPU upload and retirement inside its own budget
+   (#127; today a refined level 0 Region uploads its 256 tiles in one frame
+   with the synchronous `CreateMesh`, and readiness should wait for the GPU
+   copy), collision interests and per-body protection that replace the Eager
+   wait at load (#128), release switches verified off the main thread (#129)
+   and measured budgets and thresholds with telemetry (#130). `Update` walks
+   every entry each frame, so its cost grows with the number of known payloads;
+   the streaming measurement read through a warm file cache. The selection
+   walks every unit it chooses each frame (about a millisecond on the prototype
+   map), and a Region is replaced only by all of its children, so one missing
+   tile keeps a refined level 0 Region coarse while it loads.
+2. A script-facing height query over `TerrainWorld::HeightAt`.
 3. Per-tile source recipe precision (#119), final seam adjustment (#120) and
    baked coarse levels with per-tile measured bounds (#121). The format and
    query already carry sparse layers and tile deviation values.
@@ -1156,7 +1301,7 @@ resolve goes through a streamer on a worker pool, Eager).
 10. A P2 change in how final heights follow from a recipe (the border band)
     must change what sync compares, e.g. by folding a bake version into the
     fingerprint, or sync keeps the old release current.
-11. Regions (#124): per-viewport selection and drawing (#125); the Region settings are TerrainTool constants
+11. Regions (#124): the Region settings are TerrainTool constants
     (no recipe or CLI field yet); bake cost is per tile and per level, so a
     150 km map needs the bounded bake of item 9; Region normals are point
     samples of the source stencil, an area-averaged normal for far shading was
@@ -1164,6 +1309,17 @@ resolve goes through a streamer on a worker pool, Eager).
     out of P3).
 
 ## Changed
+
+*2026-10-10* — **Per-viewport tile and Region selection (#125).** Was: app drew
+every tile of an Eager release at its source LOD in every view, Regions were
+never drawn and an Interest release did not load. Now: `TerrainViewSelector`
+chooses each viewport's tiles and whole Regions from the indexed error bounds
+and the projection with `view` refine/merge thresholds, culls leaves
+conservatively, stands in ready coarser or finer units while others load, and
+wants Visible and budgeted Prefetch payloads per viewport; app draws per
+viewport (renderer `ViewDrawSources`) and loads Interest releases without a
+collider. `TerrainStreamingSettings` gains the `view` section. TerrainCheck
+streams a second, 16 x 16 tile map by interest under a 16 MiB budget.
 
 *2026-10-10* — **Asynchronous range reads and CPU residency (#126).** Was:
 `ResolveTerrainWorld` read every pack whole (`VerifyAllPacks`) and preloaded

@@ -233,6 +233,9 @@ The scheduler flushes the command buffer at each phase boundary and after each
 
 `RenderSystem` holds a `VulkanRenderer&` passed to its constructor. The renderer
 is not published as a world resource, which keeps it out of reach of scripts.
+Draws that depend on the viewport come from the `ViewDrawSources` resource:
+`RenderSystem` hands each source every viewport's camera before it builds any
+view, and app's terrain answers per view with its own level of detail (#125).
 
 ### A file
 

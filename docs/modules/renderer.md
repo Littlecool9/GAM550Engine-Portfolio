@@ -55,6 +55,16 @@ one view-projection matrix scaled to that viewport's own rect, builds one
 a `RenderView`. All of a frame's `RenderView`s go to `VulkanRenderer::DrawFrame`
 together.
 
+Some draws depend on the viewport: terrain picks its level of detail per
+camera. Such a producer is an `IViewDrawSource` registered in the
+`ViewDrawSources` World resource (`renderer/ViewDrawSource.h`). `RenderSystem`
+resolves every viewport's camera first and hands the list (`ViewCamera`: the
+viewport id, pose, lens, pixel extent and camera-relative view-projection) to
+each source's `Prepare`, then adds `AppendViewDraws(view)` to that view's world
+draws, and for the sun, spot and point shadow passes adds
+`AppendVolumeDraws(0, origin, viewProj)`: the source's draws inside that pass's
+volume at the primary view's detail (#125).
+
 `VulkanRenderer` draws every `RenderView` inside one render pass, swapping only the viewport/scissor rect between them (`RecordView`). This is split-screen-style clipping
 within the one swapchain image, not separate offscreen render targets.
 
@@ -116,7 +126,7 @@ void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera
 | Type | Header | Role |
 |---|---|---|
 | `Vertex`, `MeshHandle` | `renderer/Mesh.h` | `{pos, color, normal}`; a `{index, generation}` handle |
-| `TerrainDrawItems` | `renderer/VulkanRenderer.h` | World resource of entity-free terrain `WorldDrawItem`s, merged after `ModelDrawItems`; filled and emptied by app's terrain glue, not per frame |
+| `ViewDrawSources`, `IViewDrawSource`, `ViewCamera` | `renderer/ViewDrawSource.h` | World resource of producers whose draws depend on the viewport (app's terrain): `Prepare` with every viewport's camera, then `AppendViewDraws` per view and `AppendVolumeDraws` per shadow volume at a view's detail |
 | `TextureDesc`, `TextureHandle` | `renderer/Texture.h` | `{width, height, pixels, srgb}`, tightly-packed RGBA8; `kNullTexture` falls back to a default in `CreateMaterial` |
 | `MaterialDesc`, `MaterialHandle` | `renderer/Material.h` | `{shaderName, cullMode, polygonMode, baseColorTexture, normalTexture}`; `kNullMaterial` means the default |
 | `DrawItem` | `renderer/Renderer.h` | `{mesh, model, normalMatrix, tint, material}` — `model` is the world transform, not premultiplied by any camera |
@@ -180,20 +190,24 @@ BLAS. The scratch buffer outlives `BuildBLAS` because the command buffer has
 not been submitted when `BuildBLAS` returns, so `BuildMeshBlas` frees it after
 the submit and wait.
 
-**Terrain tiles are traced like any other mesh.** Each tile gets its own BLAS
-and one TLAS instance per frame, so the project's `rayTracing` setting alone
-(with device support and a single view) picks the path, terrain or not.
+**Terrain tiles are traced like any other mesh.** Each drawn unit (a tile at
+a LOD or a Region) gets its own BLAS and one TLAS instance per frame, so the
+project's `rayTracing` setting alone (with device support and a single view)
+picks the path, terrain or not; a traced frame holds that single view's
+terrain selection.
 `RayTracer::kMaxInstances` is 16384 because one 4096 m chunk is already 256 tiles. Two
 limits stay open: a tile edge is shared by two instances, and ray/instance
 intersection is not watertight across them, so a seam may leak a rare pixel
 that raster's `translationGrid` closes; and BLAS memory (not yet measured)
 counts against the terrain residency budget.
 
-**`TerrainDrawItems` persists; `ModelDrawItems` does not.** Both are World
-resources of entity-free `WorldDrawItem`s that `RenderSystem` appends after the
-`MeshRenderer` query. `ModelSystem` rebuilds the model list every frame; the
-terrain list is filled once by app's terrain glue and emptied by it before the
-meshes are freed, since terrain does not move.
+**`ModelDrawItems` is one list; view draw sources answer per view.**
+`ModelSystem` rebuilds the model list every frame, and `RenderSystem` appends
+it after the `MeshRenderer` query for every view. A `ViewDrawSources` producer
+(app's terrain) answers each view and each shadow volume separately, after
+`Prepare` has seen every camera of the frame, so two viewports may draw the
+same ground at different detail. A source stays registered while it lives and
+removes itself before it dies.
 
 **A `translationGrid` makes separate draws meet bit for bit.** Plain
 narrowing rounds each draw's camera-relative translation to float on its own,
@@ -580,6 +594,14 @@ No tests. Everything here needs a device, and the module is verified by running.
    raster/RT, and RT inherits that gap rather than fixing it.
 
 ## Changed
+
+*2026-10-10* — **Draws chosen per viewport (#125).** Was: terrain tile draws
+sat in a persistent `TerrainDrawItems` resource that every view and shadow pass
+drew whole. Now: `RenderSystem` resolves every viewport's camera before
+anything else, hands the cameras to each `IViewDrawSource` in the
+`ViewDrawSources` resource, and asks it for each view's draws and for the
+shadow volumes' casters at viewport 0's detail. The shadow camera is viewport
+0's resolved camera, as before. `TerrainDrawItems` is gone.
 
 *2026-10-08* — **Error texture and error material.** Was: the renderer had one
 fallback per level. A null or stale texture became white or a flat normal, and
