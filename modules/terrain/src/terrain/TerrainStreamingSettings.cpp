@@ -56,6 +56,21 @@ namespace mir
                 emit("residency", "mode", "must be \"Auto\", \"Eager\" or \"Interest\"");
             if (!std::isfinite(s.residency.queryLeaseSeconds) || s.residency.queryLeaseSeconds <= 0.0)
                 emit("residency", "queryLeaseSeconds", "must be a finite positive number of seconds");
+
+            const auto positive = [](double pixels) { return std::isfinite(pixels) && pixels > 0.0; };
+            const TerrainStreamingSettings::View &v = s.view;
+            if (!positive(v.refineErrorPixels))
+                emit("view", "refineErrorPixels", "must be a finite positive number of pixels");
+            if (!positive(v.mergeErrorPixels) ||
+                (positive(v.refineErrorPixels) && v.mergeErrorPixels > v.refineErrorPixels))
+                emit("view", "mergeErrorPixels", "must be a finite positive number of pixels, at most refineErrorPixels");
+            if (!positive(v.prefetchErrorPixels) ||
+                (positive(v.mergeErrorPixels) && v.prefetchErrorPixels > v.mergeErrorPixels))
+                emit("view", "prefetchErrorPixels", "must be a finite positive number of pixels, at most mergeErrorPixels");
+            if (!v.prefetchBudgetBytes)
+                emit("view", "prefetchBudgetMiB", "must be zero or more");
+            if (!NonNegative(v.meshRetainSeconds))
+                emit("view", "meshRetainSeconds", "must be a finite number of seconds, zero or more");
         }
 
         // Local objects merge into the game's key by key; any other local value replaces the game's.
@@ -254,7 +269,8 @@ namespace mir
 
         Reader reader(merged, local ? &*local : nullptr, gameName, localName, load.problems);
         for (auto it = merged.begin(); it != merged.end(); ++it)
-            if (it.key() != "cpu" && it.key() != "io" && it.key() != "retry" && it.key() != "residency")
+            if (it.key() != "cpu" && it.key() != "io" && it.key() != "retry" && it.key() != "residency" &&
+                it.key() != "view")
                 reader.Problem(it.key(), "", "is not a known section");
 
         TerrainStreamingSettings s;
@@ -282,6 +298,20 @@ namespace mir
             s.residency.mode = ParseMode(*mode);
         s.residency.queryLeaseSeconds =
             reader.Number(residency, "residency", "queryLeaseSeconds").value_or(s.residency.queryLeaseSeconds);
+
+        const json *view = reader.Section("view", {"refineErrorPixels", "mergeErrorPixels", "prefetchErrorPixels",
+                                                   "prefetchBudgetMiB", "meshRetainSeconds"});
+        TerrainStreamingSettings::View &v = s.view;
+        v.refineErrorPixels = reader.Number(view, "view", "refineErrorPixels").value_or(v.refineErrorPixels);
+        v.mergeErrorPixels = reader.Number(view, "view", "mergeErrorPixels").value_or(v.mergeErrorPixels);
+        v.prefetchErrorPixels = reader.Number(view, "view", "prefetchErrorPixels").value_or(v.prefetchErrorPixels);
+        if (const std::optional<double> mib = reader.Number(view, "view", "prefetchBudgetMiB"))
+        {
+            const double bytes = *mib * kBytesPerMiB;
+            if (bytes >= 0.0 && bytes < static_cast<double>(std::numeric_limits<int64_t>::max()))
+                v.prefetchBudgetBytes = static_cast<uint64_t>(std::llround(bytes));
+        }
+        v.meshRetainSeconds = reader.Number(view, "view", "meshRetainSeconds").value_or(v.meshRetainSeconds);
 
         Check(s, [&](std::string_view section, std::string_view key, std::string_view problem)
               { reader.Problem(section, key, problem); });

@@ -49,6 +49,11 @@ namespace mir::test
         settings.retry.failedHoldSeconds = 1.0;
         settings.residency.mode = mode;
         settings.residency.queryLeaseSeconds = 1.0;
+        settings.view.refineErrorPixels = 1.0;
+        settings.view.mergeErrorPixels = 0.75;
+        settings.view.prefetchErrorPixels = 0.5;
+        settings.view.prefetchBudgetBytes = uint64_t(1) << 24;
+        settings.view.meshRetainSeconds = 1.0;
         REQUIRE(ValidateTerrainStreamingSettings(settings).empty());
         return settings;
     }

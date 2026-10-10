@@ -15,5 +15,12 @@
   "residency": {
     "mode": "Auto",
     "queryLeaseSeconds": 2.0
+  },
+  "view": {
+    "refineErrorPixels": 1.0,
+    "mergeErrorPixels": 0.75,
+    "prefetchErrorPixels": 0.5,
+    "prefetchBudgetMiB": 4,
+    "meshRetainSeconds": 2.0
   }
 }

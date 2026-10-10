@@ -69,6 +69,20 @@ namespace mir
             // A height query's tile stays wanted this long after it was last asked for or answered from.
             double queryLeaseSeconds = std::numeric_limits<double>::quiet_NaN();
         } residency;
+
+        // Per-viewport detail: a unit's error bound projected to pixels at its nearest point.
+        struct View
+        {
+            // A unit is replaced by finer ones above this, and comes back once it falls below merge.
+            double refineErrorPixels = std::numeric_limits<double>::quiet_NaN();
+            double mergeErrorPixels = std::numeric_limits<double>::quiet_NaN();
+            // Prefetch reaches the units this finer bound picks, in every direction.
+            double prefetchErrorPixels = std::numeric_limits<double>::quiet_NaN();
+            // Decoded bytes one viewport may ask for beyond what it draws; zero prefetches nothing.
+            std::optional<uint64_t> prefetchBudgetBytes;
+            // A unit's GPU mesh outlives its last draw by this much.
+            double meshRetainSeconds = std::numeric_limits<double>::quiet_NaN();
+        } view;
     };
 
     // One "<field>: <problem>" line per invalid field, named by its JSON path; empty when valid.
