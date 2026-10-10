@@ -233,9 +233,15 @@ namespace mir
         return spec;
     }
 
-    TerrainResidentRelease::TerrainResidentRelease(TerrainReleaseHandle handle, TerrainHeightQuery query)
-        : mHandle(std::move(handle)), mQuery(std::move(query))
+    TerrainResidentRelease::TerrainResidentRelease(std::shared_ptr<const TerrainReleaseHandle> handle)
+        : mHandle(std::move(handle)), mQuery(TerrainHeightQuery::Create(*mHandle))
     {
+    }
+
+    std::shared_ptr<TerrainResidentRelease> TerrainResidentRelease::Create(TerrainReleaseHandle handle)
+    {
+        return std::shared_ptr<TerrainResidentRelease>(
+            new TerrainResidentRelease(std::make_shared<const TerrainReleaseHandle>(std::move(handle))));
     }
 
     TerrainResult<std::shared_ptr<TerrainResidentRelease>> TerrainResidentRelease::Load(
@@ -251,15 +257,15 @@ namespace mir
         if (verified.code != Code::None)
             return detail::Failure<Result>(verified, "");
 
-        TerrainHeightQuery query = TerrainHeightQuery::Create(*opened.value);
-        const TerrainPreloadReport preload = PreloadAllTerrainTiles(query, *opened.value);
+        Result loaded = Create(std::move(*opened.value));
+        const TerrainPreloadReport preload = PreloadAllTerrainTiles(loaded->Query(), loaded->Handle());
         if (!preload.Ok())
             return detail::Failure<Result>(
                 preload.firstError, std::format("{} of {} tiles did not load: ", preload.failed,
                                                 preload.loaded + preload.failed));
 
         TerrainResult<Result> result;
-        result.value = Result(new TerrainResidentRelease(std::move(*opened.value), std::move(query)));
+        result.value = std::move(loaded);
         return result;
     }
 

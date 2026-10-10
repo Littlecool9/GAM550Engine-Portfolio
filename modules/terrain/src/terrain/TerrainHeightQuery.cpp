@@ -181,7 +181,12 @@ namespace mir
         }
 
         const LayerState &layer = mLayers[*answer];
-        const Slot &slot = *layer.Find(tile);
+        Slot &slot = mLayers[*answer].slots.find(tile)->second;
+        if (!slot.used)
+        {
+            slot.used = true;
+            mUsed.push_back({mRelease.release, {mRelease.asset, tile}, *answer, layer.info.layout.SampleSpacing()});
+        }
         const std::span<const float> samples = slot.heights->Samples();
         const SurfaceSample surface = EvaluateSurface(
             layer.info.layout, local,
@@ -289,6 +294,14 @@ namespace mir
         return {};
     }
 
+    void TerrainHeightQuery::Evict(uint32_t layer, TileCoord tile)
+    {
+        if (layer >= mLayers.size())
+            return;
+        mLayers[layer].slots.erase(tile);
+        Unqueue(layer, tile);
+    }
+
     TerrainTileResidency TerrainHeightQuery::Residency(uint32_t layer, TileCoord tile) const
     {
         const Slot *slot = layer < mLayers.size() ? mLayers[layer].Find(tile) : nullptr;
@@ -310,6 +323,14 @@ namespace mir
     std::vector<TerrainPayloadRequest> TerrainHeightQuery::TakePayloadRequests()
     {
         return std::exchange(mQueue, {});
+    }
+
+    std::vector<TerrainPayloadRequest> TerrainHeightQuery::TakeUsedTiles()
+    {
+        for (const TerrainPayloadRequest &used : mUsed)
+            if (const auto slot = mLayers[used.layer].slots.find(used.tile.coord); slot != mLayers[used.layer].slots.end())
+                slot->second.used = false;
+        return std::exchange(mUsed, {});
     }
 
     void TerrainHeightQuery::Request(uint32_t layer, TileCoord tile)

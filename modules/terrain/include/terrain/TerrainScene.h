@@ -86,10 +86,14 @@ namespace mir
     public:
         [[nodiscard]] static TerrainResult<std::shared_ptr<TerrainResidentRelease>> Load(
             const std::filesystem::path &releasesRoot, AssetId asset, TerrainReleaseId release);
+        // Nothing resident yet.
+        [[nodiscard]] static std::shared_ptr<TerrainResidentRelease> Create(TerrainReleaseHandle handle);
 
-        const TerrainReleaseInfo &Info() const { return mHandle.Info(); }
-        const TerrainLayout &Layout() const { return mHandle.Layout(); }
-        const TerrainReleaseHandle &Handle() const { return mHandle; }
+        const TerrainReleaseInfo &Info() const { return mHandle->Info(); }
+        const TerrainLayout &Layout() const { return mHandle->Layout(); }
+        const TerrainReleaseHandle &Handle() const { return *mHandle; }
+        // Shared with the workers reading it.
+        const std::shared_ptr<const TerrainReleaseHandle> &SharedHandle() const { return mHandle; }
         TerrainHeightQuery &Query() { return mQuery; }
         const TerrainHeightQuery &Query() const { return mQuery; }
 
@@ -97,9 +101,9 @@ namespace mir
         TileSampleLookup Lookup(uint32_t layer = 0) const;
 
     private:
-        TerrainResidentRelease(TerrainReleaseHandle handle, TerrainHeightQuery query);
+        explicit TerrainResidentRelease(std::shared_ptr<const TerrainReleaseHandle> handle);
 
-        TerrainReleaseHandle mHandle;
+        std::shared_ptr<const TerrainReleaseHandle> mHandle;
         TerrainHeightQuery mQuery;
     };
 
