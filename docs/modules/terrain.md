@@ -216,6 +216,109 @@ coarse geometry/error and collision-area residency independently. Use those
 results to revisit the tile and chunk parameters; this baseline does not set
 permanent distance, memory or latency thresholds.
 
+### Region hierarchy (issue #124)
+
+A release also carries a quadtree of coarse **Regions**: draw units for far
+terrain that replace a whole group of tiles. Every Region is an independent
+payload, so a distant view needs no tile payload in memory.
+
+**Grid.** Level 0 Regions are squares of `RegionTiles()` tiles (16: 4096 m at
+the 256 m baseline, one default chunk) on the grid of that size through tile 0,
+so they line up with chunks of that size without being bound to them. Level
+`L + 1` joins 2 x 2 level `L` Regions, counted from the map's first level 0
+Region, until one root covers the map. A Region is addressed by
+`TerrainRegionCoord{level, x, z}`, `x`/`z` counted from 0 at every level;
+`TerrainRegionGrid` gives its tiles, rect, valid extent (rect cut to the map
+bounds), parent and children. TerrainCheck's 2 x 2 map straddles the origin and
+gets four level 0 Regions and one root.
+
+**Mesh.** Each Region holds `Cells()` cells a side (128: 32 m at level 0,
+doubling per level), on grid lines that are multiples of `Unit()`, the coarsest
+source step of the release, so every grid node is a node of every source and
+takes its final height unchanged. Near the map edge the mesh stops at the
+reference cells touching the bounds, exactly where the collider block stops.
+Cells split along `TriangulateCell`'s diagonal. An outer edge shared with
+another Region also holds every node of the finer of the two sources beside it,
+with the heights (`TerrainFinalSurface::SharedHeight`) and shared-stencil
+normals the tile LOD rings use. So a Region meets tiles at any LOD, and
+Regions of any level, with the same vertices: crack-free by construction, with
+no skirts, as long as a selection replaces whole Regions (a Region by its four
+children or by all its tiles). Positions are float relative to the rect's
+first sample; on the integer spacings in use they are exact, so shared
+vertices also agree after camera-relative narrowing.
+
+**Error and coverage.** `maxDeviation` bounds the distance between the Region
+mesh and the release's final surface over the Region's valid extent: aligned
+cells compare at the source nodes (exact for piecewise-linear surfaces), the
+rest use the exact triangle overlay of the LOD bound, both with that bound's
+numerical enclosure. The bake fails when a Region misses part of its domain
+(`TerrainRegionCoversDomain`) or its error cannot be enclosed. Region bytes
+are a pure function of the final heights and the two settings; Debug and
+Release give the same bytes (pinned in `TerrainRegions.tests.cpp`).
+
+**Storage and addressing.** Format 2.2 appends the Region settings to the index
+header and one 144-byte record per Region (payload layout, kind `Region`, the
+Region's `x`/`z` in `tile`, its `level`, layer 0) after the layer table; the
+payload sits in the pack of the Region's first map tile. Readers address it
+like any payload:
+
+```cpp
+const TerrainTileRecord *record = index.Find({x, z}, 0, TerrainPayloadKind::Region, level);  // or FindRegion
+TerrainResult<std::vector<std::byte>> bytes = handle.ReadPayload(*record);                   // one range, checksum
+TerrainResult<TerrainRegionMesh> mesh = DecodeTerrainRegion(index, *record, *bytes.value);  // or ReadRegion
+```
+
+The index record already has what selection needs before any read: the valid
+extent, the height range of the mesh, the cell spacing and `maxDeviation`.
+
+**Prototype.** `terrain_region_experiment`
+(`-DMJOLNIR_TERRAIN_REGION_EXPERIMENT=ON`) bakes
+`tools/TerrainTool/experiments/region-prototype.terrain.json`: 64 x 64 tiles
+of 256 m (about 16.25 x 16.17 km, signed and clipped edges), 8 m by default
+with 1, 2 and 4 m blocks, 23.6 MB of final heights. Release, Ryzen 7 5800H:
+
+| Level 0 | Cells | Regions | Level 0 cell | Region bytes (all levels) | Largest Region (L0) | Vertices per L0 Region | L0 max error | L0 sampled P95 | Bake |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4096 m | 64 | 21 | 64 m | 5.51 MB (0.23 x heights) | 0.31 MB | 7169 | 15.01 m | 2.29 m | 33.0 s |
+| **4096 m** | **128** | 21 | 32 m | 17.61 MB (0.75 x) | 0.89 MB | 19329 | 5.80 m | 1.32 m | 10.9 s |
+| 4096 m | 256 | 21 | 16 m | 66.11 MB (2.80 x) | 3.24 MB | 68225 | 3.00 m | 0.51 m | 8.1 s |
+| 8192 m | 64 | 5 | 128 m | 1.43 MB (0.06 x) | 0.31 MB | 7283 | 20.04 m | 3.41 m | 25.4 s |
+| 8192 m | 128 | 5 | 64 m | 4.33 MB (0.18 x) | 0.89 MB | 19443 | 15.01 m | 2.28 m | 7.7 s |
+| 8192 m | 256 | 5 | 32 m | 15.91 MB (0.67 x) | 3.22 MB | 67957 | 5.80 m | 1.31 m | 3.6 s |
+
+Each level up doubles the cell, so an 8192 m level 0 is the 4096 m hierarchy
+without its finest level. The edge polylines add about 29k vertices to the
+16 level 0 Regions (31% at 64 cells, 10% at 128, 3% at 256). For comparison, a
+4096 m square of 8 m tiles at their coarsest LOD has 256 x 33^2 = 278784
+vertices; a 128-cell level 0 Region has 14 times fewer.
+
+`TerrainRenderProbe --regions` renders the same map (RTX 3070 Laptop, 1280 x
+720, 60 degree vertical field of view) from 3000 m up looking at the far
+corner, from 90 m on a shallow approach, and straight down from 3500 m with
+only terrain in view, against all 4096 tiles at their source LOD (5.8 M
+vertices). A whole-Region selection (refine while the eye is closer than a
+Region edge; a refined level 0 Region becomes its tiles) with 4096 m and 128
+cells draws 2311 units and 4.0 M vertices from high up, 1546 and 2.5 M on the
+approach, with at most 0.40 and 0.74 px of projected bound and 21 and 8
+pixels of silhouette change; 64 cells reach 0.75 and 2.05 px, 256 cells 0.23
+and 0.41 px with 8% to 19% more vertices. With 8192 m the same rule refines
+every Region of this 16 km map down to tiles. The straight-down view has no
+background pixel in any selection, including tile, level 0 and level 1
+borders, so the edges are crack-free on the GPU too.
+
+**Choice: level 0 = 4096 m (16 tiles), 128 cells.** At 1280 x 720 and a 60
+degree field of view, the 5.8 m bound projects to one pixel at about 3.6 km,
+close to one Region edge, so a selection can draw a level 0 Region once the
+camera is about a Region away and keeps on the order of a few hundred tiles
+near it. 8192 m makes the finest Region 64 m cells (15 m bound, about 9.4 km),
+which would keep thousands of tiles resident and swap 1024 tiles at once; 256
+cells cost 3.8 times the bytes for half the error, 64 cells need about 9.4 km
+before a level 0 Region is fine. Storage at 128 cells is of the order of the
+8 m heights themselves. These settings are `kTerrainRegionTiles` and
+`kTerrainRegionCells` in TerrainTool; sync rebakes a release made with others.
+The numbers come from one generated map and are a development baseline, not
+streaming budgets; #125 sets the screen-error thresholds from data.
+
 ### Height queries
 
 A `TerrainHeightQuery` holds the final heights of one release in memory and
@@ -378,8 +481,11 @@ TerrainTool package --id-root <logical root> --source-path <relative path>
   `candidate.json` and stray files, format, index, whole packs, coverage (every
   layout tile's pack exists), payloads, finite heights, shared edges and
   four-tile corners (shared samples bit-identical, and `EvaluateSurfaceInCell`
-  from each side within `SurfaceTolerance` at four probes per cell), and
-  identity (manifest against index; with `--recipe`, fingerprint and layout).
+  from each side within `SurfaceTolerance` at four probes per cell), Regions
+  (each decodes; when every source decodes, the hierarchy is rebaked with the
+  index's settings and must match byte for byte; a recipe-backed candidate
+  must have one), and identity (manifest against index; with `--recipe`,
+  fingerprint and layout).
 - **publish** validates the candidate (with `candidate.json`), takes the
   asset's lock (`<asset>/.publish.lock`, opened exclusively; the OS drops it
   if the process dies), removes `.partial` directories earlier publishes left,
@@ -415,7 +521,10 @@ The report is JSON: `kind`, `reportVersion`, `tool` (name, version),
 `command`, `ok`, `recipe` (path, fingerprint), `candidate`, `asset` (id,
 logical path), `release` (id, source fingerprint, format version and minor,
 content and surface versions, heights hash, nonce), `layout`, `tiles` (each
-tile's pack, stored height range and whether it read back), `files`, `checks`
+tile's pack, stored height range and whether it read back), `regions` (the
+settings, level 0 edge and, per Region, level, coordinate, pack, map tiles,
+valid extent, height range, cell spacing, vertices, triangles, bytes, error and
+whether it decoded; null without Regions), `files`, `checks`
 (each `passed`, `failed` or `skipped` with a detail; a check that could not
 cover every tile is `skipped`, never `passed`) and `diagnostics` (`check`,
 `field`, `tiles`, `sample`, `message`). `field` is a dotted recipe or
@@ -476,10 +585,12 @@ tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-
 | `TileAddress` | `terrain/TileAddressing.h` | `AddressLocal`, `AddressWorld`: status, tile, within-tile meters, `SampleCell` |
 | `TerrainSourceFingerprint`, `TerrainFormatVersion`, `TerrainReleaseId`, `TerrainReleaseInfo` | `terrain/TerrainIdentity.h` | three identities that never convert into each other |
 | `TileHeights` | `terrain/TileHeights.h` | one tile's `(n+1)^2` float32 samples; `At`, `Set`, `Samples` |
-| `TerrainIndex`, `TerrainTileRecord`, `TerrainPackRecord`, `TerrainResult`, `TerrainPackError` | `terrain/TerrainPackFormat.h` | the format 2.0 sparse layer/payload layout and version numbers; `ParseTerrainIndex`, `DecodeTerrainTile` (bytes from any reader), `TerrainPackFileName` |
-| `EncodeTerrainRelease`, `MintTerrainReleaseId` | `terrain/TerrainPackWriter.h` | index and pack bytes from `TileHeights`, in memory; `TerrainHeightsHash`, `MakeTerrainReleaseNonce` |
+| `TerrainIndex`, `TerrainTileRecord`, `TerrainPackRecord`, `TerrainResult`, `TerrainPackError` | `terrain/TerrainPackFormat.h` | the format 2.2 sparse layer/payload layout, Region table and version numbers; `Find` (any kind, Region by x/z, level, layer 0), `FindRegion`, `regionGrid`, `regions`; `ParseTerrainIndex`, `DecodeTerrainTile` (bytes from any reader), `TerrainPackFileName` |
+| `EncodeTerrainRelease`, `MintTerrainReleaseId` | `terrain/TerrainPackWriter.h` | index and pack bytes from `TileHeights`, derived payloads and `TerrainRegionWrites`, in memory; `TerrainPayloadsHash`, `TerrainHeightsHash`, `MakeTerrainReleaseNonce` |
+| `TerrainRegionCoord`, `TerrainRegionGrid` | `terrain/TerrainRegionGrid.h` | a Region's level and x, z; the quadtree over a reference grid: levels, counts, ordinals, tiles, rect, valid extent, meshed domain, grid lines, cell spacing, parent and children |
+| `TerrainRegionMesh`, `EncodeTerrainRegion`, `DecodeTerrainRegion` | `terrain/TerrainRegion.h` | a Region payload (origin-relative positions, normals, indices, provenance, error) and its checked codec; `EvaluateTerrainRegion`, `TerrainRegionCoversDomain`, `TerrainRegionDeviation` against `TerrainSourceLookup`, `TerrainRegionSourceChecksums` |
 | `TerrainByteSource`, `TerrainFileSource`, `TerrainMemorySource` | `terrain/TerrainByteSource.h` | where a release's files come from, with read and byte counters |
-| `TerrainReleaseHandle`, `OpenTerrainRelease`, `OpenCurrentTerrainRelease` | `terrain/TerrainRelease.h` | one opened release; `ReadTile`, `VerifyAllPacks`; release directory and `current` pointer naming |
+| `TerrainReleaseHandle`, `OpenTerrainRelease`, `OpenCurrentTerrainRelease` | `terrain/TerrainRelease.h` | one opened release; `ReadTile`, `ReadLod`, `ReadNormals`, `ReadRegion` (one range), `ReadPayload` (any record of the index, checksum checked), `VerifyAllPacks`; release directory and `current` pointer naming |
 | `TerrainAssetPath`, `ResolveTerrainAssetPath`, `TerrainReleasesRoot` | `terrain/TerrainAssetPath.h` | recipe path to logical path and asset id (`kTerrainRecipeSuffix`), game directory to its releases root, `IsTerrainFileExcludedFromCook` for AssetCooker |
 | `TileSamplesView`, `TileSampleLookup` | `terrain/TerrainSurface.h` | one tile's final float32 samples, not owned, in the release block layout |
 | `CellTriangulation`, `TriangulateCell` | `terrain/TerrainSurface.h` | a cell's diagonal and two triangles as global sample indices, counter-clockwise from +Y |
@@ -571,20 +682,25 @@ payloads have `source=false` and may carry a measured `maxDeviation`.
 
 | Block | Bytes | Fields (offset type name) |
 |---|---|---|
-| Index header | 128 | 0 `"MJTI"`, 4 u32 major, 8 u32 minor, 12 u32 headerSize, 16 u32 contentVersion, 20 u32 alignment, 24 u64 asset, 32 u64 release, 40 u64 sourceFingerprint, 48 f64 reference spacing, 56 i32 intervals, 60 i32 chunkTiles, 64/72/80/88 f64 bounds, 96/100 u32 pack count/size, 104/108 u32 payload count/size, 112 u64 heightsHash, 120/124 u32 layer count/size |
-| Pack record | 32 | 0/4 i32 chunk, 8 u32 payloadCount, 12 reserved, 16 u64 fileSize, 24 u64 checksum |
-| Payload record | 120 | 0/4 i32 tile, 8 u32 pack, 12 u32 samplesPerSide, 16/24/32 u64 offset/length/checksum, 40 f64 spacing, 48/52 f32 min/max, 56/64/72/80 f64 extent, 88 u32 layer, 92 u32 kind, 96 u32 level, 100 u32 source flag, 104 u32 deviation flag, 108 reserved, 112 f64 deviation |
+| Index header | 152 | 0 `"MJTI"`, 4 u32 major, 8 u32 minor, 12 u32 headerSize, 16 u32 contentVersion, 20 u32 alignment, 24 u64 asset, 32 u64 release, 40 u64 sourceFingerprint, 48 f64 reference spacing, 56 i32 intervals, 60 i32 chunkTiles, 64/72/80/88 f64 bounds, 96/100 u32 pack count/size, 104/108 u32 payload count/size, 112 u64 heightsHash, 120/124 u32 layer count/size; minor 2: 128/132 u32 Region count/size, 136 u32 Region tiles (0: no Regions), 140 u32 cells, 144 u32 unit, 148 u32 levels (minors 0 and 1 end at 128) |
+| Pack record | 32 | 0/4 i32 chunk, 8 u32 payloadCount (tile and Region payloads), 12 reserved, 16 u64 fileSize, 24 u64 checksum |
+| Payload record | 144 | 0/4 i32 tile, 8 u32 pack, 12 u32 samplesPerSide, 16/24/32 u64 offset/length/checksum, 40 f64 spacing, 48/52 f32 min/max, 56/64/72/80 f64 extent, 88 u32 layer, 92 u32 kind, 96 u32 level, 100 u32 source flag, 104 u32 deviation flag, 108 reserved, 112 f64 deviation; minor 1: 120/128 u64 sourceChecksum/topologyHash, 136/140 u32 vertex/index count |
 | Layer record | 16 | 0 f64 spacing, 8 i32 intervalsPerTile, 12 reserved |
+| Region record | 144 | the payload record: Region x/z in tile, level, layer 0, kind 3, spacing = widest cell, samplesPerSide = cells + 1, extent = valid extent, min/max of the mesh, deviation required, sourceChecksum = Fnv1a64 of its map tiles' (x, z, source checksum) |
 | Pack header | 48 | 0 `"MJTP"`, 4/8/12 u32 major/minor/headerSize, 16/24 u64 asset/release, 32/36 i32 chunk, 40/44 u32 payloadCount/contentVersion |
+| Region payload | 112 + 24 V + 4 I | 0 `"RGN1"`, 4 u32 content version, 8 u32 level, 12/16 i32 x/z, 24/32 f64 origin x/z, 40 f64 cell spacing, 48..60 i32 map tile range, 64/72 u64 source checksum/topology hash, 80/84 u32 V/I, 88 f64 deviation; then V float3 positions, V float3 normals, I u32 indices |
 
-Tables follow header, packs, payloads, layers, optional extension bytes and an
-8-byte FNV64 trailer. Payload keys sort by `(z,x,kind,level,layer)`. Kind 0 is
-Height; 1/2/3 reserve LodHeight/Normal/Region. This reader refuses unsupported
-content; future minor versions can implement those keys without another
-container major. Every payload is an independent aligned range, including
-records for the same tile. `heightsHash` includes the ordered tile/layer key,
-kind, level, source flag, spacing, sample count, optional error bound and
-checksum, but excludes storage grouping/alignment.
+Tables follow header, packs, payloads, layers, Regions (minor 2), optional
+extension bytes and an 8-byte FNV64 trailer. Payload keys sort by
+`(z,x,kind,level,layer)`. Kind 0 is Height; 1/2 are LodHeight/Normal (minor 1);
+kind 3 Region appears only in the Region table, one record per Region in
+`(level, z, x)` order. This reader refuses unsupported content; future minor
+versions can add keys without another container major. Every payload is an
+independent aligned range, including records for the same tile. `heightsHash`
+includes the ordered tile/layer key, kind, level, source flag, spacing, sample
+count, optional error bound and checksum of every payload, Regions included,
+but excludes storage grouping/alignment; so a 2.1 reader refuses a 2.2 release
+that has Regions instead of reading part of it.
 
 `Layers()` exposes all grids. `Layout()` is only the reference grid; obtain
 source precision from `Index().Find(tile)`. `ReadTile(key)` reads that source;
@@ -596,8 +712,14 @@ release layer; querying never performs IO.
 whole index: magic, versions, checksum, sizes, one finest source per map tile,
 unique sorted payload keys, nested layer grids, the chunk each tile belongs to, aligned offsets
 that neither overflow nor run past their pack nor overlap, and valid extents
-equal to the layout's. Reading a tile checks its payload checksum and height
-range. Every failure is a `TerrainPackError` naming the file, record, tile and
+equal to the layout's. Region records must list the grid's Regions in order,
+each with the grid's spacing, node count and valid extent, a deviation, a
+length that holds its counts, its first map tile's pack and its map tiles'
+source checksum; the Region unit must be a multiple of every source step.
+Reading a tile checks its payload checksum and height range; decoding a Region
+also checks its header against the record and grid, that vertices stay in the
+domain, winding, unit upward normals, the height range, the topology hash and
+that the triangles cover the domain. Every failure is a `TerrainPackError` naming the file, record, tile and
 field; the terrain code returns it instead of logging, and core FileIO logs its
 own IO failures once.
 
@@ -782,6 +904,11 @@ through `LaunchProcess`), plus AssetCooker, which only asks
 `IsTerrainFileExcludedFromCook`. Every build runs `TerrainTool sync` for each
 game recipe (today TerrainCheck's). Nothing outside C++ reads `TerrainWorld`
 yet: scripts have no height query.
+Since #124 every recipe bake also writes the Region hierarchy (format 2.2:
+16-tile level 0, 128 cells; see [Region hierarchy](#region-hierarchy-issue-124)),
+validation rederives it, and sync rebakes a current release without it.
+Nothing in the engine draws Regions yet (#125) or streams them (#126); the
+reader's `ReadRegion`/`ReadPayload` are the addressing path for both.
 Bakes hold every tile in memory, as the encoder takes the whole set; that is
 fine for P1's small maps, not for a 150 km map. Old releases accumulate until a
 cleanup with a cross-process use protocol exists.
@@ -798,6 +925,10 @@ about ±150 km, a float-narrowing counter-example, overflow), `TerrainIdentity`,
 clipped edge tiles, chunk-size independence, writer refusals, a newer minor,
 release-id minting), `TerrainPackIntegrity` (malformed,
 truncated, overlapping, duplicate, overflowing and corrupt indexes and packs),
+`TerrainRegion` (grid anchoring, levels, lines and clipped domains; one-range
+Region reads with no tile read; coverage, error bounds against random probes
+and tight bounds on aligned cells; malformed Region header fields, records,
+offsets and payloads; writer refusals),
 `TerrainRelease` (naming, pointer parsing, disk reads, a handle kept across a
 pointer switch, the committed fixture in `tests/fixtures/releases/`),
 `TerrainSurface` (2x2 tiles of 256 m at 4 m around the origin, at mixed signs
@@ -845,8 +976,9 @@ safe-point switch, a broken publish reported once and never re-read).
    when the neighbour arrives. Runtime building versus prebaked mesh caches is
    still open (C13), as is a compact terrain vertex: the shared renderer
    `Vertex` costs 64 bytes where position and normal need 24.
-6. Render LOD and Region meshes (P2/P3) build on the same builder: a coarser
-   step over the same samples, never finer than the tile's spacing.
+6. Render LOD meshes build on the same builder: a coarser step over the same
+   samples, never finer than the tile's spacing. Region meshes are baked
+   payloads (#124), not built at runtime.
 7. Colliders over more than one shape (maps past Jolt's 32768 samples a side,
    P3 residency) bring the per-tile seam back; measure overlap or a compound
    shape before choosing.
@@ -857,8 +989,24 @@ safe-point switch, a broken publish reported once and never re-read).
 10. A P2 change in how final heights follow from a recipe (the border band)
     must change what sync compares, e.g. by folding a bake version into the
     fingerprint, or sync keeps the old release current.
+11. Regions (#124): per-viewport selection and drawing (#125), scheduled reads
+    and CPU residency (#126); the Region settings are TerrainTool constants
+    (no recipe or CLI field yet); bake cost is per tile and per level, so a
+    150 km map needs the bounded bake of item 9; Region normals are point
+    samples of the source stencil, an area-averaged normal for far shading was
+    not compared; payloads use the plain float layout (compact encodings are
+    out of P3).
 
 ## Changed
+
+*2026-10-09* — **Region coarse hierarchy (#124).** Format 2.2: the index header
+gains the Region settings and a Region table; every Region payload (positions,
+normals, indices, provenance, error) is one aligned range in the pack of its
+first map tile, addressed by level and Region coordinate. TerrainTool bakes
+level 0 = 16 tiles with 128 cells (prototype in
+[Region hierarchy](#region-hierarchy-issue-124)), validates by rederiving,
+reports Regions in a `regions` check and report section (tool 8, report 6),
+and sync rebakes older releases. The committed fixture was regenerated.
 
 *2026-10-08* — **Recorded measured P1/P2 sizes ([#24](https://github.com/GAM550F26/alpha/issues/24)).**
 Accepted 256 m logical tiles and 4096 m chunks as revisable engine-development
