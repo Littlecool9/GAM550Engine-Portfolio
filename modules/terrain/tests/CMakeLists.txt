@@ -13,6 +13,7 @@ engine_add_module_tests(terrain
     TerrainStreamingSettings.tests.cpp
     TerrainSurface.tests.cpp
     TerrainTileMesh.tests.cpp
+    TerrainViewSelection.tests.cpp
     TileAddressing.tests.cpp
     TileHeights.tests.cpp
 )

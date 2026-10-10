@@ -21,6 +21,7 @@ target_sources(engine_terrain PRIVATE
     src/terrain/TerrainStreamingSettings.cpp
     src/terrain/TerrainSurface.cpp
     src/terrain/TerrainTileMesh.cpp
+    src/terrain/TerrainViewSelection.cpp
     src/terrain/TileAddressing.cpp
     src/terrain/TileHeights.cpp
 )
