@@ -17,6 +17,7 @@
 #include <core/ecs/components/Name.h>
 #include <core/ecs/components/Transform.h>
 #include <terrain/TerrainAssetPath.h>
+#include <terrain/TerrainStreamer.h>
 #include <terrain/components/TerrainInstance.h>
 
 #include <glm/vec3.hpp>
@@ -119,7 +120,7 @@ namespace mir
         TerrainWorld::AssetState ResolveAsset(const TerrainInstanceSpec &instance,
                                               const std::filesystem::path &releasesRoot,
                                               const TerrainWorld::AssetState *before,
-                                              std::vector<TerrainIssue> &issues)
+                                              std::vector<TerrainIssue> &issues, TerrainStreamer &streamer)
         {
             TerrainWorld::AssetState state;
             state.asset = instance.asset;
@@ -168,13 +169,27 @@ namespace mir
                 return state;
             }
 
-            TerrainResult<std::shared_ptr<TerrainResidentRelease>> loaded =
-                TerrainResidentRelease::Load(releasesRoot, instance.asset, *current.value);
-            if (!loaded)
+            const auto unusable = [&](const std::string &why)
+            {
                 return refuse(TerrainIssueKind::BadRelease,
-                              std::format("{}: release {} cannot be used: {}{}", subject,
-                                          Hex(current.value->value), loaded.error.message, keeping));
-            state.release = std::move(*loaded.value);
+                              std::format("{}: release {} cannot be used: {}{}", subject, Hex(current.value->value),
+                                          why, keeping));
+            };
+            std::shared_ptr<TerrainResidentRelease> release = streamer.Find(instance.asset, *current.value);
+            if (!release)
+            {
+                TerrainResult<std::shared_ptr<TerrainResidentRelease>> opened =
+                    TerrainResidentRelease::Open(releasesRoot, instance.asset, *current.value);
+                if (!opened)
+                    return unusable(opened.error.message);
+                release = std::move(*opened.value);
+            }
+            // Stop-gap until collision residency guards bodies: an Eager release is used only once all of it
+            // is resident.
+            if (streamer.Add(release) == TerrainResidencyMode::Eager)
+                if (const TerrainPackError loaded = streamer.WaitForEager(release->Info()); loaded.code != Code::None)
+                    return unusable(loaded.message);
+            state.release = std::move(release);
             return state;
         }
     }
@@ -238,35 +253,22 @@ namespace mir
     {
     }
 
-    std::shared_ptr<TerrainResidentRelease> TerrainResidentRelease::Create(TerrainReleaseHandle handle)
-    {
-        return std::shared_ptr<TerrainResidentRelease>(
-            new TerrainResidentRelease(std::make_shared<const TerrainReleaseHandle>(std::move(handle))));
-    }
-
-    TerrainResult<std::shared_ptr<TerrainResidentRelease>> TerrainResidentRelease::Load(
+    TerrainResult<std::shared_ptr<TerrainResidentRelease>> TerrainResidentRelease::Open(
         const std::filesystem::path &releasesRoot, AssetId asset, TerrainReleaseId release)
     {
         using Result = std::shared_ptr<TerrainResidentRelease>;
         TerrainResult<TerrainReleaseHandle> opened = OpenTerrainRelease(releasesRoot, asset, release);
         if (!opened)
             return detail::Failure<Result>(opened.error, "");
-
-        // A release that is not entirely intact is not used at all.
-        const TerrainPackError verified = opened.value->VerifyAllPacks();
-        if (verified.code != Code::None)
-            return detail::Failure<Result>(verified, "");
-
-        Result loaded = Create(std::move(*opened.value));
-        const TerrainPreloadReport preload = PreloadAllTerrainTiles(loaded->Query(), loaded->Handle());
-        if (!preload.Ok())
-            return detail::Failure<Result>(
-                preload.firstError, std::format("{} of {} tiles did not load: ", preload.failed,
-                                                preload.loaded + preload.failed));
-
         TerrainResult<Result> result;
-        result.value = std::move(loaded);
+        result.value = Create(std::move(*opened.value));
         return result;
+    }
+
+    std::shared_ptr<TerrainResidentRelease> TerrainResidentRelease::Create(TerrainReleaseHandle handle)
+    {
+        return std::shared_ptr<TerrainResidentRelease>(
+            new TerrainResidentRelease(std::make_shared<const TerrainReleaseHandle>(std::move(handle))));
     }
 
     TileSampleLookup TerrainResidentRelease::Lookup(uint32_t layer) const
@@ -310,7 +312,8 @@ namespace mir
     }
 
     TerrainWorld ResolveTerrainWorld(const TerrainSceneSpec &spec, const std::filesystem::path &releasesRoot,
-                                     const TerrainWorld *previous, std::vector<TerrainIssue> &issues)
+                                     const TerrainWorld *previous, std::vector<TerrainIssue> &issues,
+                                     TerrainStreamer &streamer)
     {
         TerrainWorld next;
         for (const TerrainInstanceSpec &instance : spec.instances)
@@ -318,7 +321,7 @@ namespace mir
             if (FindAsset(next.mAssets, instance.asset))
                 continue;
             const TerrainWorld::AssetState *before = previous ? FindAsset(previous->mAssets, instance.asset) : nullptr;
-            next.mAssets.push_back(ResolveAsset(instance, releasesRoot, before, issues));
+            next.mAssets.push_back(ResolveAsset(instance, releasesRoot, before, issues, streamer));
         }
 
         std::vector<TerrainInstanceState> placed;

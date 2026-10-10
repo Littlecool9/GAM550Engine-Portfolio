@@ -2,6 +2,7 @@
 #include "../src/script/bindings/TerrainBindings.h"
 #include "../src/script/bindings/WorldBindings.h"
 #include "../../terrain/tests/TerrainPackTestSupport.h"
+#include "../../terrain/tests/TerrainStreamingTestSupport.h"
 
 #include <script/ScriptHost.h>
 #include <terrain/TerrainAssetPath.h>
@@ -53,6 +54,7 @@ namespace
         Fixture(glm::dvec3 translation = {}, bool flat = false)
         {
             world.EmplaceResource<EngineModeState>();
+            EmplaceTestStreamer(world);
             const auto path = ResolveTerrainAssetPath(kRoot, kRecipe);
             REQUIRE(path.Ok());
             asset = path.asset;
@@ -116,7 +118,8 @@ namespace
         void Resolve()
         {
             std::vector<TerrainIssue> issues;
-            TerrainWorld next = ResolveTerrainWorld(spec, root, world.TryResource<TerrainWorld>(), issues);
+            TerrainWorld next = ResolveTerrainWorld(spec, root, world.TryResource<TerrainWorld>(), issues,
+                                                    world.Resource<TerrainStreamer>());
             REQUIRE(issues.empty());
             REQUIRE(next.Instances().size() == 1);
             world.EmplaceResource<TerrainWorld>(std::move(next));

@@ -8,6 +8,7 @@
  */
 
 #include "TerrainPackTestSupport.h"
+#include "TerrainStreamingTestSupport.h"
 
 #include <terrain/ComponentRegistration.h>
 #include <terrain/TerrainAreaSamples.h>
@@ -63,6 +64,7 @@ namespace
             InstallHierarchy(world);
             RegisterCoreComponents();
             RegisterTerrainComponents();
+            EmplaceTestStreamer(world);
         }
     };
 
@@ -136,7 +138,7 @@ namespace
     {
         const TerrainSceneSpec spec = CollectTerrainScene(world, kIdRoot);
         issues = spec.issues;
-        return ResolveTerrainWorld(spec, root, previous, issues);
+        return ResolveTerrainWorld(spec, root, previous, issues, world.Resource<TerrainStreamer>());
     }
 
     const TerrainIssue *IssueFor(const std::vector<TerrainIssue> &issues, std::string_view recipe)

@@ -14,6 +14,7 @@
 #include <physics/PhysicsTypes.h>
 #include <terrain/TerrainIdentity.h>
 #include <terrain/TerrainScene.h>
+#include <terrain/TerrainStreamer.h>
 
 #include <filesystem>
 #include <optional>
@@ -35,7 +36,11 @@ namespace mir
     class TerrainRuntime
     {
     public:
+        // Loads the game's streaming settings; when they are valid, emplaces them and a TerrainStreamer.
         void Bind(World &world, VulkanRenderer &renderer, const GameProject &project);
+
+        // The one point per frame where finished terrain reads are installed; call before any system runs.
+        void Update();
 
         void Load();
 
@@ -60,6 +65,7 @@ namespace mir
         };
 
         bool Bound() const { return mWorld != nullptr; }
+        TerrainStreamer *Streamer() const;
         void Apply(TerrainSceneSpec spec);
         // Takes what it reuses out of old; the rest is left to destroy after the swap.
         std::vector<InstanceResources> Build(TerrainWorld &next, std::vector<InstanceResources> &old);
@@ -78,6 +84,9 @@ namespace mir
         VulkanRenderer *mRenderer = nullptr;
         std::string mAssetIdRoot;
         std::filesystem::path mReleasesRoot;
+        // Why there is no streamer; reported once, when a scene has terrain.
+        std::string mSettingsProblem;
+        bool mSettingsReported = false;
 
         // Plus the latest edit waiting to settle.
         TerrainSceneSpec mSpec;

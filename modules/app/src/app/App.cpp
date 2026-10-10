@@ -492,6 +492,9 @@ namespace mir
                 ApplyImportedAssets();
         #endif
 
+            // Every mode, before any system runs
+            mTerrain->Update();
+
             // Edit, between frames, before any system runs
             if (IsEditing(mWorld))
                 mTerrain->Refresh(dt, false);

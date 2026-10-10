@@ -9,19 +9,24 @@
 #include "TerrainRuntime.h"
 
 #include <core/ecs/World.h>
+#include <core/fs/Paths.h>
 #include <core/log/Assert.h>
 #include <core/log/Log.h>
 #include <physics/PhysicsWorld.h>
 #include <renderer/VulkanRenderer.h>
 #include <terrain/TerrainCollision.h>
 #include <terrain/TerrainAssetPath.h>
+#include <terrain/TerrainExecutor.h>
 #include <terrain/TerrainRenderMesh.h>
+#include <terrain/TerrainStreamingSettings.h>
 #include <terrain/TerrainTileMesh.h>
 
 #include <glm/vec3.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <format>
+#include <memory>
 #include <optional>
 #include <utility>
 
@@ -33,6 +38,20 @@ namespace mir
         {
             return a.asset == b.asset && a.translation.Meters() == b.translation.Meters();
         }
+
+        double MiB(uint64_t bytes)
+        {
+            return double(bytes) / (1024.0 * 1024.0);
+        }
+
+        uint64_t ReleaseFootprint(const TerrainIndex &index)
+        {
+            uint64_t bytes = 0;
+            for (const std::vector<TerrainTileRecord> *records : {&index.tiles, &index.regions})
+                for (const TerrainTileRecord &record : *records)
+                    bytes += TerrainPayloadFootprint(record);
+            return bytes;
+        }
     }
 
     void TerrainRuntime::Bind(World &world, VulkanRenderer &renderer, const GameProject &project)
@@ -41,6 +60,42 @@ namespace mir
         mRenderer = &renderer;
         mAssetIdRoot = project.mAssetIdRoot;
         mReleasesRoot = TerrainReleasesRoot(project.mRootDir);
+
+        const TerrainStreamingSettingsLoad load =
+            LoadTerrainStreamingSettings(project.mRootDir / kTerrainStreamingSettingsFileName,
+                                         ExecutableDir() / kTerrainStreamingLocalSettingsFileName);
+        if (!load.settings)
+        {
+            mSettingsProblem.clear();
+            for (const std::string &problem : load.problems)
+                mSettingsProblem += (mSettingsProblem.empty() ? "" : "; ") + problem;
+            // Without either file the game may simply have no terrain; Apply reports it if it does.
+            if (load.gameFileFound || load.localFileFound)
+            {
+                MIR_LOG_ERROR("Terrain streaming is not configured, so no terrain loads: {}", mSettingsProblem);
+                mSettingsReported = true;
+            }
+            return;
+        }
+
+        const TerrainStreamingSettings &settings = *load.settings;
+        world.EmplaceResource<TerrainStreamingSettings>(settings);
+        world.EmplaceResource<TerrainStreamer>(settings, std::make_shared<TerrainWorkerPool>(settings.io.workerThreads));
+        MIR_LOG_INFO("Terrain streaming: {:.0f} MiB CPU budget, {} read workers, {} residency{}",
+                     MiB(settings.cpu.budgetBytes), settings.io.workerThreads,
+                     TerrainResidencyModeName(*settings.residency.mode),
+                     load.localFileFound ? " (machine-local overrides applied)" : "");
+    }
+
+    TerrainStreamer *TerrainRuntime::Streamer() const
+    {
+        return mWorld ? mWorld->TryResource<TerrainStreamer>() : nullptr;
+    }
+
+    void TerrainRuntime::Update()
+    {
+        if (TerrainStreamer *streamer = Streamer())
+            streamer->Update();
     }
 
     void TerrainRuntime::Load()
@@ -117,8 +172,22 @@ namespace mir
     void TerrainRuntime::Apply(TerrainSceneSpec spec)
     {
         TerrainWorld &current = mWorld->Resource<TerrainWorld>();
+        TerrainStreamer *streamer = Streamer();
+        if (!streamer)
+        {
+            if (spec.HasTerrain() && !mSettingsReported)
+            {
+                MIR_LOG_ERROR("Terrain streaming is not configured, so no terrain loads: {}", mSettingsProblem);
+                mSettingsReported = true;
+            }
+            mSpec = std::move(spec);
+            return;
+        }
+
         std::vector<TerrainIssue> issues = spec.issues;
-        TerrainWorld next = ResolveTerrainWorld(spec, mReleasesRoot, &current, issues);
+        const auto started = std::chrono::steady_clock::now();
+        TerrainWorld next = ResolveTerrainWorld(spec, mReleasesRoot, &current, issues, *streamer);
+        const double resolveSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         for (const TerrainIssue &issue : issues)
             Report(issue.message);
 
@@ -158,6 +227,13 @@ namespace mir
                          instance.recipePath, info.asset.value, info.release.value, tiles.max.x - tiles.min.x + 1,
                          tiles.max.z - tiles.min.z + 1, mResources[i].tiles.DrawItems().size(), at.x, at.y, at.z);
         }
+        const TerrainStreamingStats stats = streamer->Stats();
+        MIR_LOG_INFO("Terrain streaming: {} payloads ({:.2f} MiB) resident of {:.0f} MiB; resolving and the Eager "
+                     "wait took {:.3f} s",
+                     stats.ready, MiB(stats.residentBytes), MiB(stats.budgetBytes), resolveSeconds);
+        if (stats.overBudgetBytes > 0)
+            MIR_LOG_WARN("Terrain streaming: Eager payloads exceed the CPU budget by {:.2f} MiB",
+                         MiB(stats.overBudgetBytes));
     }
 
     std::vector<TerrainRuntime::InstanceResources> TerrainRuntime::Build(TerrainWorld &next,
@@ -171,6 +247,20 @@ namespace mir
             {
                 built.push_back(std::move(*reused));
                 ++i;
+                continue;
+            }
+
+            const std::optional<TerrainResidencyMode> mode = Streamer()->ModeOf(instance.release->Info());
+            if (mode != TerrainResidencyMode::Eager)
+            {
+                Report(std::format("Terrain '{}': release {:016x} streams by interest ({:.1f} MiB of payloads, "
+                                   "{:.0f} MiB CPU budget, {} residency); meshes and colliders still need the whole "
+                                   "release resident, so the instance is not loaded",
+                                   instance.recipePath, instance.release->Info().release.value,
+                                   MiB(ReleaseFootprint(instance.release->Handle().Index())),
+                                   MiB(Streamer()->Settings().cpu.budgetBytes),
+                                   TerrainResidencyModeName(*Streamer()->Settings().residency.mode)));
+                next.RemoveInstance(i);
                 continue;
             }
 
@@ -228,13 +318,27 @@ namespace mir
 
     bool TerrainRuntime::BuildMeshes(const TerrainInstanceState &instance, TerrainRenderTiles &tiles)
     {
+        const TerrainStreamer &streamer = *Streamer();
         const TerrainResidentRelease &release = *instance.release;
-        const TerrainLayout &layout = release.Layout();
-        const TileRange range = layout.Tiles();
+        const TerrainIndex &index = release.Handle().Index();
+        const TileRange range = release.Layout().Tiles();
         for (int32_t z = range.min.z; z <= range.max.z; ++z)
             for (int32_t x = range.min.x; x <= range.max.x; ++x)
             {
-                const auto built = ReadTerrainRenderMesh(release.Handle(), {x, z});
+                // The source precision's LOD and normals, already resident; nothing is read here.
+                const TerrainTileRecord *source = index.Find({x, z});
+                const auto resident = [&](TerrainPayloadKind kind) -> const TerrainTileRecord *
+                { return source ? index.Find({x, z}, source->layer, kind, 0) : nullptr; };
+                const TerrainTileRecord *lodRecord = resident(TerrainPayloadKind::LodHeight);
+                const TerrainTileRecord *normalRecord = resident(TerrainPayloadKind::Normal);
+                const auto lod = lodRecord ? streamer.Lod(TerrainPayloadKeyOf(release.Info(), *lodRecord)) : nullptr;
+                const auto normals =
+                    normalRecord ? streamer.Normals(TerrainPayloadKeyOf(release.Info(), *normalRecord)) : nullptr;
+                TerrainResult<TerrainTileMesh> built;
+                if (lod && normals)
+                    built = MakeTerrainRenderMesh(index, *lod, *normals);
+                else
+                    built.error = {TerrainPackErrorCode::NotFound, "its LOD and normal payloads are not resident"};
                 if (!built)
                 {
                     Report(std::format("Terrain '{}': no mesh for tile ({}, {}) ({}); the instance "
