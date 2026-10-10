@@ -195,6 +195,28 @@ namespace mir::terrainbake
                                   {"samplesPerSide", t.samplesPerSide},
                                   {"layer", t.layer},
                                   {"source", t.source}});
+        j["regions"] = nullptr;
+        if (r.regionGrid)
+        {
+            const TerrainRegionGridSummary &g = *r.regionGrid;
+            Json records = Json::array();
+            for (const TerrainRegionSummary &s : r.regions)
+                records.push_back({{"level", s.level},
+                                   {"region", TileJson(s.region)},
+                                   {"pack", s.pack},
+                                   {"tiles", {{"min", TileJson(s.tiles.min)}, {"max", TileJson(s.tiles.max)}}},
+                                   {"validExtent", BoundsJson(s.validExtent)},
+                                   {"minHeight", s.minHeight},
+                                   {"maxHeight", s.maxHeight},
+                                   {"cellSpacing", s.cellSpacing},
+                                   {"vertices", s.vertices},
+                                   {"triangles", s.triangles},
+                                   {"bytes", s.bytes},
+                                   {"maxDeviation", s.maxDeviation},
+                                   {"readable", s.readable}});
+            j["regions"] = {{"regionTiles", g.regionTiles}, {"cells", g.cells},          {"unit", g.unit},
+                            {"levels", g.levels},           {"levelZeroEdge", g.levelZeroEdge}, {"records", records}};
+        }
         j["sourceEstimates"] = Json::array();
         for (const auto &estimate : r.sourceEstimates)
             j["sourceEstimates"].push_back({{"spacing", estimate.spacing}, {"tileCount", estimate.tileCount},

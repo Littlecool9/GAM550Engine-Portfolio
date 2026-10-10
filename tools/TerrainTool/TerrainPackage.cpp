@@ -29,8 +29,9 @@ namespace mir::terrainbake
 
         constexpr std::initializer_list<std::string_view> kAfterCurrent{
             check::kCandidate, check::kFormat, check::kIndex,    check::kPacks,  check::kCoverage,
-            check::kPayloads,  check::kFinite, check::kEdges,    check::kCorners, check::kIdentity,
-            check::kTarget,    check::kCopy,   check::kVerify,   check::kRename, check::kPointer};
+            check::kPayloads,  check::kFinite, check::kEdges,    check::kCorners, check::kRegions,
+            check::kIdentity,  check::kTarget, check::kCopy,     check::kVerify, check::kRename,
+            check::kPointer};
         constexpr std::initializer_list<std::string_view> kAfterSource{
             check::kTarget, check::kCopy, check::kVerify, check::kRename, check::kPointer, check::kPrune};
 
@@ -92,8 +93,8 @@ namespace mir::terrainbake
         TerrainReport report("package", {check::kArguments, check::kCurrent, check::kLock, check::kCandidate,
                                          check::kFormat, check::kIndex, check::kPacks, check::kCoverage,
                                          check::kPayloads, check::kFinite, check::kEdges, check::kCorners,
-                                         check::kIdentity, check::kTarget, check::kCopy, check::kVerify,
-                                         check::kRename, check::kPointer, check::kPrune});
+                                         check::kRegions, check::kIdentity, check::kTarget, check::kCopy,
+                                         check::kVerify, check::kRename, check::kPointer, check::kPrune});
         const fs::path source = request.gameDir.empty() ? fs::path() : TerrainReleasesRoot(request.gameDir);
         const fs::path out = request.outDir.empty() ? fs::path() : TerrainReleasesRoot(request.outDir);
         report.publish = TerrainPublishSummary{out};

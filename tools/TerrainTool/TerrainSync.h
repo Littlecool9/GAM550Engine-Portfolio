@@ -37,7 +37,7 @@ namespace mir::terrainbake
         std::optional<TerrainPublishFault> fault;
     };
 
-    // Empty when current matches and has runtime source-layer LOD/normal records.
+    // Empty when current matches and has runtime source-layer LOD/normal records and this tool's Regions.
     // Reads the index and stats the packs only.
     std::optional<std::string> TerrainCurrentMismatch(const std::filesystem::path &releasesRoot, AssetId asset,
                                                       TerrainSourceFingerprint fingerprint,

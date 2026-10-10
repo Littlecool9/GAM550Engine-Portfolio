@@ -12,6 +12,7 @@ add_library(terrain_bake STATIC
     TerrainPackage.cpp
     TerrainPublish.cpp
     TerrainRecipe.cpp
+    TerrainRegions.cpp
     TerrainReport.cpp
     TerrainSeams.cpp
     TerrainSync.cpp
@@ -35,6 +36,7 @@ if(BUILD_TESTING)
         tests/TerrainPrecision.tests.cpp
         tests/TerrainPublish.tests.cpp
         tests/TerrainRecipe.tests.cpp
+        tests/TerrainRegions.tests.cpp
         tests/TerrainRenderMesh.tests.cpp
         tests/TerrainSeams.tests.cpp
         tests/TerrainSync.tests.cpp

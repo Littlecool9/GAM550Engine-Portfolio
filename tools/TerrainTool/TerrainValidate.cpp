@@ -8,6 +8,7 @@
  */
 #include "TerrainValidate.h"
 #include "TerrainDerivatives.h"
+#include "TerrainRegions.h"
 
 #include "TerrainCandidate.h"
 #include "TerrainSeams.h"
@@ -150,6 +151,105 @@ namespace mir::terrainbake
                                                          recipe ? (manifest ? " and the recipe" : " the recipe")
                                                                 : ""));
         }
+
+        std::string Describe(TerrainRegionCoord region)
+        {
+            return std::format("Region L{} ({}, {})", region.level, region.x, region.z);
+        }
+
+        // Decodes every Region and rederives the hierarchy from the final sources when they all decoded.
+        void CheckRegions(const TerrainReleaseHandle &handle, const std::vector<std::string> &packNames,
+                          const std::vector<std::unordered_map<TileCoord, TileHeights>> &decoded,
+                          const TerrainValidateOptions &options, TerrainReport &report)
+        {
+            const TerrainIndex &index = handle.Index();
+            report.regions.clear();
+            report.regionGrid.reset();
+            if (!index.regionGrid)
+            {
+                if (options.recipe)
+                    report.Add({std::string(check::kRegions), "regions", {}, std::nullopt,
+                                "a recipe-backed candidate needs this tool's Region hierarchy, and the release has "
+                                "none"});
+                else
+                    report.Skip(check::kRegions, "the release has no Region hierarchy");
+                return;
+            }
+            const TerrainRegionGrid &grid = *index.regionGrid;
+            const TerrainLayout &ref = grid.Reference();
+            report.regionGrid = TerrainRegionGridSummary{
+                grid.RegionTiles(), grid.Cells(), grid.Unit(), grid.Levels(),
+                ref.SamplePosition(grid.EdgeTiles(0) * ref.IntervalsPerTile())};
+
+            size_t readable = 0;
+            for (const TerrainTileRecord &record : index.regions)
+            {
+                const TerrainRegionCoord region{record.level, record.tile.x, record.tile.z};
+                const std::string &pack = packNames[record.pack];
+                TerrainRegionSummary summary{record.level, record.tile, pack, grid.MapTiles(region),
+                                             record.validExtent, record.minHeight, record.maxHeight,
+                                             record.sampleSpacing, record.vertexCount, record.indexCount / 3,
+                                             record.length, record.maxDeviation.value_or(0.0), false};
+                if (!handle.Source().Size(pack))
+                    report.Add({std::string(check::kRegions), pack, {}, std::nullopt,
+                                std::format("{} is missing: its pack {} does not exist", Describe(region), pack)});
+                else if (const TerrainResult<TerrainRegionMesh> mesh = handle.ReadRegion(region))
+                {
+                    summary.readable = true;
+                    ++readable;
+                }
+                else
+                    report.Add({std::string(check::kRegions), "region", {}, std::nullopt, mesh.error.message});
+                report.regions.push_back(std::move(summary));
+            }
+
+            TerrainRecipe derivedRecipe{.layout = index.layout};
+            derivedRecipe.defaultSpacing = index.layout.SampleSpacing();
+            std::vector<TileHeights> sources;
+            for (const TerrainTileRecord &r : index.tiles)
+                if (r.source)
+                {
+                    derivedRecipe.sourceRules.push_back({r.tile, r.sampleSpacing});
+                    const auto it = decoded[r.layer].find(r.tile);
+                    if (it == decoded[r.layer].end())
+                    {
+                        report.Skip(check::kRegions, std::format("{} of {} Regions decode; not rederived because "
+                                                                 "tile {} did not decode", readable,
+                                                                 index.regions.size(), Tile(r.tile)));
+                        return;
+                    }
+                    sources.push_back(it->second);
+                }
+            std::string why;
+            const std::optional<TerrainRegionBake> expected =
+                BakeTerrainRegions(derivedRecipe, sources, {grid.RegionTiles(), grid.Cells()}, why);
+            if (!expected)
+            {
+                report.Add({std::string(check::kRegions), "derived", {}, std::nullopt, why});
+                return;
+            }
+            if (!expected->writes.grid->SameGrid(grid))
+            {
+                report.Add({std::string(check::kRegions), "derived", {}, std::nullopt,
+                            std::format("the Region grid unit is {}; the final sources give {}", grid.Unit(),
+                                        expected->writes.grid->Unit())});
+                return;
+            }
+            double worst = 0.0;
+            for (size_t i = 0; i < expected->writes.payloads.size(); ++i)
+            {
+                const TerrainTileRecord &actual = index.regions[i];
+                const TerrainResult<std::vector<std::byte>> bytes = handle.ReadPayload(actual);
+                if (!bytes || *bytes.value != expected->writes.payloads[i].bytes)
+                    report.Add({std::string(check::kRegions), "derived", {}, std::nullopt,
+                                std::format("{} mesh, normals or error differ from the final-source derivation",
+                                            Describe(grid.AtOrdinal(i)))});
+                worst = std::max(worst, expected->meshes[i].maxDeviation);
+            }
+            report.Ran(check::kRegions,
+                       std::format("{} Regions in {} levels decode and match the final-source derivation; largest "
+                                   "error {} m", readable, grid.Levels(), worst));
+        }
     }
 
     void ValidateTerrainCandidate(const std::filesystem::path &dir, const TerrainValidateOptions &options,
@@ -166,7 +266,7 @@ namespace mir::terrainbake
                         std::format("{} is not a directory", PathUtf8(dir))});
             SkipAll(report,
                     {check::kFormat, check::kIndex, check::kPacks, check::kCoverage, check::kPayloads,
-                     check::kFinite, check::kEdges, check::kCorners, check::kIdentity},
+                     check::kFinite, check::kEdges, check::kCorners, check::kRegions, check::kIdentity},
                     "no candidate directory");
             return;
         }
@@ -205,7 +305,7 @@ namespace mir::terrainbake
                         std::string(kTerrainIndexFileName), {}, std::nullopt, opened.error.message});
             SkipAll(report,
                     {check::kFormat, check::kIndex, check::kPacks, check::kCoverage, check::kPayloads,
-                     check::kFinite, check::kEdges, check::kCorners, check::kIdentity},
+                     check::kFinite, check::kEdges, check::kCorners, check::kRegions, check::kIdentity},
                     "the release index did not open");
             report.Ran(kCandidate, manifest ? "candidate.json read" : "no candidate.json");
             return;
@@ -391,6 +491,8 @@ namespace mir::terrainbake
             }
         }
 
+        CheckRegions(handle, packNames, decoded, options, report);
+
         bool mixed = false;
         for (const auto &record : index.tiles)
             if (record.source)
@@ -469,7 +571,8 @@ namespace mir::terrainbake
     {
         TerrainReport report("validate", {check::kArguments, check::kRecipe, check::kCandidate, check::kFormat,
                                           check::kIndex, check::kPacks, check::kCoverage, check::kPayloads,
-                                          check::kFinite, check::kEdges, check::kCorners, check::kIdentity});
+                                          check::kFinite, check::kEdges, check::kCorners, check::kRegions,
+                                          check::kIdentity});
         report.candidateDir = request.candidateDir;
         report.recipePath = request.recipePath;
         if (request.candidateDir.empty())

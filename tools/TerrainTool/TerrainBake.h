@@ -10,6 +10,7 @@
 
 #include "TerrainCandidate.h"
 #include "TerrainRecipe.h"
+#include "TerrainRegions.h"
 #include "TerrainReport.h"
 
 #include <assets/AssetId.h>
@@ -33,6 +34,7 @@ namespace mir::terrainbake
         // Fixed for reproducible release ids; unset mints one.
         std::optional<uint64_t> nonce;
         TerrainPackWriteOptions pack;
+        TerrainRegionSettings regions;
     };
 
     struct TerrainBakedRelease

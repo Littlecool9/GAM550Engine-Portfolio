@@ -28,8 +28,8 @@ namespace mir::terrainbake
         constexpr std::initializer_list<std::string_view> kAfterCurrent{
             check::kGenerate, check::kEncode,   check::kWrite,  check::kCandidate, check::kFormat,
             check::kIndex,    check::kPacks,    check::kCoverage, check::kPayloads, check::kFinite,
-            check::kEdges,    check::kCorners,  check::kIdentity, check::kTarget,  check::kCopy,
-            check::kVerify,   check::kRename,   check::kPointer};
+            check::kEdges,    check::kCorners,  check::kRegions,  check::kIdentity, check::kTarget,
+            check::kCopy,     check::kVerify,   check::kRename,   check::kPointer};
 
         void Fail(TerrainReport &report, std::string_view check, std::string field, std::string message)
         {
@@ -124,6 +124,11 @@ namespace mir::terrainbake
                  !index.Find(source.tile, source.layer, TerrainPayloadKind::Normal, 0)))
                 return std::format("current release {}: tile ({}, {}) has no source-layer LOD/normal derivatives",
                                    id, source.tile.x, source.tile.z);
+        const TerrainRegionSettings regions;
+        if (!index.regionGrid || index.regionGrid->RegionTiles() != regions.regionTiles ||
+            index.regionGrid->Cells() != regions.cells)
+            return std::format("current release {} has no Region hierarchy of {} tiles and {} cells", id,
+                               regions.regionTiles, regions.cells);
         for (const TerrainPackRecord &pack : index.packs)
         {
             const std::string name = TerrainPackFileName(pack.chunk);
@@ -141,8 +146,8 @@ namespace mir::terrainbake
                                       check::kGenerate, check::kEncode, check::kWrite, check::kCandidate,
                                       check::kFormat, check::kIndex, check::kPacks, check::kCoverage,
                                       check::kPayloads, check::kFinite, check::kEdges, check::kCorners,
-                                      check::kIdentity, check::kTarget, check::kCopy, check::kVerify,
-                                      check::kRename, check::kPointer});
+                                      check::kRegions, check::kIdentity, check::kTarget, check::kCopy,
+                                      check::kVerify, check::kRename, check::kPointer});
         report.recipePath = request.recipePath;
         report.candidateDir = request.candidateDir;
         const fs::path releases = request.gameDir.empty() ? fs::path() : TerrainReleasesRoot(request.gameDir);

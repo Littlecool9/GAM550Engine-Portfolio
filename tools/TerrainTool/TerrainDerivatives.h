@@ -1,5 +1,6 @@
 #pragma once
 #include "TerrainRecipe.h"
+#include "TerrainRegions.h"
 #include <terrain/TerrainLod.h>
 #include <terrain/TerrainPackWriter.h>
 #include <optional>
@@ -14,7 +15,9 @@ namespace mir::terrainbake
         std::vector<uint32_t> queryLayers;
         std::vector<double> queryErrors;
         std::vector<TerrainPayloadWrite> payloads;
+        // Baked only when settings are given.
+        std::optional<TerrainRegionBake> regions;
     };
     std::optional<TerrainDerivatives> BakeTerrainDerivatives(const TerrainRecipe &recipe,
-        std::span<const TileHeights> finalHeights, std::string &error);
+        std::span<const TileHeights> finalHeights, std::string &error, const TerrainRegionSettings *regions = nullptr);
 }
