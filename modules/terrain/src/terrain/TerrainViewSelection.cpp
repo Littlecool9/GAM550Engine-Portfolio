@@ -572,14 +572,15 @@ namespace mir
 
         uint64_t Footprint(const Instance &inst, const TerrainDrawUnit &unit) const
         {
-            const TerrainIndex &index = inst.input.release->Index();
-            const auto bytesOf = [&](const TerrainPayloadKey &key)
+            if (unit.kind == TerrainUnitKind::Tile)
             {
-                const TerrainTileRecord *record = index.Find(key.coord, key.layer, key.kind, key.level);
-                return record ? TerrainPayloadFootprint(*record) : uint64_t(0);
-            };
-            return unit.kind == TerrainUnitKind::Region ? bytesOf(unit.geometry)
-                                                        : bytesOf(unit.geometry) + bytesOf(unit.normals);
+                const TileInfo &info = inst.catalog->tiles.at(unit.geometry.coord);
+                const uint32_t level = unit.geometry.level;
+                return TerrainPayloadFootprint(*info.lods[level]) + TerrainPayloadFootprint(*info.normals[level]);
+            }
+            const TerrainTileRecord *record = inst.input.release->Index().FindRegion(
+                {unit.geometry.level, unit.geometry.coord.x, unit.geometry.coord.z});
+            return record ? TerrainPayloadFootprint(*record) : uint64_t(0);
         }
 
         // Units the finer prefetch bound picks in the node's area.
