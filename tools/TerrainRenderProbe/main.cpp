@@ -1,6 +1,7 @@
 #include "CullProbe.h"
 #include "FrameRegressionProbe.h"
 #include "RasterDepthEnvelope.h"
+#include "RegionProbe.h"
 #include <TerrainBake.h>
 #include <core/fs/FileIO.h>
 #include <core/log/Log.h>
@@ -330,24 +331,35 @@ namespace
 
 int main(int argc,char **argv)
 {
-    bool smoke=false, regressions=false;
+    bool smoke=false, regressions=false, regions=false;
     std::filesystem::path out="terrain-render-evidence";
     for(int i=1;i<argc;++i)
     {
         const std::string arg=argv[i];
         if(arg=="--smoke")smoke=true;
         else if(arg=="--regressions")regressions=true;
+        else if(arg=="--regions")regions=true;
         else if(arg=="--out"&&i+1<argc)out=argv[++i];
-        else {std::cerr<<"usage: TerrainRenderProbe [--smoke] [--regressions] --out directory\n";return 2;}
+        else {std::cerr<<"usage: TerrainRenderProbe [--smoke] [--regressions] [--regions] --out directory\n";return 2;}
     }
     std::filesystem::create_directories(out);
     LogConfig config;config.filePath=(out/"gpu.log").string();InitLog(config);
     try
     {
         EnsureDpiAware();
-        auto window=Window::Create({.mWidth=smoke||regressions?320u:640u,.mHeight=smoke||regressions?180u:360u,.mTitle="Terrain P2 GPU probe",.mResizable=regressions,.mStartHidden=true});
+        auto window=Window::Create({.mWidth=smoke||regressions?320u:regions?1280u:640u,.mHeight=smoke||regressions?180u:regions?720u:360u,.mTitle="Terrain P2 GPU probe",.mResizable=regressions,.mStartHidden=true});
         VulkanRenderer renderer;
         Require(renderer.Initialize({window.get(),"TerrainRenderProbe",true}),"renderer initialization failed");
+        if(regions)
+        {
+            Require(renderer.RayTracingSupported(),"the Region captures include a ray-traced frame");
+            const auto extent=renderer.SwapchainExtent();
+            RunRegionProbe(renderer,*window,out/"regions",extent.width,extent.height);
+            renderer.Shutdown();
+            for(const auto &entry:LogHistory::Snapshot())
+                Require(entry.level<LogLevel::Error,"renderer logged an error: "+entry.message);
+            ShutdownLog();return 0;
+        }
         if(regressions)
         {
             RunFrameRegressionProbe(renderer,*window,out);
