@@ -13,7 +13,7 @@ A scene is a directory, not a file.
 scenes/<scene>/
   scene.json              manifest: ordered StableId array, mNextId, scene settings
   entities/
-    <id>.json             one entity: {id, name, parent, components[]}
+    <id>.json             one entity: {id, name, parent, siblingIndex, components[]}
 ```
 
 Splitting by entity keeps a diff proportional to what changed. Adding or removing
@@ -33,6 +33,13 @@ entity in the file exists. First spawn every entity and write every
 non-`EntityRef` field, building the `StableId` to `Entity` map. Then resolve every
 `parent` through that map via `SetParent`. Then patch the recorded `EntityRef`
 fields.
+
+Sibling order comes back through the order of the first two passes. Creating an
+entity appends it to the root list, and `SetParent` appends a child to its
+parent. Both passes run in the order of `(siblingIndex, id)`, so one sort
+restores the order of the roots and of every parent's children.
+`SpawnEntities` installs the hierarchy before it creates anything, so a scene of
+only roots still gets a root list.
 
 `PlaySnapshot` is `SaveScene`/`LoadScene` reused for a second purpose: a
 whole-World capture and restore around a Play session, rather than an
@@ -54,8 +61,8 @@ The result is a JSON array in the entity-file format, kept in memory as compact
 text. Text keeps nlohmann out of the public header, and a prefab can write it to
 disk unchanged.
 
-`RestoreEntity` runs the same three passes into fresh entities. Replaying
-`SetParent` in capture order reproduces each parent's sibling order. Every
+`RestoreEntity` runs the same three passes into fresh entities, so each
+captured parent's children come back in their sibling order. Every
 restored entity is registered in the caller's `LoadedScene` under a new
 `StableId`, so it saves like any other. The root's own parent is not captured.
 The caller passes one, and the root is appended as that parent's last child.
@@ -84,8 +91,8 @@ hook takes the descendants with it. It returns `false` for an entity that is not
 alive.
 
 `DuplicateSceneEntity` is `CaptureEntity` followed by `RestoreEntity` under the
-source's own parent. The copy is appended as that parent's last child, not placed
-next to the source. It returns null for an entity that is not alive.
+source's own parent. The copy then moves to right after the source, as Unity's
+Ctrl+D places it. It returns null for an entity that is not alive.
 
 ## Rules
 
@@ -108,6 +115,15 @@ with no real change.
 
 Sorted order also means a new entity, which always has a higher id, appends to
 the array instead of reordering it.
+
+**`siblingIndex` counts only the siblings being saved.** An entity outside the
+save, such as an editor-only root, leaves no gap and does not shift the numbers.
+Load sorts by `siblingIndex` and then by id. A missing index sorts after every
+present one, so a scene saved before the field existed loads in id order, and a
+duplicate index left by a merge falls back to id order too.
+
+Load passes `keepWorld = false` to `SetParent`, because a saved `Transform` is
+already parent-local.
 
 **An unknown component name on load is skipped with a warning, not a load
 failure.** That is forward compatibility for a file written by a newer build.
@@ -166,6 +182,9 @@ undo and prefabs are separate work.
 *As of 2026-10-08.* `DestroySceneEntity` backs the editor's Delete, and a save
 after it removes the deleted entities' files.
 
+*As of 2026-10-09.* Root and child order survive save, load and Play/Stop
+through `siblingIndex`, and a duplicate lands right after its source.
+
 Tests in `modules/scene/tests/SceneIO.tests.cpp`,
 `modules/scene/tests/PlaySnapshot.tests.cpp` and
 `modules/scene/tests/EntitySnapshot.tests.cpp`.
@@ -193,11 +212,21 @@ renderer and the script host that this module does not link. Scripts resolve in
    component names ahead of the blobs, so load can call `Find` per name instead
    of sweeping the whole registry per entity.
 4. **Undo of delete needs more than `EntitySnapshot`.** References into the
-   subtree from outside it stay dead after a restore. The sibling position is
-   lost, since `SetParent` only appends. The `StableId` changes, so the scene
-   file shows a delete plus an add.
+   subtree from outside it stay dead after a restore. The restored root is
+   appended as its parent's last child; the snapshot carries `siblingIndex` and
+   `SetParent` takes an anchor, but nothing uses them for the root yet. The
+   `StableId` changes, so the scene file shows a delete plus an add.
 
 ## Changed
+
+*2026-10-09* — **Entity files carry `siblingIndex`, and duplicates land after
+their source.** Was: the manifest was written in id order and load replayed
+`SetParent` in that order, so children came back in id order. Roots came back
+in whatever order the slots fell, and Play then Stop scrambled both, because
+`CaptureWorld` assigns ids in slot order. A duplicate went last among its
+siblings, because `SetParent` could only append. Now: each file records its
+position, load sorts by it, and `DuplicateSceneEntity` anchors the copy after
+the source. The editor's drag reordering needed order to survive.
 
 *2026-10-08* — **`SaveScene` deletes the files of deleted entities, and entity
 files are named `<id>.json`.** Was: save wrote one file per entity still in the

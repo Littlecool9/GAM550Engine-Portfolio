@@ -68,16 +68,6 @@ namespace mir
             return ImGuizmo::TRANSLATE;
         }
 
-        void DecomposeRotationScale(const glm::mat3 &linear, glm::quat &rotation, glm::vec3 &scale)
-        {
-            scale = { glm::length(linear[0]), glm::length(linear[1]), glm::length(linear[2]) };
-
-            const glm::mat3 rotationMatrix(linear[0] / (scale.x != 0.0f ? scale.x : 1.0f),
-                linear[1] / (scale.y != 0.0f ? scale.y : 1.0f),
-                linear[2] / (scale.z != 0.0f ? scale.z : 1.0f));
-            rotation = glm::quat_cast(rotationMatrix);
-        }
-
         // Radius around the entity's origin that holds its scaled mesh box.
         float BoundsRadius(const MeshBounds &bounds, const glm::mat3 &linear)
         {

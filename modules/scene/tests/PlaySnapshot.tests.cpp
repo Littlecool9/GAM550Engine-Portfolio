@@ -21,6 +21,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -141,4 +142,47 @@ TEST_CASE("The snapshot's directory is this process's own, and DiscardSnapshot r
 
     // twice is harmless
     DiscardSnapshot(snapshot);
+}
+
+namespace
+{
+    float MarkerOf(World &world, Entity entity) { return static_cast<float>(world.GetComponent<Transform>(entity)->Position().x); }
+
+    Entity MakeMarked(World &world, LoadedScene &scene, float marker, Entity parent = mir::kNullEntity)
+    {
+        const Entity entity = CreateSceneEntity(world, scene, parent);
+        AddTransform(world, entity, Transform{ glm::vec3(marker, 0.0f, 0.0f) });
+        return entity;
+    }
+}
+
+TEST_CASE("RestoreWorld keeps root and child order", "[scene][order]")
+{
+    mir::RegisterCoreComponents();
+
+    World world;
+    LoadedScene scene = NewScene("test");
+    const Entity a = MakeMarked(world, scene, 1.0f);
+    MakeMarked(world, scene, 2.0f);
+    const Entity c = MakeMarked(world, scene, 3.0f);
+    const Entity x = MakeMarked(world, scene, 4.0f, a);
+    const Entity y = MakeMarked(world, scene, 5.0f, a);
+
+    REQUIRE(mir::SetParent(world, c, mir::kNullEntity, a));
+    REQUIRE(mir::SetParent(world, y, a, x));
+
+    PlaySnapshot snapshot = CaptureWorld(world);
+    RestoreWorld(world, snapshot);
+    DiscardSnapshot(snapshot);
+
+    const mir::HierarchyIndex &index = world.Resource<mir::HierarchyIndex>();
+    std::vector<float> roots;
+    for (const Entity root : index.Roots())
+        roots.push_back(MarkerOf(world, root));
+    REQUIRE(roots == std::vector<float>{ 3.0f, 1.0f, 2.0f });
+
+    std::vector<float> children;
+    for (const Entity child : index.ChildrenOf(index.Roots()[1]))
+        children.push_back(MarkerOf(world, child));
+    CHECK(children == std::vector<float>{ 5.0f, 4.0f });
 }
