@@ -150,7 +150,7 @@ namespace
         return view;
     }
 
-    // Tiles of three LODs and four Region levels; built once per process.
+    // Built once per process.
     const TerrainEncodedRelease &SelectionRelease(const TerrainReleaseInfo &info)
     {
         static const TerrainEncodedRelease encoded = [&info]
