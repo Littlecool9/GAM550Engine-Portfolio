@@ -34,6 +34,12 @@ namespace mir
         // Direct children in insertion order
         std::span<const Entity> ChildrenOf(Entity entity) const;
 
+        // Entities with no parent, in creation order; a reparent to root appends
+        std::span<const Entity> Roots() const;
+
+        // The list entity sits in: its parent's children, or the roots
+        std::span<const Entity> SiblingsOf(Entity entity) const;
+
         // True if `ancestor` is `entity` or any transitive parent of it.
         bool IsAncestorOf(Entity ancestor, Entity entity) const;
 
@@ -43,20 +49,27 @@ namespace mir
         // Levels below `entity`. 0 for a leaf.
         uint32_t HeightOf(Entity entity) const;
 
+        bool CanSetParent(Entity child, Entity parent, Entity before) const;
+
         std::size_t NodeCount() const;
 
     private:
         friend struct detail::HierarchyMutator;
 
-        // Links `child` under `parent`, or roots it when `parent` is null.
-        // False when refused - self-parenting, a cycle, or a kMaxHierarchyDepth => no change
-        bool SetParent(Entity child, Entity parent);
+        // Links `child` under `parent` before sibling `before`, or last when `before` is null.
+        bool SetParent(Entity child, Entity parent, Entity before);
+
+        // False when `entity` is not in the graph
+        bool MoveToLastSibling(Entity entity);
 
         // Detatches `entity` from hierarchy
         // children are removed through hook
         void Remove(Entity entity);
 
         std::vector<Entity> DetachChildren(Entity entity);
+
+        // Appends a newly created entity to the roots
+        void AddRoot(Entity entity);
 
         struct Node
         {
@@ -76,7 +89,15 @@ namespace mir
 
         void Unlink(Entity child, Entity parent);
 
+        void EraseRoot(Entity entity);
+
+        // The children of `parent`, or the roots when `parent` is null
+        std::vector<Entity> &SiblingsUnder(Entity parent);
+        const std::vector<Entity> *FindSiblingsUnder(Entity parent) const;
+
         // Dense, indexed by Entity::mIndex
         std::vector<Node> mNodes;
+
+        std::vector<Entity> mRoots;
     };
 }

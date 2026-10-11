@@ -184,7 +184,14 @@ In an editor build, `ApplyEditorActions` passes the frame's `EntityAction` (see
 `CreateSceneEntity`, then the preset, then `AddMissingBaseline`. Delete runs
 `DestroySceneEntity`, and Duplicate runs `DuplicateSceneEntity` (see
 [scene.md](scene.md)). Each one goes through `Scene()`, so the entity is saved or
-dropped with the scene, and the result becomes the `Selection`. Unlike
+dropped with the scene, and the result becomes the `Selection`.
+
+Reparent checks the whole list with `CanSetParentAll` and does nothing if any
+entity fails. It then moves the list in hierarchy order through `SetParent`,
+which keeps each world pose, and selects what moved. A null `mBefore` under the
+entity's current parent means after the last sibling, so that case runs
+`MoveToLastSibling` (see [core.md](core.md)). Reparent changes no
+`LoadedScene` entry, because save reads each parent from `HierarchyIndex`. Unlike
 `NewScene`/`SaveScene`/`LoadScene`, these run during Play too, and Stop discards
 them with the rest of Play's changes.
 

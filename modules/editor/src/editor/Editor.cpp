@@ -36,15 +36,24 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <system_error>
 #include <utility>
 
 namespace mir
 {
     namespace
     {
+        // ImGui text is UTF-8; path::string() is the ANSI code page on Windows
+        std::string ToUtf8(const std::filesystem::path &path)
+        {
+            const std::u8string text = path.u8string();
+            return std::string(text.begin(), text.end());
+        }
+
         ImGuizmo::OPERATION ToImGuizmoOperation(GizmoOperation operation)
         {
             switch (operation)
@@ -57,16 +66,6 @@ namespace mir
                 return ImGuizmo::SCALE;
             }
             return ImGuizmo::TRANSLATE;
-        }
-
-        void DecomposeRotationScale(const glm::mat3 &linear, glm::quat &rotation, glm::vec3 &scale)
-        {
-            scale = { glm::length(linear[0]), glm::length(linear[1]), glm::length(linear[2]) };
-
-            const glm::mat3 rotationMatrix(linear[0] / (scale.x != 0.0f ? scale.x : 1.0f),
-                linear[1] / (scale.y != 0.0f ? scale.y : 1.0f),
-                linear[2] / (scale.z != 0.0f ? scale.z : 1.0f));
-            rotation = glm::quat_cast(rotationMatrix);
         }
 
         // Radius around the entity's origin that holds its scaled mesh box.
@@ -171,9 +170,94 @@ namespace mir
         EditorTheme::Apply();
         EditorTheme::ScaleForDpi(window.ContentScale());
 
+        mPreferencesPath = EditorPreferencesPath();
+        mPreferences = EditorPreferences::LoadFile(mPreferencesPath);
+        if (!mPreferences.backgroundFile.empty())
+        {
+            std::string error;
+            if (!mBackground.Load(EditorPreferencesDir() / mPreferences.backgroundFile, error))
+                MIR_LOG_WARN("Editor background image '{}': {}", mPreferences.backgroundFile, error);
+        }
+
         mWindow = &window;
         mInitialized = true;
         return true;
+    }
+
+    void Editor::ApplyPreferencesRequest(const PreferencesRequest &request)
+    {
+        bool save = request.mSave;
+        if (request.mPickImage)
+        {
+            if (const std::optional<std::filesystem::path> picked = PickImageFile())
+                save |= SetBackgroundImage(*picked);
+        }
+        if (request.mClearImage)
+        {
+            ClearBackgroundImage();
+            save = true;
+        }
+
+        if (save && !mPreferences.SaveFile(mPreferencesPath))
+            mPreferencesPanel.SetStatus("Save failed - see log.");
+    }
+
+    bool Editor::SetBackgroundImage(const std::filesystem::path &source)
+    {
+        const std::filesystem::path dir = EditorPreferencesDir();
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+
+        std::string extension = source.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const std::string file = "background" + extension;
+        const std::filesystem::path temp = dir / (file + ".tmp");
+
+        std::filesystem::copy_file(source, temp, std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec)
+        {
+            mPreferencesPanel.SetStatus("Cannot copy the image: " + ec.message());
+            return false;
+        }
+
+        std::string error;
+        if (!mBackground.Load(temp, error))
+        {
+            std::filesystem::remove(temp, ec);
+            mPreferencesPanel.SetStatus("Cannot use " + ToUtf8(source.filename()) + ": " + error);
+            return false;
+        }
+
+        if (!mPreferences.backgroundFile.empty() && mPreferences.backgroundFile != file)
+            std::filesystem::remove(dir / mPreferences.backgroundFile, ec);
+        std::filesystem::rename(temp, dir / file, ec);
+        if (ec)
+        {
+            // the stored copy is gone, so the image would not come back next run
+            mPreferencesPanel.SetStatus("Cannot store the image: " + ec.message());
+            mBackground.Clear();
+            std::filesystem::remove(temp, ec);
+            mPreferences.backgroundFile.clear();
+            return true;
+        }
+
+        mPreferences.backgroundFile = file;
+        mPreferences.backgroundEnabled = true;
+        mPreferencesPanel.SetStatus("Using " + ToUtf8(source.filename()) + ".");
+        return true;
+    }
+
+    void Editor::ClearBackgroundImage()
+    {
+        mBackground.Clear();
+        if (!mPreferences.backgroundFile.empty())
+        {
+            std::error_code ec;
+            std::filesystem::remove(EditorPreferencesDir() / mPreferences.backgroundFile, ec);
+            mPreferences.backgroundFile.clear();
+        }
+        mPreferencesPanel.SetStatus("Cleared.");
     }
 
     void Editor::Shutdown()
@@ -766,8 +850,38 @@ namespace mir
 
         if (enableLayout)
         {
+            mBackground.CollectRetired();
+
+            // Panels go translucent so the image shows; the title and menu bars keep the theme.
+            const bool showBackground = mPreferences.backgroundEnabled && mBackground.HasImage();
+            const auto pushPanelAlpha = [&]
+            {
+                if (!showBackground)
+                    return 0;
+                for (const ImGuiCol col : {ImGuiCol_WindowBg, ImGuiCol_ChildBg})
+                {
+                    ImVec4 color = ImGui::GetStyleColorVec4(col);
+                    switch (mPreferences.backgroundPanels)
+                    {
+                    case BackgroundPanels::Theme:
+                        color.w *= 1.0f - mPreferences.backgroundStrength;
+                        break;
+                    case BackgroundPanels::Black:
+                        color = ImVec4(0.0f, 0.0f, 0.0f, 1.0f - mPreferences.backgroundStrength);
+                        break;
+                    case BackgroundPanels::Transparent:
+                        color.w = 0.0f;
+                        break;
+                    }
+                    ImGui::PushStyleColor(col, color);
+                }
+                return 2;
+            };
+
             if (mWindow->HasCustomTitleBar())
                 DrawTitleBar();
+
+            int pushedColors = pushPanelAlpha();
 
             const ImGuiID dockspaceId =
                 ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
@@ -810,12 +924,24 @@ namespace mir
                             static_cast<uint32_t>(std::max(centralNode->Size.y, 0.0f)) } };
             }
 
+            // the dock area below the bars, minus the scene viewport
+            if (const ImGuiDockNode *rootNode = ImGui::DockBuilderGetNode(dockspaceId);
+                showBackground && rootNode != nullptr)
+            {
+                const glm::vec2 sceneMin(mSceneViewportRect.offset.x, mSceneViewportRect.offset.y);
+                const glm::vec2 sceneSize(mSceneViewportRect.extent.width, mSceneViewportRect.extent.height);
+                const glm::vec2 areaMin = rootNode->Pos;
+                mBackground.Draw(mPreferences.backgroundFit, areaMin, areaMin + glm::vec2(rootNode->Size), sceneMin,
+                    sceneMin + sceneSize);
+            }
+
             UpdateViewportPicking(mode, world);
             FocusSelection(mode, world);
             DrawSelectionHighlights(mode, world);
             DrawComponentGizmos(mode, world);
             DrawViewportGizmo(mode, world);
 
+            ImGui::PopStyleColor(pushedColors);
             if (ImGui::BeginMainMenuBar())
             {
                 if (ImGui::BeginMenu("File"))
@@ -842,6 +968,8 @@ namespace mir
                     ImGui::MenuItem("Input Settings", nullptr, &mShowInputSettings);
                     ImGui::MenuItem("Asset Import", nullptr, &mShowAssetImport);
                     ImGui::MenuItem("Content Browser", nullptr, &mShowContentBrowser);
+                    ImGui::Separator();
+                    ImGui::MenuItem("Preferences", nullptr, &mShowPreferences);
                     ImGui::EndMenu();
                 }
                 if (ImGui::BeginMenu("Debug"))
@@ -855,6 +983,7 @@ namespace mir
 
                 ImGui::EndMainMenuBar();
             }
+            pushedColors = pushPanelAlpha();
 
             DrawOpenProjectConfirm(actions);
             DrawNewProjectModal(actions, projects);
@@ -885,6 +1014,13 @@ namespace mir
             else
             {
                 mProjectSettingsPanel.OnHidden();
+            }
+
+            if (mShowPreferences)
+            {
+                if (ImGui::Begin("Preferences", &mShowPreferences))
+                    ApplyPreferencesRequest(mPreferencesPanel.Draw(mPreferences, mBackground.HasImage()));
+                ImGui::End();
             }
 
             if (mShowInputSettings)
@@ -926,6 +1062,8 @@ namespace mir
                     actions.mContentBrowser = mContentBrowserPanel.Draw(contentBrowser);
                 ImGui::End();
             }
+
+            ImGui::PopStyleColor(pushedColors);
         }
         else
         {

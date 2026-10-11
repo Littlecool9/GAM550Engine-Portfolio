@@ -30,6 +30,8 @@
 #include <input/InputMap.h>
 #include <input/InputState.h>
 #include <input/InputSystem.h>
+#include <physics/CollisionEventSystem.h>
+#include <physics/CollisionEvents.h>
 #include <physics/ComponentRegistration.h>
 #include <physics/PhysicsSystem.h>
 #include <physics/PhysicsWorld.h>
@@ -202,6 +204,7 @@ namespace mir
 
         // physcis world - currently Jolt
         mWorld.EmplaceResource<PhysicsWorld>();
+        mWorld.EmplaceResource<CollisionEvents>();
 
         mScheduler.AddSystem<InputSystem>(SystemPhase::PreUpdate, *mWindow);
 
@@ -221,6 +224,8 @@ namespace mir
         // after TransformPropagateSystem: it reads the WorldTransform that system writes
         mScheduler.AddSystem<AudioEmitterSystem>(SystemPhase::PostUpdate);
         mScheduler.AddSystem<AudioListenerSystem>(SystemPhase::PostUpdate);
+
+        mScheduler.AddSystem<CollisionEventSystem>(SystemPhase::PostUpdate);
 
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
@@ -714,6 +719,26 @@ namespace mir
             if (const Entity copy = DuplicateSceneEntity(mWorld, mScene, action.mTarget); !copy.IsNull())
                 selection.mSelected = { copy };
             break;
+        case EntityActionKind::Reparent:
+            {
+                // one invalid entity refuses the whole drop
+                if (!CanSetParentAll(mWorld, action.mTargets, action.mParent, action.mBefore))
+                    return;
+
+                const std::vector<Entity> moved = TopmostInHierarchyOrder(mWorld, action.mTargets);
+
+                for (const Entity entity : moved)
+                {
+                    if (action.mBefore.IsNull() && ParentOf(mWorld, entity) == action.mParent)
+                        MoveToLastSibling(mWorld, entity);
+                    else
+                        SetParent(mWorld, entity, action.mParent, action.mBefore);
+                }
+
+                if (!moved.empty())
+                    selection.mSelected = moved;
+                break;
+            }
         case EntityActionKind::None:
             break;
         }

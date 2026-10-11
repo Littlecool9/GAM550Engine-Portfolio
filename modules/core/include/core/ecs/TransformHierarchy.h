@@ -27,20 +27,30 @@ namespace mir
 
     // Adds Transform and its WorldTransform cache
     Transform &AddTransform(World &world,
-                            Entity entity,
-                            const Transform &transform = Transform{},
-                            Entity parent = kNullEntity);
+        Entity entity,
+        const Transform &transform = Transform{},
+        Entity parent = kNullEntity);
 
-    // child local transform is left untouched
-    bool SetParent(World &world, Entity child, Entity parent);
+    // Inserts child before sibling before, or last when null
+    bool SetParent(World &world, Entity child, Entity parent, Entity before = kNullEntity, bool keepWorld = true);
 
-    // Parent of `entity`, or null. Reads the graph without creating it.
+    bool MoveToLastSibling(World &world, Entity entity);
+
+    bool CanSetParent(const World &world, Entity child, Entity parent, Entity before = kNullEntity);
+
+    // entities in hierarchy order (roots first, depth-first), minus any whose ancestor is also listed
+    std::vector<Entity> TopmostInHierarchyOrder(const World &world, std::span<const Entity> entities);
+
+    // Check CanSetParent for every topmost entity
+    bool CanSetParentAll(const World &world, std::span<const Entity> entities, Entity parent, Entity before);
+
+    // Parent of entity, or null. Reads the graph without creating it.
     Entity ParentOf(const World &world, Entity entity);
 
-    // True if `ancestor` is `entity` or any transitive parent of it.
+    // True if ancestor is entity or any transitive parent of it.
     bool IsAncestorOf(const World &world, Entity ancestor, Entity entity);
 
-    // Installs the HierarchyIndex resource and the destroy hook
+    // Installs the HierarchyIndex resource and its create and destroy hooks
     HierarchyIndex &InstallHierarchy(World &world);
 
     // Calls `fn(Entity)` for each direct child of `parent`, in insertion order.

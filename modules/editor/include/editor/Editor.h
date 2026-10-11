@@ -11,13 +11,16 @@
 
 #include <core/ecs/EngineMode.h>
 #include <core/platform/Surface.h>
+#include <editor/BackgroundImage.h>
 #include <editor/EditorCamera.h>
+#include <editor/EditorPreferences.h>
 #include <editor/panels/AssetImportPanel.h>
 #include <editor/panels/ContentBrowserPanel.h>
 #include <editor/panels/HierarchyPanel.h>
 #include <editor/panels/InputSettingsPanel.h>
 #include <editor/panels/InspectorPanel.h>
 #include <editor/panels/LogPanel.h>
+#include <editor/panels/PreferencesPanel.h>
 #include <editor/panels/ProfilerPanel.h>
 #include <editor/panels/ProjectSettingsPanel.h>
 #include <imguiruntime/ImGuiRuntime.h>
@@ -126,12 +129,18 @@ namespace mir
 
         SceneMenuAction DrawPlayControls(const EngineModeState &mode);
 
+        void ApplyPreferencesRequest(const PreferencesRequest &request);
+        // copies @p source into EditorPreferencesDir() and shows it; false keeps the current image
+        bool SetBackgroundImage(const std::filesystem::path &source);
+        void ClearBackgroundImage();
+
         bool mInitialized = false;
         bool mShowStyleEditor = false;
         bool mShowProjectSettings = false;
         bool mShowInputSettings = false;
         bool mShowAssetImport = false;
         bool mShowContentBrowser = false;
+        bool mShowPreferences = false;
         bool mShowProfiler = false;
         std::string mImGuiIniPath;
         std::filesystem::path mProjectSettingsPath;
@@ -144,9 +153,14 @@ namespace mir
         ContentBrowserPanel mContentBrowserPanel;
         InspectorPanel mInspectorPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
+        PreferencesPanel mPreferencesPanel;
         InputSettingsPanel mInputSettingsPanel;
         ProfilerPanel mProfilerPanel;
         EditorCamera mCamera;
+
+        std::filesystem::path mPreferencesPath;
+        EditorPreferences mPreferences;
+        BackgroundImage mBackground;
 
         // waiting on the confirm dialog
         ProjectMenuEntry mPendingProject;

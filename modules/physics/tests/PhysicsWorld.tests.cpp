@@ -221,6 +221,43 @@ TEST_CASE("A bad handle has no position instead of crashing", "[physics]")
     REQUIRE_FALSE(world.BodyPosition(destroyed));
 }
 
+TEST_CASE("A body carries the entity it was tagged with", "[physics]")
+{
+    mir::PhysicsWorld world;
+
+    const mir::BodyHandle floor = AddFloor(world);
+    const mir::BodyHandle sphere = world.CreateDynamicSphere(At(0.0, 3.0, 0.0), 0.5f);
+    CHECK(world.BodyEntity(floor) == mir::kNullEntity);
+
+    // Entity{0, 0} packs to Jolt's default user data.
+    world.SetBodyEntity(floor, mir::Entity{ 0, 0 });
+    CHECK(world.BodyEntity(floor) == mir::Entity{ 0, 0 });
+
+    const mir::Entity high{ 0xFFFFFFFEu, 0xFFFFFFFFu };
+    world.SetBodyEntity(sphere, high);
+    CHECK(world.BodyEntity(sphere) == high);
+    CHECK(world.BodyEntity(floor) == mir::Entity{ 0, 0 });
+
+    const std::optional<mir::RayHit> hit = world.RayCast(At(0.0, 5.0, 0.0), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+    REQUIRE(hit);
+    CHECK(world.BodyEntity(hit->mBody) == high);
+
+    world.SetBodyEntity(floor, mir::kNullEntity);
+    CHECK(world.BodyEntity(floor) == mir::kNullEntity);
+
+    world.SetBodyEntity(mir::BodyHandle{}, high);
+    CHECK(world.BodyEntity(mir::BodyHandle{}) == mir::kNullEntity);
+
+    world.DestroyBody(sphere);
+    CHECK(world.BodyEntity(sphere) == mir::kNullEntity);
+    world.SetBodyEntity(sphere, high);
+    CHECK(world.BodyEntity(sphere) == mir::kNullEntity);
+
+    // A new body in the destroyed one's slot starts untagged.
+    const mir::BodyHandle reused = world.CreateDynamicSphere(At(0.0, 3.0, 0.0), 0.5f);
+    CHECK(world.BodyEntity(reused) == mir::kNullEntity);
+}
+
 TEST_CASE("Degenerate shapes are rejected, not asserted on", "[physics]")
 {
     mir::PhysicsWorld world;

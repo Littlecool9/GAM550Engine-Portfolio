@@ -29,8 +29,11 @@
 
 #include <cmath>
 #include <cstdint>
+#include <format>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -398,4 +401,284 @@ TEST_CASE("the physics bindings are inert on an entity with no RigidBody", "[scr
     CHECK(ReadProbeField<bool>(fixture.world, fixture.entity, "ok"));
     CHECK(ReadProbeField<glm::vec3>(fixture.world, fixture.entity, "linear") == glm::vec3(0.0f));
     CHECK(ReadProbeField<glm::vec3>(fixture.world, fixture.entity, "angular") == glm::vec3(0.0f));
+}
+
+namespace
+{
+    constexpr uint32_t kFieldSide = 33;
+    constexpr double kFieldSpacing = 4.0;
+    constexpr double kPlaneX = -0.08, kPlaneZ = -0.03;
+    double Plane(double x, double z) { return 50.0 + kPlaneX * x + kPlaneZ * z; }
+    // Jolt's height quantization plus the float hit fraction.
+    constexpr double kFieldTolerance = 0.0025;
+
+    const glm::dvec3 kFar{150000.5, -20.0, -75000.25};
+
+    const mir::ComponentOps &RaycastProbeOps()
+    {
+        static const mir::RuntimeFieldDecl fields[] = {
+            {"ran", mir::FieldKind::Bool},         {"hit", mir::FieldKind::Bool},
+            {"bare", mir::FieldKind::Bool},        {"point", mir::FieldKind::WorldPosition},
+            {"normal", mir::FieldKind::Vec3},      {"distance", mir::FieldKind::Float},
+            {"hasEntity", mir::FieldKind::Bool},   {"entity", mir::FieldKind::EntityRef},
+        };
+        return mir::ComponentRegistry::Instance().RegisterRuntime("RaycastProbe", fields);
+    }
+
+    // A std::format string: {} takes the raycast arguments, {{}} is a Lua table.
+    constexpr std::string_view kRaycastScript = R"LUA(
+local T = {{}}
+
+function T.NewInstanceData()
+    return {{}}
+end
+
+function T.OnStart(self, world, entity)
+    local r = world:raycast({})
+    world:set(entity, "RaycastProbe", "hit", r.hit)
+    world:set(entity, "RaycastProbe", "bare", r.point == nil and r.normal == nil and r.distance == nil
+        and r.entity == nil)
+    if r.hit then
+        world:set(entity, "RaycastProbe", "point", r.point)
+        world:set(entity, "RaycastProbe", "normal", r.normal)
+        world:set(entity, "RaycastProbe", "distance", r.distance)
+    end
+    world:set(entity, "RaycastProbe", "hasEntity", r.entity ~= nil)
+    if r.entity ~= nil then
+        world:set(entity, "RaycastProbe", "entity", r.entity)
+    end
+    world:set(entity, "RaycastProbe", "ran", true)
+end
+
+return T
+)LUA";
+
+    struct RaycastResult
+    {
+        bool hit = false;
+        bool bare = false;
+        mir::WorldVec3 point{};
+        glm::vec3 normal{};
+        float distance = 0.0f;
+        bool hasEntity = false;
+        mir::Entity entity{};
+    };
+
+    std::string Table(const glm::dvec3 &v) { return std::format("{{ x = {}, y = {}, z = {} }}", v.x, v.y, v.z); }
+
+    struct RaycastFixture
+    {
+        mir::World world;
+        mir::CommandBuffer commands;
+        mir::SystemScheduler scheduler;
+        mir::SystemContext context{ world, commands, kStep, 0.0, 0 };
+        mir::ScriptHost host;
+        std::vector<float> samples;
+        int casts = 0;
+
+        RaycastFixture()
+        {
+            // No gravity, so a dynamic body stays where the ray expects it.
+            world.EmplaceResource<mir::PhysicsWorld>(mir::PhysicsWorldDesc{ .mGravity = glm::vec3(0.0f) });
+            world.EmplaceResource<mir::EngineModeState>();
+            mir::SetEngineMode(world, mir::EngineMode::Play);
+            mir::SetPlayState(world, mir::PlayState::Running);
+
+            scheduler.AddSystem<mir::PhysicsSystem>(mir::SystemPhase::FixedUpdate);
+            scheduler.Start(context);
+
+            for (uint32_t k = 0; k < kFieldSide; ++k)
+                for (uint32_t i = 0; i < kFieldSide; ++i)
+                    samples.push_back(static_cast<float>(Plane(i * kFieldSpacing, k * kFieldSpacing)));
+        }
+
+        ~RaycastFixture()
+        {
+            if (scheduler.Started())
+                scheduler.Stop(context);
+        }
+
+        mir::PhysicsWorld &Physics() { return world.Resource<mir::PhysicsWorld>(); }
+
+        mir::BodyHandle AddField(const glm::dvec3 &origin, mir::Entity tag)
+        {
+            const std::optional<mir::WorldPosition> at = mir::WorldPosition::FromDoubleMeters(origin);
+            REQUIRE(at);
+            mir::HeightFieldDesc desc;
+            desc.mSamples = samples;
+            desc.mCountX = kFieldSide;
+            desc.mCountZ = kFieldSide;
+            desc.mSpacing = static_cast<float>(kFieldSpacing);
+            desc.mOrigin = *at;
+            const mir::BodyHandle body = Physics().CreateStaticHeightField(desc);
+            REQUIRE(body.IsValid());
+            Physics().SetBodyEntity(body, tag);
+            return body;
+        }
+
+        RaycastResult Cast(std::string_view args)
+        {
+            const mir::Entity probe = world.CreateEntity();
+            RaycastProbeOps().AddDefault(world, probe);
+
+            const std::string name = std::format("raycast_probe_{}", casts++);
+            REQUIRE(host.LoadScriptSource(name, std::vformat(kRaycastScript, std::make_format_args(args))));
+            const int32_t instance = host.CreateInstance(name);
+            REQUIRE(instance != -1);
+            host.CallOnStart(world, commands, probe, instance);
+            commands.Flush(world);
+            host.DestroyInstance(instance);
+
+            const mir::ComponentOps &ops = RaycastProbeOps();
+            const void *component = ops.GetComponent(world, probe);
+            const auto read = [&](std::string_view field, void *out) { ops.FindField(field)->Read(component, out); };
+            bool ran = false;
+            read("ran", &ran);
+            REQUIRE(ran);
+
+            RaycastResult result;
+            read("hit", &result.hit);
+            read("bare", &result.bare);
+            read("point", &result.point);
+            read("normal", &result.normal);
+            read("distance", &result.distance);
+            read("hasEntity", &result.hasEntity);
+            read("entity", &result.entity);
+            return result;
+        }
+    };
+
+    void CheckFieldHit(const RaycastResult &hit, const glm::dvec3 &fieldOrigin, double x, double z, double above)
+    {
+        REQUIRE(hit.hit);
+        const double height = Plane(x, z);
+        const glm::dvec3 point(hit.point);
+        // Straight down, so x and z come back bit for bit.
+        CHECK(point.x == fieldOrigin.x + x);
+        CHECK(point.z == fieldOrigin.z + z);
+        CHECK(std::abs(point.y - (fieldOrigin.y + height)) <= kFieldTolerance);
+        CHECK(std::abs(hit.distance - (above - height)) <= kFieldTolerance);
+        const glm::vec3 up = glm::normalize(glm::vec3(static_cast<float>(-kPlaneX), 1.0f, static_cast<float>(-kPlaneZ)));
+        CHECK(glm::length(hit.normal - up) <= 1.0e-3f);
+    }
+}
+
+TEST_CASE("world:raycast hits a terrain height field and names its entity", "[script][physics]")
+{
+    RaycastFixture fixture;
+    const mir::Entity terrain = fixture.world.CreateEntity();
+    fixture.AddField(glm::dvec3(0.0), terrain);
+
+    const RaycastResult hit = fixture.Cast(Table({37.5, 100.0, 61.25}) + ", { x = 0, y = -3, z = 0 }");
+    CheckFieldHit(hit, glm::dvec3(0.0), 37.5, 61.25, 100.0);
+    CHECK(hit.hasEntity);
+    CHECK(hit.entity == terrain);
+}
+
+TEST_CASE("world:raycast far from the origin is as precise as at the origin","[script][physics][lwc]")
+{
+    if (!mir::kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
+    RaycastFixture fixture;
+    const mir::Entity terrain = fixture.world.CreateEntity();
+    fixture.AddField(kFar, terrain);
+
+    const RaycastResult hit = fixture.Cast(Table(kFar + glm::dvec3(37.5, 100.0, 61.25)) + ", { x = 0, y = -1, z = 0 }");
+    CheckFieldHit(hit, kFar, 37.5, 61.25, 100.0);
+    CHECK(hit.entity == terrain);
+}
+
+TEST_CASE("world:raycast hits a dynamic RigidBody and names its entity", "[script][physics]")
+{
+    RaycastFixture fixture;
+    const mir::Entity box = fixture.world.CreateEntity();
+    mir::AddTransform(fixture.world, box, mir::Transform{ mir::WorldVec3(2.0, 5.0, -1.0) });
+    fixture.world.AddComponent<mir::RigidBody>(box, kDynamicBox);
+    fixture.scheduler.Update(fixture.context, 1, kStep);
+
+    const RaycastResult hit = fixture.Cast("{ x = 2, y = 10, z = -1 }, { x = 0, y = -1, z = 0 }, 20");
+    REQUIRE(hit.hit);
+    CHECK(std::abs(glm::dvec3(hit.point).y - 5.5) <= 1.0e-4);
+    CHECK(std::abs(hit.distance - 4.5f) <= 1.0e-4f);
+    CHECK(glm::length(hit.normal - glm::vec3(0.0f, 1.0f, 0.0f)) <= 1.0e-4f);
+    CHECK(hit.hasEntity);
+    CHECK(hit.entity == box);
+
+    const RaycastResult inside = fixture.Cast("{ x = 2, y = 5, z = -1 }, { x = 0, y = -1, z = 0 }");
+    REQUIRE(inside.hit);
+    CHECK(inside.distance == 0.0f);
+    CHECK(inside.entity == box);
+}
+
+TEST_CASE("world:raycast reports a clean miss", "[script][physics]")
+{
+    RaycastFixture fixture;
+    const RaycastResult empty = fixture.Cast("{ x = 0, y = 10, z = 0 }, { x = 0, y = -1, z = 0 }");
+    CHECK_FALSE(empty.hit);
+    CHECK(empty.bare);
+
+    fixture.AddField(glm::dvec3(0.0), fixture.world.CreateEntity());
+    const RaycastResult away = fixture.Cast("{ x = 10, y = 100, z = 10 }, { x = 0, y = 1, z = 0 }");
+    CHECK_FALSE(away.hit);
+    CHECK(away.bare);
+    const RaycastResult beside = fixture.Cast("{ x = -10, y = 100, z = 10 }, { x = 0, y = -1, z = 0 }");
+    CHECK_FALSE(beside.hit);
+}
+
+TEST_CASE("world:raycast stops at maxDistance or its default", "[script][physics]")
+{
+    RaycastFixture fixture;
+    fixture.AddField(glm::dvec3(0.0), fixture.world.CreateEntity());
+
+    CHECK_FALSE(fixture.Cast("{ x = 37.5, y = 100, z = 61.25 }, { x = 0, y = -1, z = 0 }, 10").hit);
+    CheckFieldHit(fixture.Cast("{ x = 37.5, y = 100, z = 61.25 }, { x = 0, y = -1, z = 0 }"), glm::dvec3(0.0), 37.5,
+                  61.25, 100.0);
+    CheckFieldHit(fixture.Cast("{ x = 37.5, y = 100, z = 61.25 }, { x = 0, y = -1, z = 0 }, nil"), glm::dvec3(0.0),
+                  37.5, 61.25, 100.0);
+
+    CHECK_FALSE(fixture.Cast("{ x = 37.5, y = 1100, z = 61.25 }, { x = 0, y = -1, z = 0 }").hit);
+    CHECK(fixture.Cast("{ x = 37.5, y = 1100, z = 61.25 }, { x = 0, y = -1, z = 0 }, 2000").hit);
+}
+
+TEST_CASE("world:raycast refuses bad arguments with a miss, never an assert", "[script][physics]")
+{
+    RaycastFixture fixture;
+    fixture.AddField(glm::dvec3(0.0), fixture.world.CreateEntity());
+
+    const std::string down = "{ x = 0, y = -1, z = 0 }";
+    const std::string above = "{ x = 37.5, y = 100, z = 61.25 }";
+    for (const std::string &args : {
+             "42, " + down,
+             "nil, " + down,
+             "{ x = 1/0, y = 100, z = 10 }, " + down,
+             "{ x = 10, y = 0/0, z = 10 }, " + down,
+             above + ", 'down'",
+             above + ", { x = 0, y = 0, z = 0 }",
+             above + ", { x = 0, y = 0/0, z = 0 }",
+             above + ", { x = 0, y = -1/0, z = 0 }",
+             above + ", " + down + ", 0",
+             above + ", " + down + ", -5",
+             above + ", " + down + ", 0/0",
+             above + ", " + down + ", 1/0",
+             above + ", " + down + ", 'far'",
+         })
+    {
+        INFO(args);
+        const RaycastResult result = fixture.Cast(args);
+        CHECK_FALSE(result.hit);
+        CHECK(result.bare);
+    }
+}
+
+TEST_CASE("world:raycast gives no entity for a destroyed one, still a hit", "[script][physics]")
+{
+    RaycastFixture fixture;
+    const mir::Entity terrain = fixture.world.CreateEntity();
+    fixture.AddField(glm::dvec3(0.0), terrain);
+    fixture.world.DestroyEntity(terrain);
+
+    const RaycastResult hit = fixture.Cast("{ x = 37.5, y = 100, z = 61.25 }, { x = 0, y = -1, z = 0 }");
+    CHECK(hit.hit);
+    CHECK_FALSE(hit.hasEntity);
 }
