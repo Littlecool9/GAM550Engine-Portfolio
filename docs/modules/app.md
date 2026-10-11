@@ -119,7 +119,8 @@ when `mEnableEditorLayout` is off: a game build plays.
 option (see [build.md](../build.md#a-build-without-the-editor)). It reaches the
 code as `MIR_WITH_EDITOR`, 1 or 0, a PUBLIC compile definition of `mir::app`,
 and `App::kHasEditor` says which build this is. Without it, `App` holds no
-`Editor`, no `AssetImportManager` and no project menu; `mEnableEditorLayout` is
+`Editor`, no `AssetImportManager`, no `ContentBrowserWatcher` and no project
+menu; `mEnableEditorLayout` is
 forced off; the scene viewport is the whole window through the World's camera;
 and nothing sets `InputState::SetUiCapture`, since there is no editor UI to
 want the input. Everything else, the game UI included, is the same code.
@@ -202,6 +203,7 @@ them with the rest of Play's changes.
 | `mWindow` | early | late | the renderer's surface is built from it |
 | `mRenderer` | after the window | before it | holds `VkSurfaceKHR` and the device |
 | `mEditor` | after the renderer | before it | its Vulkan backend needs a live device, its GLFW backend a live window |
+| `mContentBrowser` (`ContentBrowserWatcher`, editor builds only) | with `App` | with `App` | owns no OS handle - a poll-based watcher only, so no explicit `Shutdown` |
 | `mCommands` | before `mWorld` | after it | outlives the world it records against |
 | `mWorld`, `mScheduler`, `mScriptHost`, `mScene` | with `App` | with `App` | no external resources |
 | `mTerrain` (`TerrainRuntime`, private) | in `Initialize`, after `RenderSystem` | with `App` | holds handles only: its meshes go with the renderer, its height fields with the World's `PhysicsWorld` |
@@ -422,8 +424,26 @@ is tested in `terrain` (`TerrainScene.tests.cpp`) and the collider assembly in
 6. **No World diffing for Play/Stop** — `PlaySnapshot` destroys and reloads
    every entity rather than diffing what changed, which is simple but not
    cheap for a large scene.
+7. **`ContentBrowserWatcher`'s Delete guard only checks the one path being
+   deleted** against live `ModelPlayer` references, not every asset
+   recursively under a deleted folder. A full recursive reference scan was
+   left for later; the panel's confirm modal is the primary safety net.
 
 ## Changed
+
+*2026-10-09* — **Added `ContentBrowserWatcher`.** Editor-side owner for the
+new Content Browser panel (see [editor.md](editor.md)): polls the open
+project's whole content root (`GameProject::mRootDir`) on a 250ms timer, the
+same signature-diff idiom `AssetImportManager::PollWatcher` uses, and keeps
+`ContentBrowserView` in sync with disk without an editor restart (#152). It
+is a separate class from `AssetImportManager` rather than a widening of its
+watcher: that one's file-type filter and 500ms cook-stability debounce exist
+specifically to avoid cooking a half-written model/image, which has nothing
+to do with browsing arbitrary project files, and it owns a `ChildProcess` it
+must `Terminate()` in `Shutdown` where this watcher owns no OS handle at all.
+`App::ApplyEditorActions` carries out its `CreateFolder`/`Rename`/`Delete`
+actions, reusing the same `ModelPlayer`-reference guard already written for
+`AssetImportActionKind::Remove` before a Delete that targets an asset path.
 
 *2026-10-08* — **Meshes resolve every frame in `MeshResolveSystem`, and `App`
 carries out the editor's entity actions.** Was: `ResolveSceneMeshes` ran once,
