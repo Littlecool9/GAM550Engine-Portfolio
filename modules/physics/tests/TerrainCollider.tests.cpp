@@ -218,3 +218,67 @@ TEST_CASE("At TerrainCheck's far placement the collider and the query agree as a
     CHECK(glm::length(far.local - near.local) <= 1e-4);
     CHECK(std::abs(far.gap - near.gap) <= 1e-4);
 }
+
+namespace
+{
+    const Entity kTerrainEntity{1, 1};
+    const Entity kSphereEntity{2, 1};
+
+    // Returns the contact point, terrain-local.
+    glm::dvec3 DropAndCollide(const glm::dvec3 &placement)
+    {
+        Pinned terrain(placement);
+        PhysicsWorld world;
+        const BodyHandle ground = terrain.AddCollider(world);
+        REQUIRE(ground.IsValid());
+        world.SetBodyEntity(ground, kTerrainEntity);
+        const glm::dvec3 dropAt{-200.25, 3.0, 30.75};
+        const BodyHandle sphere = world.CreateDynamicSphere(At(terrain.World(dropAt)), kRadius);
+        world.SetBodyEntity(sphere, kSphereEntity);
+
+        // Long enough to land and fall asleep, which drops Jolt's contacts.
+        std::vector<CollisionEvent> events;
+        for (int i = 0; i < 300; ++i)
+        {
+            world.Step(kStep);
+            for (const CollisionEvent &event : world.DrainCollisionEvents())
+                events.push_back(event);
+        }
+
+        REQUIRE(events.size() == 1);
+        const CollisionEvent &begin = events[0];
+        CHECK(begin.mPhase == CollisionPhase::Begin);
+        const bool sphereIsA = begin.mBodyA == sphere;
+        CHECK((sphereIsA ? begin.mBodyB : begin.mBodyA) == ground);
+        CHECK((sphereIsA ? begin.mEntityA : begin.mEntityB) == kSphereEntity);
+        CHECK((sphereIsA ? begin.mEntityB : begin.mEntityA) == kTerrainEntity);
+        CHECK((sphereIsA ? -begin.mNormal : begin.mNormal).y > 0.99f);
+
+        const TerrainHeightResult surface = terrain.HeightAt(begin.mPoint);
+        REQUIRE(surface.status == TerrainHeightStatus::MeetsRequirement);
+        REQUIRE(surface.worldPoint);
+        CHECK(std::abs(double(begin.mPoint.Meters().y) - double(surface.worldPoint->Meters().y)) <=
+              kQuantization + kPenetration);
+        const glm::dvec3 local = terrain.Local(begin.mPoint);
+        CHECK(std::abs(local.x - dropAt.x) < 0.01);
+        CHECK(std::abs(local.z - dropAt.z) < 0.01);
+        return local;
+    }
+}
+
+TEST_CASE("A sphere dropped onto the terrain collider begins exactly one collision",
+          "[physics][heightfield][terrain][collision]")
+{
+    DropAndCollide(glm::dvec3(0.0));
+}
+
+TEST_CASE("At TerrainCheck's far placement the sphere's collision lands where it does at the origin",
+          "[physics][heightfield][terrain][collision][lwc]")
+{
+    if (!kLargeWorld)
+        SKIP("float world positions (MIR_LARGE_WORLD=OFF) cannot hold this");
+
+    const glm::dvec3 near = DropAndCollide(glm::dvec3(0.0));
+    const glm::dvec3 far = DropAndCollide(kFar);
+    CHECK(glm::length(far - near) <= 1e-3);
+}
