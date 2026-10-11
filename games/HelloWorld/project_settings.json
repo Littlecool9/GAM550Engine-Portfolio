@@ -1,6 +1,9 @@
 {
+  "ide": {
+    "path": "C:\\Users\\rahul\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
+  },
   "rendering": {
-    "fog": false,
-    "rayTracing": false
+    "fog": true,
+    "rayTracing": true
   }
 }

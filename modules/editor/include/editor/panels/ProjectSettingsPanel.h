@@ -8,6 +8,7 @@
  */
 #pragma once
 
+#include <editor/IdeSettings.h>
 #include <renderer/RenderSettings.h>
 
 #include <filesystem>
@@ -24,16 +25,25 @@ namespace mir
         {
             mDraftLoaded = false;
             mRenderingStatusMessage.clear();
+            mIdeDraftLoaded = false;
+            mIdeStatusMessage.clear();
         }
 
     private:
         void DrawRendering(RenderSettings &renderSettings, RenderSettings &draftRenderSettings,
             const std::filesystem::path &savePath);
+        void DrawExternalTools(const std::filesystem::path &savePath);
 
         std::string mRenderingStatusMessage;
         RenderSettings mMessageSnapshot;
 
         bool mDraftLoaded = false;
         RenderSettings mDraftRenderSettings;
+
+        std::string mIdeStatusMessage;
+        IdeSettings mIdeMessageSnapshot;
+        bool mIdeDraftLoaded = false;
+        IdeSettings mDraftIdeSettings;
+        char mIdePathBuffer[512]{};
     };
 }

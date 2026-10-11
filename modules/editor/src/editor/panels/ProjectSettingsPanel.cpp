@@ -11,6 +11,8 @@
 
 #include <imgui.h>
 
+#include <cstdio>
+
 namespace mir
 {
     void ProjectSettingsPanel::DrawRendering(RenderSettings &renderSettings, RenderSettings &draftRenderSettings,
@@ -45,6 +47,50 @@ namespace mir
         }
     }
 
+    void ProjectSettingsPanel::DrawExternalTools(const std::filesystem::path &savePath)
+    {
+        if (!mIdeDraftLoaded)
+        {
+            mDraftIdeSettings = IdeSettings::LoadFile(savePath).value_or(IdeSettings{});
+            std::snprintf(mIdePathBuffer, sizeof(mIdePathBuffer), "%s", mDraftIdeSettings.path.c_str());
+            mIdeDraftLoaded = true;
+        }
+
+        ImGui::SeparatorText("External Tools");
+        ImGui::TextWrapped(
+            "Double-clicking a .lua file in the Content Browser opens it here. Empty auto-detects VS Code.");
+
+        if (ImGui::InputTextWithHint("IDE path", "auto-detect (VS Code)", mIdePathBuffer, sizeof(mIdePathBuffer)))
+            mDraftIdeSettings.path = mIdePathBuffer;
+
+        if (!mIdeStatusMessage.empty() && mDraftIdeSettings.path != mIdeMessageSnapshot.path)
+            mIdeStatusMessage.clear();
+
+        if (ImGui::Button("Detect VS Code"))
+        {
+            if (const std::optional<std::filesystem::path> detected = DetectDefaultIde())
+            {
+                mDraftIdeSettings.path = detected->string();
+                std::snprintf(mIdePathBuffer, sizeof(mIdePathBuffer), "%s", mDraftIdeSettings.path.c_str());
+            }
+            else
+                mIdeStatusMessage = "No VS Code installation found - set a path manually.";
+            mIdeMessageSnapshot.path = mDraftIdeSettings.path;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Save##Ide"))
+        {
+            mIdeStatusMessage = mDraftIdeSettings.SaveFile(savePath) ? "Saved." : "Save failed - see log.";
+            mIdeMessageSnapshot = mDraftIdeSettings;
+        }
+
+        if (!mIdeStatusMessage.empty())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", mIdeStatusMessage.c_str());
+        }
+    }
+
     void ProjectSettingsPanel::Draw(RenderSettings &renderSettings, const std::filesystem::path &savePath,
         bool &showInputSettings)
     {
@@ -60,5 +106,6 @@ namespace mir
             showInputSettings = true;
 
         DrawRendering(renderSettings, mDraftRenderSettings, savePath);
+        DrawExternalTools(savePath);
     }
 }

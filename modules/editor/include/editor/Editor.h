@@ -13,6 +13,7 @@
 #include <core/platform/Surface.h>
 #include <editor/EditorCamera.h>
 #include <editor/panels/AssetImportPanel.h>
+#include <editor/panels/ContentBrowserPanel.h>
 #include <editor/panels/HierarchyPanel.h>
 #include <editor/panels/InputSettingsPanel.h>
 #include <editor/panels/InspectorPanel.h>
@@ -73,6 +74,7 @@ namespace mir
         std::string mCreateProjectName;
         bool mCreateProjectRayTracing = false;
         AssetImportAction mAssetImport;
+        ContentBrowserAction mContentBrowser;
     };
 
     class Editor
@@ -97,7 +99,7 @@ namespace mir
         EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                                  const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
                                  std::string_view currentProject, World &world, const AssetImportView &assetImport,
-                                 const VulkanRenderer &renderer);
+                                 const VulkanRenderer &renderer, const ContentBrowserView &contentBrowser);
 
         VkRect2D SceneViewportRect() const { return mSceneViewportRect; }
 
@@ -129,6 +131,7 @@ namespace mir
         bool mShowProjectSettings = false;
         bool mShowInputSettings = false;
         bool mShowAssetImport = false;
+        bool mShowContentBrowser = false;
         bool mShowProfiler = false;
         std::string mImGuiIniPath;
         std::filesystem::path mProjectSettingsPath;
@@ -138,6 +141,7 @@ namespace mir
         LogPanel mLogPanel;
         HierarchyPanel mHierarchyPanel;
         AssetImportPanel mAssetImportPanel;
+        ContentBrowserPanel mContentBrowserPanel;
         InspectorPanel mInspectorPanel;
         ProjectSettingsPanel mProjectSettingsPanel;
         InputSettingsPanel mInputSettingsPanel;

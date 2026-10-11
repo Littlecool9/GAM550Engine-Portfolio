@@ -12,6 +12,7 @@ target_link_libraries(engine_editor
            mir::input
     PRIVATE mir::core
             mir::editortheme
+            mir::serial
             imgui::imgui
             imguizmo::imguizmo
             iconfontcppheaders::iconfontcppheaders
@@ -21,8 +22,10 @@ target_sources(engine_editor PRIVATE
     src/editor/Editor.cpp
     src/editor/EditorCamera.cpp
     src/editor/EntityBaseline.cpp
+    src/editor/IdeSettings.cpp
     src/editor/panels/HierarchyPanel.cpp
     src/editor/panels/AssetImportPanel.cpp
+    src/editor/panels/ContentBrowserPanel.cpp
     src/editor/panels/InputSettingsPanel.cpp
     src/editor/panels/InspectorPanel.cpp
     src/editor/panels/LogPanel.cpp

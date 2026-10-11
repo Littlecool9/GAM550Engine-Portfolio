@@ -17,7 +17,8 @@ mImGui.BeginFrame();                                    // ImGuiRuntime: the New
 if (windowVisible)
     Act(mEditor.DrawLayout(mDesc.mEnableEditorLayout,   // EditorActions
                            world.Resource<InputMap>(), world.Resource<RenderSettings>(),
-                           world.Resource<EngineModeState>(), projectMenu, currentProject, world));
+                           world.Resource<EngineModeState>(), projectMenu, currentProject, world,
+                           mAssetImport.View(), mRenderer, mContentBrowser.View()));
 
 mRenderer.SetImGuiDrawData(mImGui.EndFrame());          // ImGuiRuntime: ImGui::Render, hand off draw data
 mRenderSystem.SetViewportRect(0, mEditor.SceneViewportRect());
@@ -76,7 +77,8 @@ void Shutdown();                  // before ImGuiRuntime::Shutdown
 // between ImGuiRuntime::BeginFrame and EndFrame
 EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                          const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-                         std::string_view currentProject, World &world);
+                         std::string_view currentProject, World &world, const AssetImportView &assetImport,
+                         const VulkanRenderer &renderer, const ContentBrowserView &contentBrowser);
 
 VkRect2D SceneViewportRect() const;
 bool IsInitialized() const;
@@ -89,7 +91,10 @@ EditorCamera &SceneCamera();
 |---|---|---|
 | `SceneMenuAction` | `editor/Editor.h` | `None`/`New`/`Save`/`Load`/`Play`/`TogglePause`/`Stop` |
 | `ProjectMenuEntry` | `editor/Editor.h` | `{mDir, mName}` for one game in Open Project |
-| `EditorActions` | `editor/Editor.h` | `{mScene, mEntity, mOpenProject}`, what the menus and toolbar asked for this frame |
+| `EditorActions` | `editor/Editor.h` | `{mScene, mEntity, mOpenProject, mAssetImport, mContentBrowser, ...}`, what the menus and toolbar asked for this frame |
+| `ContentBrowserView`, `ContentBrowserEntryView` | `editor/panels/ContentBrowserPanel.h` | The open project's content root as a flat list of files/directories, plus `mLastRenamedFrom`/`mLastRenamedTo` for one tick when a same-tick remove+add looks like a rename |
+| `ContentBrowserAction`, `ContentBrowserActionKind` | `editor/panels/ContentBrowserPanel.h` | `{mKind, mTargetPath, mNewName}`: `CreateFolder`, `Rename`, `Delete` or `OpenInIde`, for `App` to carry out (see [app.md](app.md)) |
+| `IdeSettings`, `DetectDefaultIde` | `editor/IdeSettings.h` | The `project_settings.json` "ide.path" string (empty: auto-detect VS Code), edited from `ProjectSettingsPanel`'s External Tools section |
 | `EntityAction`, `EntityActionKind` | `editor/panels/HierarchyPanel.h` | `{mKind, mPreset, mTarget}`: `Create` (null `mPreset` = New), `Delete` or `Duplicate`, for `App` to carry out |
 | `NeighborInHierarchy` | `editor/panels/HierarchyPanel.h` | The entity to select after deleting one: next sibling, else previous, else the parent |
 | `IsBaselineComponent`, `AddMissingBaseline` | `editor/EntityBaseline.h` | The components every editor-created entity has: `Transform`, `WorldTransform`, `Name` |
@@ -104,6 +109,19 @@ entities `ParentOf` reports null for). `InspectorPanel`, in
 `src/editor/panels/InspectorPanel.cpp`, renders the `Selection`'s components
 into the `Inspector` dock. None of the three are public — panels are reached
 only through `DrawLayout`.
+
+`ContentBrowserPanel`, in `src/editor/panels/ContentBrowserPanel.cpp`, is a
+floating window (Project > Content Browser) rather than part of the fixed
+dock split: a folder tree built client-side from `ContentBrowserView`'s flat
+entry list on the left, and a file/folder table for the selected folder on
+the right — directories are explicit entries, so an empty or just-created one
+still shows up. Clicking selects, double-clicking a folder navigates into it,
+and a row's context menu offers Rename and Delete; Delete goes through a
+confirm modal (no undo exists anywhere in this engine - see [app.md](app.md)
+for `ContentBrowserWatcher`, which actually watches the disk and carries out
+the mutations). This closes #152: the panel never caches a stale listing, so
+a file added, removed or renamed outside the editor shows up on the watcher's
+next poll with no restart.
 
 Clicking an entity in `Hierarchy`, or clicking it directly in the scene
 viewport (`Editor::UpdateViewportPicking`, a ray/AABB test against every
@@ -293,8 +311,35 @@ Open Project asks for, but not the menu or the dialog themselves.
    per-triangle picking, matching the renderer's own choice not to retain
    CPU-side mesh geometry after upload.
 7. **Delete and Duplicate act on one entity, not the whole selection.**
+8. **`ContentBrowserPanel` has no drag-drop, multi-select, copy/paste or
+   thumbnails** — icons are Font Awesome glyphs by extension, since no
+   texture-thumbnail infrastructure exists in this module. Renaming or
+   deleting an asset does not rewrite scene references to it (see
+   [assets.md](assets.md)'s `AssetId` rename gap); Delete's reference guard
+   (in `App`, see [app.md](app.md)) only checks the top-level path being
+   deleted, not everything recursively under a deleted folder.
 
 ## Changed
+
+*2026-10-09* — **Double-clicking a `.lua` file in the Content Browser opens
+it in an external IDE.** New `IdeSettings` (`editor/IdeSettings.h`): the
+"ide.path" string in `project_settings.json`, edited from a new "External
+Tools" section in `ProjectSettingsPanel`. Empty (the default) falls back to
+`DetectDefaultIde()`, which looks for a VS Code install at the usual
+per-user/system locations. `ContentBrowserPanel::Draw` reports this as
+`ContentBrowserActionKind::OpenInIde`; `App::ApplyEditorActions` resolves the
+configured (or detected) IDE and calls `core`'s `LaunchProcess` with the
+file's absolute path, rather than routing it through `ContentBrowserWatcher`
+(see [app.md](app.md)) - it spawns a process, it doesn't touch the project
+tree.
+
+*2026-10-09* — **Added `ContentBrowserPanel`.** A folder tree + file table for
+the open project's content root, closing #152 (disk changes made outside the
+editor - add, remove, rename - now appear without an editor restart). Backed
+by `app`'s `ContentBrowserWatcher` (see [app.md](app.md)), which polls the
+project's content root the same way `AssetImportManager` polls its asset
+subtree, rather than widening that manager's cook-queue-specific watcher to
+every file type.
 
 *2026-10-08* — **`Hierarchy` creates, duplicates and deletes entities, and
 `Inspector` adds, removes, copies and pastes components.** Was: the Create menu

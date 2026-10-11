@@ -44,7 +44,9 @@
 #include <terrain/TerrainScene.h>
 
 #if MIR_WITH_EDITOR
+#include <core/platform/Process.h>
 #include <editor/EntityBaseline.h>
+#include <editor/IdeSettings.h>
 #include <editor/Selection.h>
 #endif
 
@@ -98,6 +100,7 @@ namespace mir
 
     #if MIR_WITH_EDITOR
         mAssetImport.Initialize(mProject);
+        mContentBrowser.Initialize(mProject);
     #else
             //no editor to lay out, the window is the game
         mDesc.mEnableEditorLayout = false;
@@ -490,6 +493,7 @@ namespace mir
             mAssetImport.Update(IsEditing(mWorld));
             if (mAssetImport.PendingApply() && IsEditing(mWorld))
                 ApplyImportedAssets();
+            mContentBrowser.Update();
         #endif
 
             // Edit, between frames, before any system runs
@@ -504,7 +508,7 @@ namespace mir
                 const EditorActions actions = mEditor.DrawLayout(
                     mDesc.mEnableEditorLayout, mWorld.Resource<InputMap>(), mWorld.Resource<RenderSettings>(),
                     mWorld.Resource<EngineModeState>(), mProjectMenu, mProject.mDir, mWorld, mAssetImport.View(),
-                    mRenderer);
+                    mRenderer, mContentBrowser.View());
             #endif
 
                 mGameUI.BeginFrame(GameUIArea(), mWorld.Resource<InputState>(), mWorld.Resource<InputMap>(),
@@ -634,6 +638,39 @@ namespace mir
         if (assetActionAccepted)
             mAssetImport.Handle(actions.mAssetImport);
 
+        if (actions.mContentBrowser.mKind == ContentBrowserActionKind::OpenInIde)
+        {
+            OpenInExternalIde(actions.mContentBrowser.mTargetPath);
+        }
+        else
+        {
+            bool contentBrowserActionAccepted = true;
+            if (actions.mContentBrowser.mKind == ContentBrowserActionKind::Delete)
+            {
+                if (const std::optional<std::string> logical =
+                    mContentBrowser.AssetLogicalPath(actions.mContentBrowser.mTargetPath);
+                    logical.has_value())
+                {
+                    const AssetId target = MakeAssetId(*logical);
+                    mWorld.GetOrCreateQuery<const ModelPlayer>().ForEach([&](Entity, const ModelPlayer &player)
+                        {
+                            AssetId referenced = player.ModelAsset();
+                            if (referenced.IsNull() && !player.ModelName().empty())
+                                if (const AssetPathResult logicalPlayer =
+                                    MakeLogicalAssetPath(mProject.mAssetIdRoot, player.ModelName());
+                                    logicalPlayer.Ok())
+                                    referenced = MakeAssetId(logicalPlayer.path);
+                            contentBrowserActionAccepted &= referenced != target;
+                        });
+                    if (!contentBrowserActionAccepted)
+                        mContentBrowser.Reject(actions.mContentBrowser.mTargetPath,
+                            "cannot delete this asset while a scene entity references it");
+                }
+            }
+            if (contentBrowserActionAccepted)
+                mContentBrowser.Handle(actions.mContentBrowser);
+        }
+
         if (!actions.mOpenProject.empty())
             RequestOpenProject(actions.mOpenProject);
 
@@ -706,6 +743,27 @@ namespace mir
         mAssetLoadFailed = false;
         mAssetImport.MarkApplied();
         MIR_LOG_INFO("Applied imported assets at an Edit frame boundary");
+    }
+
+    void App::OpenInExternalIde(const std::string &relativePath)
+    {
+        const IdeSettings settings = IdeSettings::LoadFile(mProject.mProjectSettingsPath).value_or(IdeSettings{});
+        const std::filesystem::path ide =
+            settings.path.empty() ? DetectDefaultIde().value_or(std::filesystem::path{})
+            : std::filesystem::path(settings.path);
+        if (ide.empty())
+        {
+            MIR_LOG_WARN("Content browser: no IDE configured or detected for '{}'", relativePath);
+            mContentBrowser.Reject(
+                relativePath, "no IDE configured and none could be auto-detected - set one in Project Settings");
+            return;
+        }
+
+        const std::filesystem::path absolute = mProject.mRootDir / relativePath;
+        const std::vector<std::string> args{ absolute.string() };
+        MIR_LOG_INFO("Content browser: opening '{}' with '{}'", absolute.string(), ide.string());
+        if (!LaunchProcess(ide, args, false).has_value())
+            mContentBrowser.Reject(relativePath, "could not launch '" + ide.string() + "'");
     }
 #endif
 

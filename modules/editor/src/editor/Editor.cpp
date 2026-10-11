@@ -760,7 +760,7 @@ namespace mir
     EditorActions Editor::DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
         const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
         std::string_view currentProject, World &world, const AssetImportView &assetImport,
-        const VulkanRenderer &renderer)
+        const VulkanRenderer &renderer, const ContentBrowserView &contentBrowser)
     {
         EditorActions actions;
 
@@ -841,6 +841,7 @@ namespace mir
                     ImGui::MenuItem("Project Settings", nullptr, &mShowProjectSettings);
                     ImGui::MenuItem("Input Settings", nullptr, &mShowInputSettings);
                     ImGui::MenuItem("Asset Import", nullptr, &mShowAssetImport);
+                    ImGui::MenuItem("Content Browser", nullptr, &mShowContentBrowser);
                     ImGui::EndMenu();
                 }
                 if (ImGui::BeginMenu("Debug"))
@@ -916,6 +917,13 @@ namespace mir
             {
                 if (ImGui::Begin("Asset Import", &mShowAssetImport))
                     actions.mAssetImport = mAssetImportPanel.Draw(assetImport, dropped);
+                ImGui::End();
+            }
+
+            if (mShowContentBrowser)
+            {
+                if (ImGui::Begin("Content Browser", &mShowContentBrowser))
+                    actions.mContentBrowser = mContentBrowserPanel.Draw(contentBrowser);
                 ImGui::End();
             }
         }
