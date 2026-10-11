@@ -14,12 +14,20 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdlib>
+#include <sstream>
 
 namespace mir
 {
     namespace
     {
         using json = nlohmann::json;
+
+        std::string &ReplaceAll(std::string &token, std::string_view from, std::string_view to)
+        {
+            for (std::size_t pos = token.find(from); pos != std::string::npos; pos = token.find(from, pos + to.size()))
+                token.replace(pos, from.size(), to);
+            return token;
+        }
     }
 
     std::optional<IdeSettings> IdeSettings::LoadFile(const std::filesystem::path &path)
@@ -35,12 +43,28 @@ namespace mir
             return settings;
 
         settings.path = it->value("path", std::string{});
+        settings.argsTemplate = it->value("args", std::string(kDefaultIdeArgsTemplate));
         return settings;
     }
 
     bool IdeSettings::SaveFile(const std::filesystem::path &filePath) const
     {
-        return UpdateJsonFile(filePath, [this](json &root) { root["ide"] = json{ { "path", path } }; });
+        return UpdateJsonFile(
+            filePath, [this](json &root) { root["ide"] = json{ { "path", path }, { "args", argsTemplate } }; });
+    }
+
+    std::vector<std::string> IdeSettings::BuildArgs(
+        const std::filesystem::path &projectRoot, const std::filesystem::path &file) const
+    {
+        std::vector<std::string> args;
+        std::istringstream stream(argsTemplate);
+        for (std::string token; stream >> token;)
+        {
+            ReplaceAll(token, "{project}", projectRoot.string());
+            ReplaceAll(token, "{file}", file.string());
+            args.push_back(std::move(token));
+        }
+        return args;
     }
 
 #if defined(_WIN32)

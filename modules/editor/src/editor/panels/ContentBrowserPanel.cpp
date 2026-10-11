@@ -52,7 +52,14 @@ namespace mir
             return ICON_FA_FILE;
         }
 
-        bool IsScriptFile(const std::string &name) { return Lowered(name).ends_with(".lua"); }
+        bool IsTextFile(const std::string &name)
+        {
+            const auto dot = name.find_last_of('.');
+            if (dot == std::string::npos)
+                return false;
+            const std::string extension = Lowered(name.substr(dot));
+            return extension == ".lua" || extension == ".json";
+        }
 
         std::string FormatSize(uint64_t bytes)
         {
@@ -266,7 +273,7 @@ namespace mir
                     {
                         if (entry.mKind == ContentBrowserEntryKind::Directory)
                             mCurrentFolder = entry.mRelativePath;
-                        else if (IsScriptFile(entry.mName))
+                        else if (IsTextFile(entry.mName))
                         {
                             action.mKind = ContentBrowserActionKind::OpenInIde;
                             action.mTargetPath = entry.mRelativePath;

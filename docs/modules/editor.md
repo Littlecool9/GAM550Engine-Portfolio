@@ -321,6 +321,22 @@ Open Project asks for, but not the menu or the dialog themselves.
 
 ## Changed
 
+*2026-10-10* — **Double-clicking a `.lua` or `.json` file in the Content
+Browser opens the whole project folder as the workspace root, in a new IDE
+window, with the file open.** Was (2026-10-09): opened just the file, no
+project root. `IdeSettings` (`editor/IdeSettings.h`) gained `argsTemplate`
+("ide.args" in `project_settings.json`, default `kDefaultIdeArgsTemplate` =
+`"--new-window {project} {file}"`), edited next to "ide.path" in
+`ProjectSettingsPanel`'s "External Tools" section. `IdeSettings::BuildArgs`
+splits the template on whitespace and substitutes `{project}` (the game's
+root dir) and `{file}` (the double-clicked file's absolute path) into each
+token - no shell quoting involved, so flags/placeholders can't contain
+spaces. The default targets VS Code's CLI; pointing `ide.path` at a
+different tool means also rewriting `ide.args` to that tool's syntax.
+`ContentBrowserPanel`'s `IsTextFile` (was `IsScriptFile`, `.lua`-only) gates
+which files trigger this - an explicit allowlist, not everything-but-known-
+binary, so new binary asset types stay excluded without a code change there.
+
 *2026-10-09* — **Double-clicking a `.lua` file in the Content Browser opens
 it in an external IDE.** New `IdeSettings` (`editor/IdeSettings.h`): the
 "ide.path" string in `project_settings.json`, edited from a new "External

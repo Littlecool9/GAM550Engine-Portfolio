@@ -760,10 +760,19 @@ namespace mir
         }
 
         const std::filesystem::path absolute = mProject.mRootDir / relativePath;
-        const std::vector<std::string> args{ absolute.string() };
-        MIR_LOG_INFO("Content browser: opening '{}' with '{}'", absolute.string(), ide.string());
+        const std::vector<std::string> args = settings.BuildArgs(mProject.mRootDir, absolute);
+
+        std::string argsLogged;
+        for (const std::string &arg : args)
+            argsLogged += (argsLogged.empty() ? "" : " ") + arg;
+        MIR_LOG_INFO("Content browser: opening '{}' (project root '{}') with '{}' {}", absolute.string(),
+            mProject.mRootDir.string(), ide.string(), argsLogged);
+
         if (!LaunchProcess(ide, args, false).has_value())
+        {
+            MIR_LOG_ERROR("Content browser: could not launch '{}' for '{}'", ide.string(), relativePath);
             mContentBrowser.Reject(relativePath, "could not launch '" + ide.string() + "'");
+        }
     }
 #endif
 

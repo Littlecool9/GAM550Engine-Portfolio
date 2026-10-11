@@ -1,5 +1,6 @@
 {
   "ide": {
+    "args": "--new-window {project} {file}",
     "path": "C:\\Users\\rahul\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe"
   },
   "rendering": {

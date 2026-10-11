@@ -53,17 +53,23 @@ namespace mir
         {
             mDraftIdeSettings = IdeSettings::LoadFile(savePath).value_or(IdeSettings{});
             std::snprintf(mIdePathBuffer, sizeof(mIdePathBuffer), "%s", mDraftIdeSettings.path.c_str());
+            std::snprintf(mIdeArgsBuffer, sizeof(mIdeArgsBuffer), "%s", mDraftIdeSettings.argsTemplate.c_str());
             mIdeDraftLoaded = true;
         }
 
         ImGui::SeparatorText("External Tools");
         ImGui::TextWrapped(
-            "Double-clicking a .lua file in the Content Browser opens it here. Empty auto-detects VS Code.");
+            "Double-clicking a .lua or .json file in the Content Browser opens the whole project folder as the "
+            "workspace root in a new IDE window, with the file open. Empty IDE path auto-detects VS Code. Launch "
+            "args: {project} and {file} are substituted; a non-VS Code tool may need a different template.");
 
         if (ImGui::InputTextWithHint("IDE path", "auto-detect (VS Code)", mIdePathBuffer, sizeof(mIdePathBuffer)))
             mDraftIdeSettings.path = mIdePathBuffer;
 
-        if (!mIdeStatusMessage.empty() && mDraftIdeSettings.path != mIdeMessageSnapshot.path)
+        if (ImGui::InputTextWithHint("Launch args", kDefaultIdeArgsTemplate, mIdeArgsBuffer, sizeof(mIdeArgsBuffer)))
+            mDraftIdeSettings.argsTemplate = mIdeArgsBuffer;
+
+        if (!mIdeStatusMessage.empty() && mDraftIdeSettings != mIdeMessageSnapshot)
             mIdeStatusMessage.clear();
 
         if (ImGui::Button("Detect VS Code"))
@@ -75,7 +81,7 @@ namespace mir
             }
             else
                 mIdeStatusMessage = "No VS Code installation found - set a path manually.";
-            mIdeMessageSnapshot.path = mDraftIdeSettings.path;
+            mIdeMessageSnapshot = mDraftIdeSettings;
         }
         ImGui::SameLine();
         if (ImGui::Button("Save##Ide"))

@@ -45,5 +45,6 @@ namespace mir
         bool mIdeDraftLoaded = false;
         IdeSettings mDraftIdeSettings;
         char mIdePathBuffer[512]{};
+        char mIdeArgsBuffer[256]{};
     };
 }
