@@ -61,6 +61,12 @@ namespace mir::vk
         void BeginLabel(VkCommandBuffer cmd, const char *name, const float(&color)[4]) const;
         void EndLabel(VkCommandBuffer cmd) const;
 
+        // Every device-wide and queue-wide wait goes through these, so they can be counted.
+        void WaitIdle() const;
+        void WaitQueueIdle() const;
+        uint64_t DeviceWaits() const { return mDeviceWaits; }
+        uint64_t QueueWaits() const { return mQueueWaits; }
+
     private:
         bool CreateInstance(const RendererDesc &desc);
         bool CreateDebugMessenger();
@@ -89,5 +95,8 @@ namespace mir::vk
         bool mMemoryBudgetSupported = false;
 
         bool mValidationEnabled = false;
+
+        mutable uint64_t mDeviceWaits = 0;
+        mutable uint64_t mQueueWaits = 0;
     };
 }

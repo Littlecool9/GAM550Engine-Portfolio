@@ -16,6 +16,7 @@
 #include "vulkan/FrameSync.h"
 #include "vulkan/ImGuiOverlay.h"
 #include "vulkan/MaterialStore.h"
+#include "vulkan/MeshUploader.h"
 #include "vulkan/ModelDescriptors.h"
 #include "vulkan/RayTracer.h"
 #include "vulkan/ResourceStore.h"
@@ -63,7 +64,11 @@ namespace mir
         {
             const vk::GpuMesh *const mesh = mResources->FindMesh(item.mesh);
             if (mesh == nullptr)
+            {
+                if (!item.mesh.IsNull())
+                    ++mSkippedDraws;
                 continue;
+            }
 
             const vk::GpuMaterial *const material = mMaterialStore->FindOrDefault(item.material);
             if (material == nullptr)
@@ -207,7 +212,11 @@ namespace mir
         const std::optional<vk::FrameContext> frame = mFrameSync->Begin(*mSwapchain);
         // After Begin's wait: this slot's last frame is done with its set 2 buffers.
         if (frame)
+        {
             mModelDescriptors->ResetFrame(mFrameSync->Index());
+            mMeshUploads->Collect(*mResources, *mRayTracer, mFrameSync->CompletedValue());
+            mMeshUploads->Record(frame->cmd, frame->signalValue, *mResources, *mRayTracer);
+        }
         return frame;
     }
 

@@ -68,7 +68,7 @@ namespace mir::vk
         if (!mBackendInitialized)
             return;
 
-        vkDeviceWaitIdle(mDevice->Handle());
+        mDevice->WaitIdle();
         ImGui_ImplVulkan_Shutdown();
         mBackendInitialized = false;
         mDrawData = nullptr;

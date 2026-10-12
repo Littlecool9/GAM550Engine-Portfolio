@@ -195,6 +195,7 @@ namespace mir::vk
         }
 
         const uint32_t index = PlaceSlot(mMeshes, mFreeMeshIndices, mesh);
+        mHighestMeshGeneration = std::max(mHighestMeshGeneration, mMeshes[index].mGeneration);
 
         mDevice->NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mesh.mVertexBuffer),
             std::format("Mesh {} vertices", index).c_str());
@@ -217,12 +218,12 @@ namespace mir::vk
 
     bool ResourceStore::DestroyMesh(MeshHandle handle)
     {
-        if (FindMesh(handle) == nullptr)
+        GpuMesh *const mesh = FindMeshSlot(handle);
+        if (mesh == nullptr)
             return false;
 
-        GpuMesh &mesh = mMeshes[handle.mIndex];
-        FreeMesh(mesh);
-        RetireSlot(mesh);
+        FreeMesh(*mesh);
+        RetireSlot(*mesh);
 
         mFreeMeshIndices.push_back(handle.mIndex);
         return true;
@@ -231,16 +232,78 @@ namespace mir::vk
     std::size_t ResourceStore::ReleaseMeshes()
     {
         const std::size_t count = mMeshes.size();
-        for (GpuMesh &mesh : mMeshes)
-            FreeMesh(mesh);
-        mMeshes.clear();
         mFreeMeshIndices.clear();
+        // Reversed, so the free list hands out index 0 first.
+        for (uint32_t i = static_cast<uint32_t>(count); i-- > 0;)
+        {
+            FreeMesh(mMeshes[i]);
+            RetireSlot(mMeshes[i]);
+            mFreeMeshIndices.push_back(i);
+        }
         return count;
     }
 
     const GpuMesh *ResourceStore::FindMesh(MeshHandle handle) const
     {
-        return FindSlot(mMeshes, handle);
+        const GpuMesh *const mesh = FindSlot(mMeshes, handle);
+        return mesh != nullptr && mesh->mState == GpuMeshState::Ready ? mesh : nullptr;
+    }
+
+    GpuMesh *ResourceStore::FindMeshSlot(MeshHandle handle)
+    {
+        return const_cast<GpuMesh *>(FindSlot(mMeshes, handle));
+    }
+
+    MeshHandle ResourceStore::ReserveMesh()
+    {
+        GpuMesh mesh{};
+        mesh.mState = GpuMeshState::Pending;
+        const uint32_t index = PlaceSlot(mMeshes, mFreeMeshIndices, mesh);
+        mHighestMeshGeneration = std::max(mHighestMeshGeneration, mMeshes[index].mGeneration);
+        return MeshHandle{ index, mMeshes[index].mGeneration };
+    }
+
+    bool ResourceStore::CreateMeshBuffers(GpuMesh &mesh, uint32_t slot, VkDeviceSize vertexBytes,
+        VkDeviceSize indexBytes, bool rayTracing)
+    {
+        const VkBufferUsageFlags extraUsage = rayTracing
+            ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR
+            : 0;
+        const bool created =
+            CreateBuffer(mDevice->Allocator(), vertexBytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | extraUsage,
+                0, mesh.mVertexBuffer, mesh.mVertexAllocation, nullptr) &&
+            CreateBuffer(mDevice->Allocator(), indexBytes,
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | extraUsage,
+                0, mesh.mIndexBuffer, mesh.mIndexAllocation, nullptr);
+        if (!created)
+        {
+            FreeMesh(mesh);
+            mesh.mVertexBuffer = mesh.mIndexBuffer = VK_NULL_HANDLE;
+            mesh.mVertexAllocation = mesh.mIndexAllocation = VK_NULL_HANDLE;
+            return false;
+        }
+        mDevice->NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mesh.mVertexBuffer),
+            std::format("Mesh {} vertices", slot).c_str());
+        mDevice->NameObject(VK_OBJECT_TYPE_BUFFER, reinterpret_cast<uint64_t>(mesh.mIndexBuffer),
+            std::format("Mesh {} indices", slot).c_str());
+        return true;
+    }
+
+    GpuMesh ResourceStore::TakeMesh(MeshHandle handle)
+    {
+        GpuMesh *const mesh = FindMeshSlot(handle);
+        if (mesh == nullptr)
+            return GpuMesh{};
+        const GpuMesh taken = *mesh;
+        RetireSlot(*mesh);
+        mFreeMeshIndices.push_back(handle.mIndex);
+        return taken;
+    }
+
+    uint32_t ResourceStore::HighestMeshGeneration() const
+    {
+        return mHighestMeshGeneration;
     }
 
     VkSampler ResourceStore::AcquireSampler(const SamplerDesc &desc)

@@ -628,4 +628,16 @@ namespace mir::vk
         if (mValidationEnabled)
             vkCmdEndDebugUtilsLabelEXT(cmd);
     }
+
+    void Device::WaitIdle() const
+    {
+        ++mDeviceWaits;
+        vkDeviceWaitIdle(mDevice);
+    }
+
+    void Device::WaitQueueIdle() const
+    {
+        ++mQueueWaits;
+        vkQueueWaitIdle(mQueue);
+    }
 }

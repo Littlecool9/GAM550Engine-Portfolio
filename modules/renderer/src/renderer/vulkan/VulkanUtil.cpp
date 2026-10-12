@@ -185,7 +185,7 @@ namespace mir::vk
 
         const bool submitted = vkQueueSubmit(device.Queue(), 1, &submitInfo, VK_NULL_HANDLE) == VK_SUCCESS;
         if (submitted)
-            vkQueueWaitIdle(device.Queue());
+            device.WaitQueueIdle();
         else
             MIR_LOG_CRITICAL("SubmitAndWait: vkQueueSubmit failed");
 

@@ -26,6 +26,15 @@ namespace mir::vk
 {
     class Device;
 
+    // Where a mesh is on its way to the GPU; CreateMesh's are Ready at once.
+    enum class GpuMeshState : uint8_t
+    {
+        Ready,
+        Pending,
+        Uploading,
+        Failed,
+    };
+
     // One buffer pair per mesh
     struct GpuMesh
     {
@@ -35,6 +44,9 @@ namespace mir::vk
         VmaAllocation mIndexAllocation = VK_NULL_HANDLE;
         uint32_t mIndexCount = 0;
         uint32_t mGeneration = 0; //< 0 = slot never filled
+        GpuMeshState mState = GpuMeshState::Ready;
+        // Buffers plus any BLAS; set for queued meshes.
+        uint64_t mBytes = 0;
     };
 
     // One image per texture.
@@ -59,9 +71,23 @@ namespace mir::vk
         MeshHandle CreateMesh(std::span<const Vertex> vertices, std::span<const uint32_t> indices);
         // False when the handle is null or stale.
         bool DestroyMesh(MeshHandle handle);
-        // Returns how many slots there were. Generations restart, so an old handle can match a new mesh.
+        // Returns how many slots there were. Every slot's generation moves on, so no old handle resolves.
         std::size_t ReleaseMeshes();
+        // Ready meshes only: what draws and acceleration structures may read.
         const GpuMesh *FindMesh(MeshHandle handle) const;
+        // In any state.
+        GpuMesh *FindMeshSlot(MeshHandle handle);
+
+        // A Pending slot without buffers, for an asynchronous upload.
+        MeshHandle ReserveMesh();
+        // Device buffers for a reserved slot; rayTracing makes them BLAS build inputs.
+        bool CreateMeshBuffers(GpuMesh &mesh, uint32_t slot, VkDeviceSize vertexBytes, VkDeviceSize indexBytes,
+            bool rayTracing);
+        // Empties the slot and moves its generation on; the caller frees the returned buffers later.
+        GpuMesh TakeMesh(MeshHandle handle);
+        // GPU objects only; the slot and its generation are the caller's.
+        void FreeMesh(GpuMesh &mesh);
+        uint32_t HighestMeshGeneration() const;
 
         TextureHandle CreateTexture(const TextureDesc &desc);
         // False when the handle is null, stale or a default texture.
@@ -80,8 +106,6 @@ namespace mir::vk
 
     private:
         bool CreateDefaultTextures();
-        // GPU objects only; the slot and its generation are the caller's.
-        void FreeMesh(GpuMesh &mesh);
         void FreeTexture(GpuTexture &texture);
         void DestroyTextures();
         void DestroySamplers();
@@ -90,6 +114,7 @@ namespace mir::vk
 
         std::vector<GpuMesh> mMeshes;
         std::vector<uint32_t> mFreeMeshIndices;
+        uint32_t mHighestMeshGeneration = 0;
 
         std::vector<GpuTexture> mTextures;
         TextureHandle mDefaultWhiteTexture;

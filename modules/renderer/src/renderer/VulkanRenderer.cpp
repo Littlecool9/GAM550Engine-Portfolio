@@ -13,6 +13,7 @@
 #include "vulkan/FrameSync.h"
 #include "vulkan/ImGuiOverlay.h"
 #include "vulkan/MaterialStore.h"
+#include "vulkan/MeshUploader.h"
 #include "vulkan/ModelDescriptors.h"
 #include "vulkan/RayTracer.h"
 #include "vulkan/ResourceStore.h"
@@ -34,7 +35,8 @@ namespace mir
         mModelDescriptors(std::make_unique<vk::ModelDescriptors>()),
         mRayTracer(std::make_unique<vk::RayTracer>()),
         mCapture(std::make_unique<vk::FrameCapture>()),
-        mImGuiOverlay(std::make_unique<vk::ImGuiOverlay>())
+        mImGuiOverlay(std::make_unique<vk::ImGuiOverlay>()),
+        mMeshUploads(std::make_unique<vk::MeshUploader>())
     {}
     VulkanRenderer::~VulkanRenderer() = default;
 
@@ -92,12 +94,13 @@ namespace mir
             !mRayTracer->Initialize(*mDevice, mSwapchain->Extent(), mCameraBuffer->SetLayout()))
             return false;
 
+        mMeshUploads->Initialize(*mDevice);
         return true;
     }
 
     bool VulkanRenderer::RecreateSwapchain()
     {
-        vkDeviceWaitIdle(mDevice->Handle());
+        mDevice->WaitIdle();
 
         // The swapchain cannot reach ray tracing, so the facade resizes its output images.
         if (!mSwapchain->Recreate(*mWindow) ||
@@ -115,10 +118,11 @@ namespace mir
     {
         if (mDevice->Handle() != VK_NULL_HANDLE)
         {
-            vkDeviceWaitIdle(mDevice->Handle());
+            mDevice->WaitIdle();
 
             mFrameSync->Shutdown();
 
+            mMeshUploads->Shutdown(*mRayTracer);
             mMaterialStore->Shutdown();
             mRayTracer->Shutdown();
             mResources->Shutdown();
@@ -148,7 +152,7 @@ namespace mir
 
     bool VulkanRenderer::DestroyMesh(MeshHandle handle)
     {
-        if (mResources->FindMesh(handle) == nullptr)
+        if (mResources->FindMeshSlot(handle) == nullptr)
         {
             MIR_LOG_ERROR("DestroyMesh: handle is null or stale");
             return false;
@@ -156,17 +160,66 @@ namespace mir
 
         // in-flight frames (up to kFramesInFlight - 1 old ones) may still be
         // drawing from this buffer - see ReleaseSceneResources.
-        vkDeviceWaitIdle(mDevice->Handle());
+        mDevice->WaitIdle();
 
         return DestroyMeshAndBlas(handle);
     }
 
     bool VulkanRenderer::DestroyMeshAndBlas(MeshHandle handle)
     {
+        mMeshUploads->Forget(handle);
         if (!mResources->DestroyMesh(handle))
             return false;
         mRayTracer->DestroyMeshBlas(handle.mIndex);
         return true;
+    }
+
+    bool VulkanRenderer::ConfigureMeshStreaming(const MeshStreamingDesc &desc)
+    {
+        return mDevice->Handle() != VK_NULL_HANDLE && mMeshUploads->Configure(desc);
+    }
+
+    MeshHandle VulkanRenderer::QueueMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices,
+        const MeshUploadOptions &options)
+    {
+        return mMeshUploads->Queue(*mResources, *mRayTracer, std::move(vertices), std::move(indices), options);
+    }
+
+    MeshUploadState VulkanRenderer::MeshState(MeshHandle handle) const
+    {
+        const vk::GpuMesh *const mesh = mResources->FindMeshSlot(handle);
+        if (mesh == nullptr)
+            return MeshUploadState::Stale;
+        switch (mesh->mState)
+        {
+        case vk::GpuMeshState::Ready: return MeshUploadState::Ready;
+        case vk::GpuMeshState::Pending: return MeshUploadState::Pending;
+        case vk::GpuMeshState::Uploading: return MeshUploadState::Uploading;
+        case vk::GpuMeshState::Failed: return MeshUploadState::Failed;
+        }
+        return MeshUploadState::Stale;
+    }
+
+    bool VulkanRenderer::RetireMesh(MeshHandle handle)
+    {
+        return mMeshUploads->Retire(*mResources, *mRayTracer, handle, mFrameSync->LastIssuedValue());
+    }
+
+    uint64_t VulkanRenderer::MeshFootprint(uint32_t vertexCount, uint32_t indexCount,
+        const MeshUploadOptions &options) const
+    {
+        return mMeshUploads->Footprint(*mRayTracer, vertexCount, indexCount, options);
+    }
+
+    MeshStreamingStats VulkanRenderer::MeshStreaming() const
+    {
+        MeshStreamingStats stats;
+        mMeshUploads->FillStats(stats);
+        stats.deviceWaits = mDevice->DeviceWaits();
+        stats.queueWaits = mDevice->QueueWaits();
+        stats.skippedDraws = mSkippedDraws;
+        stats.highestGeneration = mResources->HighestMeshGeneration();
+        return stats;
     }
 
     TextureHandle VulkanRenderer::CreateTexture(const TextureDesc &desc)
@@ -204,7 +257,7 @@ namespace mir
         }
 
         // in-flight frames may still be drawing with this pipeline/set
-        vkDeviceWaitIdle(mDevice->Handle());
+        mDevice->WaitIdle();
 
         return mMaterialStore->DestroyMaterial(handle);
     }
@@ -215,8 +268,9 @@ namespace mir
             return;
 
         // in-flight frames may still use them
-        vkDeviceWaitIdle(mDevice->Handle());
+        mDevice->WaitIdle();
 
+        mMeshUploads->Clear(*mRayTracer);
         mRayTracer->DestroyBlases();
         const std::size_t meshCount = mResources->ReleaseMeshes();
         mModelDescriptors->ResetFrames();
@@ -234,7 +288,8 @@ namespace mir
         if (mDevice->Handle() == VK_NULL_HANDLE)
             return;
 
-        vkDeviceWaitIdle(mDevice->Handle());
+        mDevice->WaitIdle();
+        mMeshUploads->Collect(*mResources, *mRayTracer, mFrameSync->LastIssuedValue());
 
         // Stale handles, the built-in materials and the default textures are skipped.
         for (const MeshHandle handle : meshes)

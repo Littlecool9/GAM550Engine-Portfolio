@@ -13,6 +13,7 @@
 #include <core/platform/Surface.h>
 #include <renderer/Material.h>
 #include <renderer/Mesh.h>
+#include <renderer/MeshStreaming.h>
 #include <renderer/Texture.h>
 #include <renderer/components/Sky.h>
 
@@ -48,6 +49,7 @@ namespace mir::vk
     class RayTracer;
     class FrameCapture;
     class ImGuiOverlay;
+    class MeshUploader;
 }
 
 namespace mir
@@ -180,6 +182,20 @@ namespace mir
             std::span<const MaterialHandle> materials,
             std::span<const TextureHandle> textures);
 
+        // Asynchronous meshes (renderer/MeshStreaming.h), none of which waits on the GPU: a queued mesh is copied
+        // through the persistent staging ring at the start of a frame, within the per-frame byte budget, and is
+        // Ready once that frame completes; a retired one is freed once every frame that may use it completes.
+        // CreateMesh and DestroyMesh stay synchronous. Configure once before queueing.
+        bool ConfigureMeshStreaming(const MeshStreamingDesc &desc);
+        MeshHandle QueueMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices,
+            const MeshUploadOptions &options);
+        MeshUploadState MeshState(MeshHandle handle) const;
+        // The handle goes stale at once; false when it already was.
+        bool RetireMesh(MeshHandle handle);
+        // GPU bytes a queued mesh of this size holds, BLAS included.
+        uint64_t MeshFootprint(uint32_t vertexCount, uint32_t indexCount, const MeshUploadOptions &options) const;
+        MeshStreamingStats MeshStreaming() const;
+
         VkExtent2D SwapchainExtent() const;
 
         void RequestSwapchainRecreate();
@@ -271,5 +287,8 @@ namespace mir
 
         std::unique_ptr<vk::ImGuiOverlay> mImGuiOverlay;
 
+        std::unique_ptr<vk::MeshUploader> mMeshUploads;
+
+        uint64_t mSkippedDraws = 0;
     };
 }

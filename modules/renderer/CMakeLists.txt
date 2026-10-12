@@ -39,6 +39,7 @@ target_compile_definitions(engine_renderer PRIVATE
 target_sources(engine_renderer PRIVATE
     src/renderer/CameraMath.cpp
     src/renderer/ComponentRegistration.cpp
+    src/renderer/MeshStreaming.cpp
     src/renderer/Renderer.cpp
     src/renderer/RenderSettings.cpp
     src/renderer/Shapes.cpp
@@ -51,6 +52,7 @@ target_sources(engine_renderer PRIVATE
     src/renderer/vulkan/FrameSync.cpp
     src/renderer/vulkan/ImGuiOverlay.cpp
     src/renderer/vulkan/MaterialStore.cpp
+    src/renderer/vulkan/MeshUploader.cpp
     src/renderer/vulkan/ModelDescriptors.cpp
     src/renderer/vulkan/RayTracer.cpp
     src/renderer/vulkan/ResourceStore.cpp
