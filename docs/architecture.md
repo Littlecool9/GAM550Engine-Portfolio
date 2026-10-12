@@ -209,7 +209,7 @@ type. The flow is in [A file](#a-file).
 ```
 PollEvents                       close flag and framebuffer size refresh here
 dt = min(elapsed, mMaxDeltaSeconds)
-TerrainRuntime::Update           installs finished terrain reads (every mode); then, in Edit, its Refresh
+TerrainRuntime::Update           installs finished terrain reads, mesh builds and uploads (every mode); then, in Edit, its Refresh
 ImGuiRuntime::BeginFrame         the NewFrame trio
 Editor::DrawLayout               -> EditorActions (scene action, game to open)
 UIContext::BeginFrame/EndFrame   game UI into the background list, scene viewport or whole window
@@ -236,6 +236,9 @@ is not published as a world resource, which keeps it out of reach of scripts.
 Draws that depend on the viewport come from the `ViewDrawSources` resource:
 `RenderSystem` hands each source every viewport's camera before it builds any
 view, and app's terrain answers per view with its own level of detail (#125).
+Meshes queued with `QueueMesh` are copied at the start of the next recorded
+frame within a per-frame byte budget and become drawable once that frame has
+completed; retired ones are freed after their last frame, with no wait (#127).
 
 ### A file
 

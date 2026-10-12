@@ -256,14 +256,14 @@ viewports select (#125).
 
 ```
 Initialize     -> TerrainRuntime::Bind      streaming settings -> TerrainStreamingSettings, TerrainStreamer resources;
-                                            registers itself in the ViewDrawSources resource
-Run (any mode) -> TerrainRuntime::Update    TerrainStreamer::Update: the one install point per frame
+                                            renderer mesh streaming; registers itself in the ViewDrawSources resource
+Run (any mode) -> TerrainRuntime::Update    TerrainStreamer::Update, TerrainMeshResidency::Install: the install point
 LoadScene      -> TerrainRuntime::Load      CollectTerrainScene, ResolveTerrainWorld (Eager wait), colliders
 Run (Edit)     -> TerrainRuntime::Refresh   an edit settled 0.5 s, or a current pointer moved (polled every 1 s)
 PlayScene      -> Refresh(force)            adopt a newer complete release, then the snapshot pins it
 StopScene      -> ForgetMeshes, ReleaseSceneResources, ..., Refresh(force)
 UnloadCurrentScene -> Unload                meshes forgotten, height fields destroyed, TerrainWorld emptied
-Render         -> TerrainRuntime::Prepare   per viewport: select, SetInterest, upload what is drawn first
+Render         -> TerrainRuntime::Prepare   per viewport: select, SetInterest; then request every viewport's meshes
                   AppendViewDraws           that view's draws
                   AppendVolumeDraws         shadow casters at viewport 0's detail
 ```
@@ -272,7 +272,9 @@ Render         -> TerrainRuntime::Prepare   per viewport: select, SetInterest, u
 `terrain_streaming.local.json` beside the executable layered over it (see
 [terrain.md](terrain.md#streaming-and-cpu-residency-issue-126)). Valid settings
 become the `TerrainStreamingSettings` and `TerrainStreamer` World resources, the
-streamer with its own `TerrainWorkerPool`. Invalid settings, or missing ones in
+streamer with a `TerrainWorkerPool` that also builds meshes; the `gpu` section
+configures the renderer's mesh streaming (staging ring, bytes a frame) and a
+`TerrainMeshResidency`. Invalid settings, or missing ones in
 a scene with terrain, are one error, and no terrain loads; a game without
 terrain needs no file.
 
@@ -290,24 +292,30 @@ Drawing is per viewport. `RenderSystem` hands `Prepare` every viewport's camera
 each frame; for each one, `TerrainRuntime` keeps a `TerrainViewSelector` and a
 streamer interest (both created on the viewport's first frame and removed when
 it has no camera), updates the selection over every loaded instance, replaces
-the interest's wants with the selection's and turns the drawn units into
-`WorldDrawItem`s. A unit counts as ready once it has a mesh or its payloads are
-resident. `TerrainMeshCache` (`src/app/TerrainRender.{h,cpp}`) uploads a unit's
-mesh the first time it is drawn, from the resident LOD and normal payloads
-(through `MakeTerrainRenderMesh`) or the Region payload, with a BLAS on an RT
-device; meshes are keyed by payload, so instances of one release and all
-viewports share them. The upload is still the synchronous `CreateMesh` (#127
-replaces it). A mesh unused for `view.meshRetainSeconds` is destroyed in one
-batch, at most once per that period; a swap destroys every mesh of a release no
-longer loaded. Each draw sits at placement plus the mesh origin, added in
-double, with the diagnostic tint on the default material and a
-`translationGrid` of 1/4096 m. Each viewport's selection (units per kind and
-level, stand-ins, missing areas, wants, prefetch bytes, meshes made and
-retired, streamer residency) is logged when it changes, at most every
-`kTerrainViewLogSeconds`.
+the interest's wants with the selection's, then hands every viewport's wants to
+the `TerrainMeshResidency` (see
+[terrain.md](terrain.md#gpu-meshes-issue-127)) and turns the drawn units into
+`WorldDrawItem`s. A unit counts as ready only once its GPU mesh is usable, so
+the selector keeps a ready coarser or finer unit drawn until then. The
+residency builds a wanted unit's mesh on the worker pool from the resident LOD
+and normal payloads (through `MakeTerrainRenderMesh`) or the Region payload,
+and `TerrainGpuUploader` (`src/app/TerrainRender.{h,cpp}`) queues it with the
+renderer's `QueueMesh`, with a BLAS only while the project's `rayTracing` is on
+and the device supports it (turning it either way retires every terrain mesh,
+to be made again); meshes are keyed by payload, so instances of one release and
+all viewports share them. A mesh nobody wanted or drew for
+`gpu.meshRetainSeconds` is retired with `RetireMesh`, and a swap retires every
+mesh of a release no longer loaded; neither waits. Each draw sits at placement
+plus the mesh origin, added in double, with the diagnostic tint on the default
+material and a `translationGrid` of 1/4096 m. Each viewport's selection (units
+per kind and level, stand-ins, missing areas, wants, prefetch bytes, GPU meshes
+ready, uploading and building, held and retiring bytes, streamer residency,
+the renderer's uploaded bytes and device and queue waits) is logged when it
+changes, at most every `kTerrainViewLogSeconds`.
 
-A swap builds every new height field first, then destroys the old ones and the
-meshes of releases no longer loaded and replaces the `TerrainWorld` value;
+A swap builds every new height field first, then destroys the old ones, retires
+the meshes of releases no longer loaded (with their builds and uploads) and
+replaces the `TerrainWorld` value;
 viewports pick the new release from the next frame. A terrain whose collider
 cannot be built is dropped whole with an error, so the query never answers for
 ground nothing collides with. Each problem is logged once per loaded scene.
@@ -399,20 +407,24 @@ the other value would disagree with `App.cpp` about the class.
 
 **`NewScene`/`SaveScene`/`LoadScene` refuse while Play is running.** These can corrupt the current scene. Both `Editor` and app will opt out.
 
-**Terrain meshes do not survive `ReleaseSceneResources`.** It frees every mesh
-without bumping generations, so a kept handle would name the next scene's
-mesh. `TerrainRuntime::ForgetMeshes` (Stop) or `Unload` (scene change) runs
-before every release; the next frame uploads what the viewports draw again.
-Dropping terrain while the scene stays destroys its meshes explicitly (a
-release swap, or a mesh unused for `view.meshRetainSeconds`). Height fields
-live in the process-long `PhysicsWorld`, so `Unload` and every swap destroy them
-explicitly.
+**Terrain meshes do not survive `ReleaseSceneResources`.** It frees every mesh,
+queued and retiring ones too. `TerrainRuntime::ForgetMeshes` (Stop) or `Unload`
+(scene change) runs before every release, so the residency holds no handle
+across it (a kept one would miss, since mesh generations move on); the next
+frames upload what the viewports draw again. Dropping terrain while the scene
+stays retires its meshes with `RetireMesh` (a release swap, a change of the
+`rayTracing` setting, or a mesh nobody wanted or drew for
+`gpu.meshRetainSeconds`), freed after their last frame without a wait. Height
+fields live in the process-long `PhysicsWorld`, so `Unload` and every swap
+destroy them explicitly.
 
-**Terrain is drawn per viewport, from what is resident.** Each viewport selects
-its own units and wants their payloads; nothing is drawn that the selection did
-not pick, a unit draws once its mesh exists or its payloads are resident, and an
-area with nothing ready is left out while it loads. Only Eager instances have a
-collider until collision residency.
+**Terrain is drawn per viewport, from what is on the GPU.** Each viewport
+selects its own units and wants their payloads; nothing is drawn that the
+selection did not pick, a unit draws once its GPU mesh is usable, and an area
+with nothing ready is left out while it loads. No terrain mesh is built or
+uploaded on the frame path with a wait: builds run on the worker pool and
+uploads go through `QueueMesh` within the `gpu` budgets. Only Eager instances
+have a collider until collision residency.
 
 **Terrain changes only at an Edit frame boundary.** `TerrainRuntime::Refresh`
 runs at the top of an Edit frame, in `PlayScene` before the snapshot and at the
@@ -464,6 +476,17 @@ is tested in `terrain` (`TerrainScene.tests.cpp`) and the collider assembly in
    cheap for a large scene.
 
 ## Changed
+
+*2026-10-11* — **Terrain meshes stream to the GPU without waits (#127).** Was:
+`TerrainMeshCache` built a unit's mesh on the main thread and uploaded it with
+the synchronous `CreateMesh` (a BLAS on any RT device) the first time it was
+drawn, and destroyed unused ones with `ReleaseModelResources` (a device wait);
+a unit counted as ready once its payloads were resident. Now: a
+`TerrainMeshResidency` builds meshes on the worker pool and `TerrainGpuUploader`
+queues them with `QueueMesh` within the new `gpu` settings, a unit is ready only
+once its GPU copy is usable, a BLAS is built only while the project traces, and
+retirement (unused, release swap, ray tracing toggled) is deferred to the
+mesh's last frame. `view.meshRetainSeconds` moved to `gpu.meshRetainSeconds`.
 
 *2026-10-10* — **Terrain is drawn per viewport (#125).** Was: `TerrainRuntime`
 built every tile mesh of an Eager instance at load and published them all in

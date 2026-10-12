@@ -448,13 +448,14 @@ ships:
   "retry": { "maxAttempts": 3, "firstDelaySeconds": 0.1, "maxDelaySeconds": 2.0, "failedHoldSeconds": 10.0 },
   "residency": { "mode": "Auto", "queryLeaseSeconds": 2.0 },
   "view": { "refineErrorPixels": 1.0, "mergeErrorPixels": 0.75, "prefetchErrorPixels": 0.5,
-            "prefetchBudgetMiB": 4, "meshRetainSeconds": 2.0 } }
+            "prefetchBudgetMiB": 4 },
+  "gpu": { "budgetMiB": 128, "uploadMiBPerFrame": 8, "stagingMiB": 32, "meshRetainSeconds": 2.0 } }
 ```
 
 These are provisional development-machine values, not measured budgets; #130
 measures and replaces them. The `view` section is #125's (see the next
-section); the 16 MiB budget (256 MiB in #126) keeps TerrainCheck's 2 x 2 map
-Eager while its larger map streams by interest.
+section) and the `gpu` section #127's; the 16 MiB budget (256 MiB in #126)
+keeps TerrainCheck's 2 x 2 map Eager while its larger map streams by interest.
 
 **Stop-gap until collision residency (#128).** App's height field still covers
 a whole instance, so only an Eager release gets a collider. `ResolveTerrainWorld`
@@ -494,7 +495,7 @@ wants to the streamer through that viewport's interest.
 ```cpp
 TerrainViewSelector selector(settings.view);              // one per viewport
 const TerrainView view{{cameraPosition, cameraRelativeViewProj}, focalPixels, farOrZero};
-selector.Update(instances, view, ready);                  // ready: a mesh exists or the payloads are resident
+selector.Update(instances, view, ready);                  // ready: the unit's GPU mesh is usable (#127)
 streamer.SetInterest(interest, selector.Wants());         // Visible and Prefetch
 for (const TerrainDrawUnit &unit : selector.Draws())      // disjoint, inside the frustum
     Draw(unit);
@@ -522,8 +523,9 @@ finer geometry, so a refined Region is always descended, and a leaf is tested
 against the six clip planes with its box grown for float narrowing and the
 translation grid. A unit whose box the frustum holds is never left out.
 
-**Readiness.** A unit draws once it has a mesh or its payloads are resident.
-While a refined Region's visible children are not all ready, the Region itself
+**Readiness.** A unit draws once the caller's `ready` says so; since #127 app
+answers with "its GPU mesh is usable" (it was "a mesh exists or the payloads are
+resident"). While a refined Region's visible children are not all ready, the Region itself
 draws if it is (coarse stays until its replacement is usable); a tile draws
 another resident LOD of itself; a Region that just merged draws its ready
 children until it arrives. Where nothing is ready the area is left out while it
@@ -542,10 +544,9 @@ from the same resident data at their own detail.
 `ViewDrawSources`): `RenderSystem` hands it every viewport's camera, then asks
 for each view's draws and for shadow volumes at viewport 0's detail. A traced
 frame holds its single view's selection; more than one viewport keeps the
-whole-frame raster fallback. GPU meshes are uploaded with the synchronous
-`CreateMesh` when a unit is first drawn, shared by all viewports and instances,
-and destroyed in one batch after `view.meshRetainSeconds` unused (#127 brings
-budgeted asynchronous upload and retirement).
+whole-frame raster fallback. GPU meshes are shared by all viewports and
+instances; since #127 they are built, uploaded and retired asynchronously (see
+[GPU meshes](#gpu-meshes-issue-127)).
 
 **TerrainCheck** gains `assets/terrain/streamed-16x16.terrain.json`: 16 x 16
 tiles of 256 m at 8 m (one LOD), a level 0 Region over each quarter and one
@@ -594,6 +595,96 @@ by side draw the streamed map as four level 0 Regions and as 110 tiles, and ray
 tracing falls back to raster with its one warning; a camera flying from 3000 m
 to 700 m over it goes from two Regions to 107 tiles within the 16 MiB budget,
 retiring meshes as it goes.
+
+### GPU meshes (issue #127)
+
+A draw unit's GPU mesh is made by a `TerrainMeshResidency`
+(`terrain/TerrainMeshResidency.h`), behind a small `TerrainMeshUploader`
+interface that app implements over the renderer's asynchronous mesh queue
+(`QueueMesh`, `MeshState`, `RetireMesh`; see [renderer.md](renderer.md)). The
+terrain module still sees no renderer type.
+
+```cpp
+TerrainMeshResidency meshes(settings.gpu, workerPool, uploader);   // one per app
+meshes.Install();                                  // per frame, before any system: finished builds and uploads
+selector.Update(instances, view, [&](const TerrainDrawUnit &u) { return meshes.Ready(u.geometry); });
+meshes.Request(instances, everyViewportsWants, streamer, now);   // builds, hand-over, retirement
+if (const TerrainResidentMesh *mesh = meshes.Acquire(unit.geometry, now))
+    Draw(mesh->id, mesh->origin);                  // only GPU-usable meshes
+```
+
+**Ready means the GPU copy is usable.** A unit the viewports want (Visible or
+Prefetch, merged over every viewport) is built once its payloads are resident:
+a worker of the streamer's pool runs `MakeTerrainRenderMesh` (or copies a
+Region payload) on the job's own payload pointers, `Install` takes the result,
+`Request` hands it to the uploader, and the unit is Ready only when the uploader
+reports the upload complete (the renderer: when the frame timeline passed the
+frame that copied it). Until then the selector keeps drawing a ready coarser or
+finer unit, so a refined Region stays on screen until all of its children are
+usable, and a Region replaced by its 256 tiles no longer costs a frame.
+
+**Budgets from data.** `gpu.uploadBytesPerFrame` paces both ends: builds start
+while building and built bytes stay within it (one always may), built meshes go
+to the uploader while its queued bytes are below it, and the renderer records at
+most that many bytes a frame (vertex and index bytes plus the BLAS; the first
+mesh of a frame goes alone if larger), copied through a persistent ring of
+`gpu.stagingBytes`. `gpu.budgetBytes` caps what terrain holds on the GPU,
+counting meshes being built or uploaded and retired meshes the GPU may still
+read: a mesh that does not fit waits, and only a Visible one makes room, by
+retiring unwanted meshes and then Prefetch ones, never a Visible one. A mesh
+nobody wanted or drew for `gpu.meshRetainSeconds` is retired. Retirement never
+waits: the renderer frees the buffers and BLAS once every frame that may still
+read them has completed.
+
+**Release switches and scene exit.** Mesh keys carry the release, so a swap's
+`RetireReleases` drops the old release's builds, retires its uploads (a
+pending one is canceled) and nothing of it becomes ready afterwards; the next
+release's units are other keys. A scene change or Stop forgets every mesh before
+`ReleaseSceneResources`, which waits once and frees them with everything else;
+mesh handle generations move on there, so no kept handle can name a new mesh.
+
+**Ray tracing.** Terrain meshes get a BLAS only while the project's
+`rendering.rayTracing` is on and the device supports it; turning it either way
+retires every terrain mesh to be made again. A raster-only project builds no
+terrain BLAS on any device. The BLAS is built in the same frame as the copies,
+all of a frame's builds in one call, inside the frame budget.
+
+**Measurements** (`TerrainRenderProbe --selection`, Release, RTX 3070 Laptop,
+1280 x 720, 60 Hz; the #124 prototype map streamed by interest with
+TerrainCheck's `view` and `gpu` values, a 512 MiB CPU and a 1024 MiB GPU budget
+unless noted; development baselines, not budgets). Frame times leave out the
+capture frames. No flight frame called `vkDeviceWaitIdle` or `vkQueueWaitIdle`,
+and no draw met a stale or unfinished mesh:
+
+| Flight | Path | Frame P50 / P95 / P99 / max | `Request` P99 / max | Peak held (+ retiring) | BLAS | Frames with missing areas | Settling |
+|---|---|---|---|---|---:|---|---|
+| approach (as in #125) | raster | 5.6 / 11.6 / 13.0 / 15.5 ms | 0.56 / 2.26 ms | 81.4 MiB | 0 | first 6 | |
+| approach | RT | 7.6 / 11.7 / 14.9 / 25.2 ms | 0.87 / 1.72 ms | 207.7 (+2.6) MiB | 1265 | first 6 | |
+| approach, 64 MiB CPU | raster | 5.6 / 11.5 / 12.4 / 35.8 ms | 0.58 / 2.56 ms | 81.4 MiB | 0 | first 6 | |
+| approach, 48 MiB GPU | raster | 5.5 / 9.0 / 11.1 / 13.8 ms | 0.49 / 2.57 ms | 48.0 MiB | 0 | first 6 | 612 evicted, 470 waits |
+| straight, 250 m/s at 300 m | raster | 8.8 / 12.6 / 14.9 / 20.5 ms | 0.65 / 3.05 ms | 76.4 MiB | 0 | first 11 | |
+| straight | RT | 9.0 / 13.5 / 17.2 / 34.1 ms | 0.91 / 1.64 ms | 195.8 (+2.6) MiB | 1020 | first 11 | |
+| turns, 180 degrees/s at 150 m | raster | 7.6 / 10.6 / 12.9 / 15.0 ms | 0.90 / 2.53 ms | 137.4 MiB | 0 | 251 after settling | first view in 103 frames |
+| turns | RT | 8.9 / 13.8 / 17.1 / 31.4 ms | 1.09 / 1.54 ms | 335.5 (+1.5) MiB | 2884 | 202 after settling | 106 frames |
+| turns, 64 MiB prefetch | raster | 8.6 / 11.7 / 13.6 / 16.3 ms | 2.15 / 4.11 ms | 172.0 MiB | 0 | 39 after settling | 95 frames |
+| teleport to 4 corners every 2.5 s | raster | 9.4 / 12.1 / 14.5 / 17.5 ms | 2.92 / 4.34 ms | 110.3 MiB | 0 | 40 | 13 to 33 frames a jump |
+| teleport | RT | 9.1 / 15.2 / 17.0 / 25.6 ms | 1.59 / 2.07 ms | 282.4 (+1.5) MiB | 3720 | 94 | 29 to 55 frames |
+| scene unload midway | raster | 7.7 / 9.5 / 11.7 / 13.4 ms | 1.48 / 3.67 ms | 71.9 MiB | 0 | 14 | 15 frames after the unload |
+| scene unload | RT | 8.3 / 13.8 / 16.3 / 18.7 ms | 1.03 / 1.72 ms | 180.8 (+1.5) MiB | 1055 | 14 | 33 frames |
+
+The approach flight is the one #125 measured with synchronous uploads (frame
+P99 16.0 ms, max 538 ms): the frame that replaces a level 0 Region by its 256
+tiles (258 units changed) now takes 11.9 ms, and the slowest single mesh build
+(about 21 ms for a 1 m tile) runs on a worker. Under the 48 MiB GPU budget held
+plus retiring bytes never passed 48.0 MiB. Missing areas in the approach and
+straight flights are only the first frames after starting from nothing. While
+turning half a turn a second, ground that comes into view was not wanted
+before (TerrainCheck's 4 MiB prefetch budget drops thousands of units behind
+the camera), so it appears a few frames late (at most about 50 units missing);
+with 64 MiB of prefetch the frames with missing areas drop from 251 to 39 (at
+most 14 units). The scene unload frees everything at once (one device wait in
+`ReleaseSceneResources`, outside the measured frames); the highest mesh
+generation then keeps counting.
 
 ### Tile meshes
 
@@ -847,8 +938,10 @@ tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-
 | `TerrainStreamer` | `terrain/TerrainStreamer.h` | asynchronous payload reads and CPU residency: `Add` (residency mode), `Find`, `ModeOf`, `AddInterest`/`SetInterest`/`RemoveInterest`, `Update` (the per-frame install point), `WaitForEager`, `WaitForCompletion`, `Status`, `Heights`/`Lod`/`Normals`/`Region`, `RetryFailed`, `Stats` |
 | `TerrainPayloadKey`, `TerrainPayloadWant`, `TerrainDemand`, `TerrainPayloadState`, `TerrainPayloadStatus`, `TerrainStreamingStats` | `terrain/TerrainStreamer.h` | the key (asset, release, kind, level, layer, tile or Region), a want with demand and rank, the states, budget and counters; `TerrainPayloadKeyOf`, `TerrainPayloadFootprint`, `DescribeTerrainPayloadKey` |
 | `TerrainExecutor`, `TerrainWorkerPool`, `TerrainManualExecutor` | `terrain/TerrainExecutor.h` | where background jobs run: a pool of `std::jthread`s, or a queue a test runs by hand |
-| `TerrainStreamingSettings`, `TerrainResidencyMode`, `LoadTerrainStreamingSettings`, `ValidateTerrainStreamingSettings` | `terrain/TerrainStreamingSettings.h` | the CPU budget, IO, retry, residency and per-viewport detail (`view`) settings with no code defaults; the game file plus the machine-local override, every problem by path and file |
+| `TerrainStreamingSettings`, `TerrainResidencyMode`, `LoadTerrainStreamingSettings`, `ValidateTerrainStreamingSettings` | `terrain/TerrainStreamingSettings.h` | the CPU budget, IO, retry, residency, per-viewport detail (`view`) and GPU mesh (`gpu`) settings with no code defaults; the game file plus the machine-local override, every problem by path and file |
 | `TerrainViewSelector` | `terrain/TerrainViewSelection.h` | one viewport's selection over placed releases: `Update` (detail in every direction with hysteresis, frustum draws, wants), `Draws`, `Collect` (the same detail in another volume), `Wants`, `Stats` |
+| `TerrainMeshResidency` | `terrain/TerrainMeshResidency.h` | GPU meshes of draw units within the `gpu` budgets: `Install` (finished builds and uploads), `Request` (every viewport's wants: builds, hand-over, retirement), `State`, `Ready`, `Acquire`, `RetireReleases`, `RetireAll`, `Forget`, `TakeFailures`, `Stats` |
+| `TerrainMeshUploader`, `TerrainMeshData`, `TerrainGpuMeshId`, `TerrainGpuMeshState`, `TerrainMeshState`, `TerrainResidentMesh`, `TerrainMeshStats` | `terrain/TerrainMeshResidency.h` | the renderer side a caller implements (footprint, queued bytes, upload, state, retire, retiring bytes); a built mesh in its own frame; an upload's id and state; where a unit's mesh is; a ready mesh's id and origin; held, retiring and peak bytes and counters |
 | `TerrainView`, `TerrainCullVolume`, `TerrainSelectionInstance`, `TerrainDrawUnit`, `TerrainUnitKind`, `TerrainUnitReady`, `TerrainViewStats` | `terrain/TerrainViewSelection.h` | the eye, camera-relative clip volume, focal length in pixels and far distance; a release at a placement; a tile at a LOD or a Region with its payload keys, distance and projected error; whether a unit can be drawn; drawn, stand-in, missing, wanted and prefetch counts |
 | `TerrainTileMesh`, `TerrainMeshVertex` | `terrain/TerrainTileMesh.h` | one tile's raster mesh: release, surface version, tile, double origin, sample range, float vertices (position, normal), `TriangulateCell` indices, bounds |
 | `BuildTerrainTileMesh`, `TerrainMeshResult`, `TerrainMeshStatus` | `terrain/TerrainTileMesh.h` | builds it from a `TileSampleLookup`; `MissingTile`, `MissingNeighbour`, `InvalidSamples`, `InvalidInput` instead of a mesh |
@@ -1153,9 +1246,26 @@ without reading the release again. So a broken publish is reported once, not on
 every poll, and a release stays the same object (and the same meshes and
 collider) until `current` moves to one that loads.
 
+**A unit is drawable only once its GPU copy is.** `TerrainMeshResidency::Ready`
+is true only after the uploader reported the upload complete, and results land
+only in `Install`, once per frame; a worker runs only the mesh build, from the
+job's own payload pointers and the immutable index. Meshes are keyed by their
+geometry payload, so a release key is part of every mesh's name: retiring a
+release (`RetireReleases`) drops its builds and retires its uploads, and nothing
+of it can become ready afterwards.
+
+**GPU bytes stay within `gpu.budgetBytes`, retiring ones included.** Building,
+built, uploading and ready meshes plus the uploader's retiring bytes never pass
+it: a mesh that does not fit waits, and only a Visible one may make room, by
+retiring unwanted meshes (least recently touched first) and then Prefetch ones
+(farthest first); a Visible mesh is never retired for room. Builds start Visible
+first, then Prefetch, by rank, while building and built bytes stay within
+`gpu.uploadBytesPerFrame` (one always may), and built meshes go to the uploader
+while its queued bytes are below the same budget.
+
 ## State
 
-*As of 2026-10-10.* Format 2 supports sparse layers, independent payload
+*As of 2026-10-11.* Format 2 supports sparse layers, independent payload
 ranges and unique per-tile source records (#145). Recipes and runtime meshes
 still use one layer until the remaining P2 issues are integrated. See
 [the P2 summary](../terrain-p2-summary.md) for validation and full-map measurements.
@@ -1167,8 +1277,10 @@ in-memory encoder, the range reader and the resident height query work. Since
 queries' payload requests and keeps decoded payloads within a CPU budget from
 the game's `terrain_streaming.json`; the engine resolves every release through
 it. Since #125 every viewport selects its own tiles and Regions
-(`TerrainViewSelector`) and wants their payloads; app draws what is resident and
-uploads meshes when first drawn. App still needs a whole release resident
+(`TerrainViewSelector`) and wants their payloads; since #127 a
+`TerrainMeshResidency` builds their meshes on the worker pool and app uploads
+them through the renderer's asynchronous mesh queue within the `gpu` budgets,
+drawing a unit only once its GPU copy is usable. App still needs a whole release resident
 (Eager) for its height field and waits for it at load, a stop-gap until #128
 adds collision residency; an Interest release is drawn but has no collider.
 Scenes load terrain (#118): app's private `TerrainRuntime` resolves every
@@ -1246,7 +1358,16 @@ first; Visible and budgeted Prefetch wants including finer units; the far
 plane; another volume at the view's detail; two viewports at different detail
 sharing one read per payload through a streamer; a budgeted streamed flight
 covered at most once every frame and fully once settled; a far placement
-selecting what one near the origin does), `TerrainTileMesh` (a vertex on every sample,
+selecting what one near the origin does), `TerrainMeshResidency` (with a fake
+uploader and a manual executor: ready only once the upload completed, Visible
+before Prefetch and nearest first within a frame's upload, hand-over only while
+the upload queue has room, room made by retiring unwanted then Prefetch meshes
+and never a Visible one, retiring bytes holding a mesh back, retirement after
+`meshRetainSeconds` unwanted and undrawn, canceled builds and a late result
+never uploaded, a release switch whose old builds and uploads never become
+ready, a failed upload reported once and not rebuilt, `Forget`, and a refined
+Region drawn by the real selector until every child's GPU mesh is ready),
+`TerrainTileMesh` (a vertex on every sample,
 `TriangulateCell` order and winding, 20000 random points per block against
 `EvaluateSurface`, shared edges and normals at 4 m near and far and at 0.1 m,
 central-difference normals and missing neighbours, bounds, a clipped boundary
@@ -1265,12 +1386,12 @@ resolve goes through a streamer on a worker pool, Eager).
 
 ## Backlog
 
-1. Streaming after #125: GPU upload and retirement inside its own budget
-   (#127; today a refined level 0 Region uploads its 256 tiles in one frame
-   with the synchronous `CreateMesh`, and readiness should wait for the GPU
-   copy), collision interests and per-body protection that replace the Eager
-   wait at load (#128), release switches verified off the main thread (#129)
-   and measured budgets and thresholds with telemetry (#130). `Update` walks
+1. Streaming after #127: collision interests and per-body protection that
+   replace the Eager wait at load (#128; Jolt shape builds can go to the same
+   worker pool), release switches verified off the main thread (#129) and
+   measured budgets and thresholds with telemetry (#130), including the `gpu`
+   values and the prefetch budget, which decides how much ground behind a
+   turning camera is already on the GPU. `Update` walks
    every entry each frame, so its cost grows with the number of known payloads;
    the streaming measurement read through a warm file cache. The selection
    walks every unit it chooses each frame (about a millisecond on the prototype
@@ -1309,6 +1430,17 @@ resolve goes through a streamer on a worker pool, Eager).
     out of P3).
 
 ## Changed
+
+*2026-10-11* — **GPU meshes within budgets and without waits (#127).** Was: app
+built a drawn unit's mesh on the main thread and uploaded it with the
+synchronous `CreateMesh` (a BLAS on any RT device), counted a unit ready once its
+payloads were resident, and destroyed unused meshes with a device wait. Now:
+`TerrainMeshResidency` builds meshes on the worker pool, hands them to the
+renderer's asynchronous queue within the new `gpu` settings, counts a unit ready
+only once its GPU copy is usable, and retires meshes after their last frame;
+terrain gets a BLAS only while the project traces. `view.meshRetainSeconds`
+moved to `gpu.meshRetainSeconds`; `BuildTestLods` moved to the shared test
+support.
 
 *2026-10-10* — **Per-viewport tile and Region selection (#125).** Was: app drew
 every tile of an Eager release at its source LOD in every view, Regions were

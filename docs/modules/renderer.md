@@ -29,6 +29,7 @@ subsystem holds a pointer to the facade or to another subsystem.
 | `RayTracer` | a BLAS per mesh slot, a TLAS per frame, the RT pipeline, SBT and output images |
 | `FrameCapture` | the `CaptureNextFrame` buffer and the PNG it writes |
 | `ImGuiOverlay` | ImGui's Vulkan backend and the draw data it overlays |
+| `MeshUploader` | the persistent staging ring, queued mesh uploads and their BLAS builds, and retired GPU objects until their last frame (#127) |
 
 The facade's own code is `VulkanRenderer.cpp`, which holds initialize, shutdown,
 the resource calls and the setters, and `VulkanRendererFrame.cpp`, which holds the
@@ -37,7 +38,9 @@ pass reads six subsystems at once.
 
 A frame starts in `BeginFrame`. It recreates the swapchain when the window
 changed size, or when `RequestSwapchainRecreate` asked for it, then `FrameSync::Begin` waits for the frame slot, acquires an image
-and begins the command buffer. `DrawFrame` records the shadow passes, then each
+and begins the command buffer. `MeshUploader` then marks the queued meshes of
+completed frames Ready, frees retired objects whose last frame completed, and
+records this frame's mesh copies and BLAS builds. `DrawFrame` records the shadow passes, then each
 view, then the ImGui overlay and any capture, and `FrameSync::End` submits and
 presents. `TraceFrame` goes through the same `BeginFrame` and `End`, with
 `RayTracer::Record` and a blit to the swapchain image in between.
@@ -98,6 +101,14 @@ bool DestroyMaterial(MaterialHandle handle); // same contract; always false on t
 MaterialHandle ErrorMaterial() const;        // solid magenta, for a caller whose CreateMaterial failed
 void ReleaseSceneResources();                // every mesh, material and texture but the built-ins
 
+// Asynchronous meshes (#127): no call waits on the GPU
+bool ConfigureMeshStreaming(const MeshStreamingDesc &desc);  // staging ring and per-frame bytes, from the caller's data
+MeshHandle QueueMesh(std::vector<Vertex> vertices, std::vector<uint32_t> indices, const MeshUploadOptions &options);
+MeshUploadState MeshState(MeshHandle handle) const;          // Stale, Pending, Uploading, Ready or Failed
+bool RetireMesh(MeshHandle handle);                          // stale at once, freed after its last frame
+uint64_t MeshFootprint(uint32_t vertexCount, uint32_t indexCount, const MeshUploadOptions &options) const;
+MeshStreamingStats MeshStreaming() const;                    // queue, uploads, retirement, idle waits, skipped draws
+
 void DrawFrame(std::span<const RenderView> views);
 void TraceFrame(std::span<const RenderView> views);  // opt-in RT path alongside DrawFrame - see Rules
 bool RayTracingSupported() const;                     // detected once at device selection, never a rejection reason
@@ -126,6 +137,8 @@ void SetExternalCamera(ViewportId id, const glm::mat4 &cameraWorld, const Camera
 | Type | Header | Role |
 |---|---|---|
 | `Vertex`, `MeshHandle` | `renderer/Mesh.h` | `{pos, color, normal}`; a `{index, generation}` handle |
+| `MeshStreamingDesc`, `MeshUploadOptions`, `MeshUploadState`, `MeshStreamingStats` | `renderer/MeshStreaming.h` | the staging ring and per-frame byte budget; whether a queued mesh gets a BLAS; where a queued mesh is; the counters (bytes queued, uploading and retiring, idle waits, skipped draws, highest generation) |
+| `StagingRing`, `MeshUploadQueue`, `FrameRetireList` | `renderer/MeshStreaming.h` | the CPU bookkeeping behind them, tested without a device: ring space by frame, admission under the frame budget, objects kept until their last frame completes |
 | `ViewDrawSources`, `IViewDrawSource`, `ViewCamera` | `renderer/ViewDrawSource.h` | World resource of producers whose draws depend on the viewport (app's terrain): `Prepare` with every viewport's camera, then `AppendViewDraws` per view and `AppendVolumeDraws` per shadow volume at a view's detail |
 | `TextureDesc`, `TextureHandle` | `renderer/Texture.h` | `{width, height, pixels, srgb}`, tightly-packed RGBA8; `kNullTexture` falls back to a default in `CreateMaterial` |
 | `MaterialDesc`, `MaterialHandle` | `renderer/Material.h` | `{shaderName, cullMode, polygonMode, baseColorTexture, normalTexture}`; `kNullMaterial` means the default |
@@ -190,16 +203,44 @@ BLAS. The scratch buffer outlives `BuildBLAS` because the command buffer has
 not been submitted when `BuildBLAS` returns, so `BuildMeshBlas` frees it after
 the submit and wait.
 
+**A queued mesh never waits: it uploads at the start of a frame and is Ready
+once that frame completes (#127).** `QueueMesh` reserves a slot (state
+Pending, no buffers) and keeps the vertex and index vectors. At the start of
+each recorded frame, after `FrameSync::Begin`'s wait, `MeshUploader` takes
+queued meshes in order while they fit `MeshStreamingDesc::frameBytes` (vertex
+and index bytes plus the acceleration structure, the first mesh of a frame
+even past it) and the persistent staging ring, creates their buffers, copies
+through the ring (a mesh larger than the ring gets a staging buffer of its
+own), builds a BLAS when `MeshUploadOptions::rayTracing` asks and the device
+supports it (all of the frame's builds in one call after one copy-to-build
+barrier, on one shared scratch buffer, `RayTracer::RecordMeshBlases`), and ends
+with one barrier so later commands on the one queue read the copies and the
+BLAS. The mesh is Uploading with that frame's
+timeline value and becomes Ready when a later frame start sees the timeline
+past it; ring space comes back at the same time. `FindMesh` returns Ready
+meshes only, so draws, shadow passes and the TLAS skip anything else, and a
+skipped non-null handle counts in `MeshStreamingStats::skippedDraws`.
+`RetireMesh` takes the buffers and BLAS out of the slot and moves its
+generation on at once; the objects are freed when the timeline passes the
+last frame issued at the time of the call (`FrameSync::LastIssuedValue`), and
+a mesh still Pending is dropped from the queue. `MeshStreamingStats` counts
+queued, uploading and retiring bytes, and every `vkDeviceWaitIdle` and
+`vkQueueWaitIdle`, which all go through `Device::WaitIdle` and
+`WaitQueueIdle`. `CreateMesh` and `DestroyMesh` keep their synchronous
+behaviour, BLAS included.
+
 **Terrain tiles are traced like any other mesh.** Each drawn unit (a tile at
 a LOD or a Region) gets its own BLAS and one TLAS instance per frame, so the
 project's `rayTracing` setting alone (with device support and a single view)
 picks the path, terrain or not; a traced frame holds that single view's
-terrain selection.
+terrain selection. Terrain meshes are queued with a BLAS only while the
+project's `rayTracing` is on, so a raster-only project builds none, even on a
+device that could.
 `RayTracer::kMaxInstances` is 16384 because one 4096 m chunk is already 256 tiles. Two
 limits stay open: a tile edge is shared by two instances, and ray/instance
 intersection is not watertight across them, so a seam may leak a rare pixel
-that raster's `translationGrid` closes; and BLAS memory (not yet measured)
-counts against the terrain residency budget.
+that raster's `translationGrid` closes; BLAS bytes count against terrain's
+GPU budget (#127).
 
 **`ModelDrawItems` is one list; view draw sources answer per view.**
 `ModelSystem` rebuilds the model list every frame, and `RenderSystem` appends
@@ -438,13 +479,15 @@ it instead of null, so the failure shows as magenta rather than as white.
 **`ReleaseSceneResources` is all or nothing, and the caller vouches for the
 handles.** It waits for the device to go idle, destroys every mesh, every
 material except the default and error materials, and every texture except the
-three built-ins. The next `CreateMesh` reuses index 0. The next
+three built-ins, and drops every queued, uploading and retired mesh. The next
+`CreateMesh` reuses index 0. The next
 `CreateMaterial` reuses index 2, since the default and error materials keep 0
 and 1. The next `CreateTexture` reuses index 3, since the built-in textures
-keep 0 to 2. Mesh and texture
-generations are not bumped, so a handle kept across the call names whatever is
-created next in its slot, with no error. `App` calls it only right after
-unloading a scene, when no `MeshRenderer` is left.
+keep 0 to 2. Every mesh slot's generation moves on (#127), so a mesh handle
+kept across the call misses instead of naming the next mesh in its slot;
+texture generations are not bumped, so a texture handle kept across the call
+names whatever is created next in its slot, with no error. `App` calls it only
+right after unloading a scene, when no `MeshRenderer` is left.
 
 **`DestroyMesh`/`DestroyMaterial` free one handle at a time, unlike
 `ReleaseSceneResources`, and unlike it they *do* bump the slot's generation**
@@ -528,7 +571,11 @@ back to the World's default camera in Play.
 `Renderer.h` is still an empty abstraction placeholder, so `App` names
 `VulkanRenderer` directly.
 
-No tests. Everything here needs a device, and the module is verified by running.
+`engine_renderer_tests` covers the parts that need no device: camera math,
+render settings, view submission and the asynchronous mesh bookkeeping
+(`MeshStreaming`: staging ring, frame budget, cancellation, retirement by frame).
+Everything that needs a device is verified by the smoke tests and
+`TerrainRenderProbe`.
 
 ## Backlog
 
@@ -594,6 +641,24 @@ No tests. Everything here needs a device, and the module is verified by running.
    raster/RT, and RT inherits that gap rather than fixing it.
 
 ## Changed
+
+*2026-10-11* — **Asynchronous meshes (#127).** Was: the only way to make or
+free a mesh was `CreateMesh` (a staging buffer, a submit and a queue wait, then
+the same again for the BLAS on any RT device) and `DestroyMesh` or
+`ReleaseModelResources` (a device wait); `ReleaseSceneResources` restarted mesh
+generations. Now: `ConfigureMeshStreaming`, `QueueMesh`, `MeshState`,
+`RetireMesh`, `MeshFootprint` and `MeshStreaming` upload through a persistent
+staging ring at the start of each frame within a per-frame byte budget, build
+a BLAS only when asked, report readiness from the frame timeline and free
+retired meshes after their last frame, all without a wait (`MeshUploader`,
+`renderer/MeshStreaming.h`); `FindMesh` returns Ready meshes only; every
+device and queue wait is counted; `ReleaseSceneResources` moves every mesh
+slot's generation on; BLAS and TLAS scratch buffers are aligned to
+`minAccelerationStructureScratchOffsetAlignment` (with many small buffers
+sharing memory blocks, a plain allocation failed validation). `CreateMesh` and
+`DestroyMesh` behave as before. Because:
+streamed terrain replaced a level 0 Region by 256 tile meshes in one frame,
+each with two queue waits.
 
 *2026-10-10* — **Draws chosen per viewport (#125).** Was: terrain tile draws
 sat in a persistent `TerrainDrawItems` resource that every view and shadow pass
