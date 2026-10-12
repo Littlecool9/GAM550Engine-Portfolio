@@ -15,8 +15,10 @@
 #include <core/fs/FileIO.h>
 #include <core/log/LogHistory.h>
 #include <core/math/WorldReal.h>
+#include <renderer/MeshStreaming.h>
 #include <renderer/ViewSubmission.h>
 #include <terrain/TerrainExecutor.h>
+#include <terrain/TerrainMeshResidency.h>
 #include <terrain/TerrainRenderMesh.h>
 #include <terrain/TerrainScene.h>
 #include <terrain/TerrainStreamer.h>
@@ -32,6 +34,7 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -63,11 +66,57 @@ namespace
         return std::chrono::duration<double>(Clock::now() - since).count();
     }
 
-    struct ProbeMesh
+    // App's TerrainGpuUploader, over the probe's renderer.
+    class ProbeUploader final : public TerrainMeshUploader
     {
-        MeshHandle lit;
-        MeshHandle wire;
-        TerrainLocalPosition origin;
+    public:
+        explicit ProbeUploader(VulkanRenderer &renderer) : mRenderer(renderer) {}
+
+        MeshUploadOptions options;
+
+        uint64_t Footprint(uint32_t vertices, uint32_t indices) const override
+        {
+            return mRenderer.MeshFootprint(vertices, indices, options);
+        }
+
+        uint64_t QueuedBytes() const override { return mRenderer.MeshStreaming().pendingBytes; }
+
+        TerrainGpuMeshId Upload(TerrainMeshData &&mesh) override
+        {
+            std::vector<Vertex> vertices;
+            vertices.reserve(mesh.vertices.size());
+            for (const TerrainMeshVertex &v : mesh.vertices)
+                vertices.push_back({.pos = v.position, .color = glm::vec3(1), .normal = v.normal});
+            const MeshHandle handle = mRenderer.QueueMesh(std::move(vertices), std::move(mesh.indices), options);
+            return handle.IsNull() ? 0 : (uint64_t(handle.mGeneration) << 32) | handle.mIndex;
+        }
+
+        TerrainGpuMeshState State(TerrainGpuMeshId mesh) const override
+        {
+            switch (mRenderer.MeshState(Handle(mesh)))
+            {
+            case MeshUploadState::Ready: return TerrainGpuMeshState::Ready;
+            case MeshUploadState::Pending:
+            case MeshUploadState::Uploading: return TerrainGpuMeshState::Uploading;
+            default: return TerrainGpuMeshState::Failed;
+            }
+        }
+
+        void Retire(TerrainGpuMeshId mesh) override { mRenderer.RetireMesh(Handle(mesh)); }
+        uint64_t RetiringBytes() const override { return mRenderer.MeshStreaming().retiringBytes; }
+
+        static MeshHandle Handle(TerrainGpuMeshId mesh)
+        {
+            return MeshHandle{uint32_t(mesh & 0xffffffffu), uint32_t(mesh >> 32)};
+        }
+
+    private:
+        VulkanRenderer &mRenderer;
+    };
+
+    struct WireMesh
+    {
+        MeshHandle handle;
         size_t vertices = 0;
     };
 
@@ -193,68 +242,57 @@ nlohmann::json RunSelectionProbe(VulkanRenderer &renderer, Window &window, const
     const MaterialHandle wireMaterial = renderer.CreateMaterial(wireDesc);
     Require(!wireMaterial.IsNull(), "wire material failed");
 
-    std::unordered_map<TerrainPayloadKey, ProbeMesh> meshes;
-    size_t created = 0;
-    const TerrainUnitReady ready = [&](const TerrainDrawUnit &unit)
+    Require(renderer.ConfigureMeshStreaming({.stagingBytes = settings.gpu.stagingBytes,
+                                             .frameBytes = settings.gpu.uploadBytesPerFrame}),
+            "mesh streaming does not configure");
+    const uint64_t roomyGpuBudget = uint64_t(1024) << 20;
+    ProbeUploader uploader(renderer);
+    std::shared_ptr<TerrainWorkerPool> pool;
+    std::unique_ptr<TerrainMeshResidency> residency;
+    const auto probeStart = Clock::now();
+    const auto now = [&] { return Seconds(probeStart); };
+    const TerrainUnitReady ready = [&](const TerrainDrawUnit &unit) { return residency->Ready(unit.geometry); };
+
+    // Captures only: the wireframe, built and uploaded at once.
+    std::unordered_map<TerrainPayloadKey, WireMesh> wires;
+    const auto wireOf = [&](const TerrainDrawUnit &unit) -> MeshHandle
     {
-        if (const auto found = meshes.find(unit.geometry); found != meshes.end() && !found->second.lit.IsNull())
-            return true;
-        return streamer->Status(unit.geometry).state == TerrainPayloadState::Ready &&
-               streamer->Status(unit.normals).state == TerrainPayloadState::Ready;
-    };
-    const auto meshOf = [&](const TerrainDrawUnit &unit, bool wire) -> const ProbeMesh *
-    {
-        ProbeMesh &mesh = meshes[unit.geometry];
-        if (!mesh.lit.IsNull() && (!wire || !mesh.wire.IsNull()))
-            return &mesh;
-        std::vector<Vertex> vertices;
+        if (const auto found = wires.find(unit.geometry); found != wires.end())
+            return found->second.handle;
+        std::vector<TerrainMeshVertex> vertices;
         std::vector<uint32_t> indices;
         if (unit.kind == TerrainUnitKind::Region)
         {
             const auto region = streamer->Region(unit.geometry);
-            if (!region)
-                return mesh.lit.IsNull() ? nullptr : &mesh;
+            Require(region != nullptr, "a drawn Region is not resident");
             for (size_t i = 0; i < region->positions.size(); ++i)
-                vertices.push_back({.pos = region->positions[i], .color = glm::vec3(1), .normal = region->normals[i]});
+                vertices.push_back({region->positions[i], region->normals[i]});
             indices = region->indices;
-            mesh.origin = region->origin;
         }
         else
         {
             const auto lod = streamer->Lod(unit.geometry);
             const auto normals = streamer->Normals(unit.normals);
-            if (!lod || !normals)
-                return mesh.lit.IsNull() ? nullptr : &mesh;
+            Require(lod && normals, "a drawn tile is not resident");
             auto built = MakeTerrainRenderMesh(index, *lod, *normals);
             Require(bool(built), built.error.message);
-            for (const TerrainMeshVertex &v : built.value->vertices)
-                vertices.push_back({.pos = v.position, .color = glm::vec3(1), .normal = v.normal});
+            vertices = built.value->vertices;
             indices = built.value->indices;
-            mesh.origin = built.value->origin;
         }
-        if (mesh.lit.IsNull())
+        std::vector<Vertex> expanded;
+        std::vector<uint32_t> sequence;
+        for (size_t i = 0; i < indices.size(); ++i)
         {
-            mesh.lit = renderer.CreateMesh(vertices, indices);
-            Require(!mesh.lit.IsNull(), "terrain upload failed");
-            mesh.vertices = vertices.size();
-            ++created;
+            const TerrainMeshVertex &source = vertices[indices[i]];
+            Vertex v{.pos = source.position, .color = glm::vec3(0), .normal = source.normal};
+            v.color[int(i % 3)] = 1;
+            sequence.push_back(uint32_t(expanded.size()));
+            expanded.push_back(v);
         }
-        if (wire)
-        {
-            std::vector<Vertex> expanded;
-            std::vector<uint32_t> sequence;
-            for (size_t i = 0; i < indices.size(); ++i)
-            {
-                Vertex v = vertices[indices[i]];
-                v.color = glm::vec3(0);
-                v.color[int(i % 3)] = 1;
-                sequence.push_back(uint32_t(expanded.size()));
-                expanded.push_back(v);
-            }
-            mesh.wire = renderer.CreateMesh(expanded, sequence);
-            Require(!mesh.wire.IsNull(), "wire upload failed");
-        }
-        return &mesh;
+        const MeshHandle wire = renderer.CreateMesh(expanded, sequence);
+        Require(!wire.IsNull(), "wire upload failed");
+        wires[unit.geometry] = {wire, expanded.size()};
+        return wire;
     };
 
     std::vector<Slot> slots;
@@ -265,26 +303,36 @@ nlohmann::json RunSelectionProbe(VulkanRenderer &renderer, Window &window, const
         return slots[i];
     };
     std::vector<std::vector<TerrainDrawUnit>> previous;
-    // Nothing resident or uploaded, under a new CPU budget.
-    const auto restart = [&](uint64_t budgetBytes)
+    // Nothing resident or uploaded, under new budgets and with or without a BLAS per mesh.
+    const auto restart = [&](uint64_t budgetBytes, uint64_t gpuBudgetBytes, bool rayTracing)
     {
+        if (residency)
+            residency->RetireAll();
         std::vector<MeshHandle> handles;
-        for (const auto &[key, mesh] : meshes)
-            for (const MeshHandle handle : {mesh.lit, mesh.wire})
-                if (!handle.IsNull())
-                    handles.push_back(handle);
+        for (const auto &[key, wire] : wires)
+            handles.push_back(wire.handle);
         if (!handles.empty())
             renderer.ReleaseModelResources(handles, {}, {});
-        meshes.clear();
+        // Empty frames until the retired meshes are freed, so a flight starts with nothing held.
+        for (int i = 0; i < 4; ++i)
+        {
+            window.PollEvents();
+            renderer.DrawFrame({});
+        }
+        wires.clear();
         slots.clear();
         previous.clear();
+        residency.reset();
         streamer.reset();
         settings.cpu.budgetBytes = budgetBytes;
-        streamer = std::make_unique<TerrainStreamer>(settings,
-                                                     std::make_shared<TerrainWorkerPool>(settings.io.workerThreads));
+        settings.gpu.budgetBytes = gpuBudgetBytes;
+        pool = std::make_shared<TerrainWorkerPool>(settings.io.workerThreads);
+        streamer = std::make_unique<TerrainStreamer>(settings, pool);
         Require(streamer->Add(release) == TerrainResidencyMode::Interest, "the probe map must stream by interest");
+        uploader.options.rayTracing = rayTracing;
+        residency = std::make_unique<TerrainMeshResidency>(settings.gpu, pool, uploader);
     };
-    restart(roomyBudget);
+    restart(roomyBudget, roomyGpuBudget, false);
 
     struct FrameResult
     {
@@ -293,19 +341,38 @@ nlohmann::json RunSelectionProbe(VulkanRenderer &renderer, Window &window, const
         size_t background = 0;
         size_t hits = 0;
     };
-    // One frame: streamer install, per-view selection and wants, draw.
+    const auto vertexCount = [&](const TerrainDrawUnit &unit) -> size_t
+    {
+        const TerrainTileRecord *record =
+            unit.kind == TerrainUnitKind::Region
+                ? index.FindRegion({unit.geometry.level, unit.geometry.coord.x, unit.geometry.coord.z})
+                : index.Find(unit.geometry.coord, unit.geometry.layer, TerrainPayloadKind::LodHeight, unit.geometry.level);
+        return record ? record->vertexCount : 0;
+    };
+
+    // One frame: streamer and mesh installs, per-view selection and wants, mesh requests, draw.
     const auto frame = [&](const std::vector<Eye> &eyes, Look look, const std::optional<std::filesystem::path> &capture,
                            bool trace) -> FrameResult
     {
         const auto frameStart = Clock::now();
         streamer->Update();
+        residency->Install();
         const double installSeconds = Seconds(frameStart);
+        const MeshStreamingStats uploadsBefore = renderer.MeshStreaming();
+        const TerrainMeshStats meshesBefore = residency->Stats();
         FrameResult result;
         std::vector<std::vector<DrawItem>> items(eyes.size());
         std::vector<RenderView> views;
         previous.resize(std::max(previous.size(), eyes.size()));
-        const size_t createdBefore = created;
-        double selectSeconds = 0.0, uploadSeconds = 0.0;
+        struct Pass
+        {
+            WorldPosition eye;
+            glm::mat4 viewProj{1.0f};
+            Camera lens;
+        };
+        std::vector<Pass> passes;
+        std::vector<TerrainPayloadWant> wants;
+        double selectSeconds = 0.0;
         for (size_t i = 0; i < eyes.size(); ++i)
         {
             const Eye &e = eyes[i];
@@ -330,25 +397,35 @@ nlohmann::json RunSelectionProbe(VulkanRenderer &renderer, Window &window, const
             const auto selectStart = Clock::now();
             s.selector->Update({&instance, 1}, view, ready);
             streamer->SetInterest(s.interest, s.selector->Wants());
+            wants.insert(wants.end(), s.selector->Wants().begin(), s.selector->Wants().end());
             selectSeconds += Seconds(selectStart);
+            passes.push_back({eye, viewProj, lens});
+        }
+        residency->Request({&instance, 1}, wants, *streamer, now());
+        const double requestSeconds = residency->Stats().lastRequestSeconds;
 
+        for (size_t i = 0; i < eyes.size(); ++i)
+        {
+            const Eye &e = eyes[i];
+            Slot &s = slots[i];
+            const WorldPosition eye = passes[i].eye;
+            const glm::mat4 viewProj = passes[i].viewProj;
+            const Camera lens = passes[i].lens;
             std::vector<WorldDrawItem> world;
             size_t vertices = 0;
             double worstError = 0.0;
             for (const TerrainDrawUnit &unit : s.selector->Draws())
             {
-                const auto uploadStart = Clock::now();
-                const ProbeMesh *mesh = meshOf(unit, look == Look::Wire);
-                uploadSeconds += Seconds(uploadStart);
+                const TerrainResidentMesh *mesh = residency->Acquire(unit.geometry, now());
                 Require(mesh != nullptr, "a ready unit has no mesh");
                 WorldDrawItem draw;
-                draw.mesh = look == Look::Wire && !mesh->wire.IsNull() ? mesh->wire : mesh->lit;
-                draw.material = look == Look::Wire && !mesh->wire.IsNull() ? wireMaterial : kNullMaterial;
+                draw.mesh = look == Look::Wire ? wireOf(unit) : ProbeUploader::Handle(mesh->id);
+                draw.material = look == Look::Wire ? wireMaterial : kNullMaterial;
                 draw.pose = WorldPose{*TryTerrainLocalToWorld(mesh->origin, placement.translation)};
                 draw.tint = look == Look::Detail ? DetailTint(unit) : glm::vec4(0.62f, 0.76f, 0.52f, 1.0f);
                 draw.translationGrid = 1.0f / 4096;
                 world.push_back(draw);
-                vertices += mesh->vertices;
+                vertices += vertexCount(unit);
                 if (unit.kind == TerrainUnitKind::Region || unit.geometry.level > 0)
                     worstError = std::max(worstError, unit.errorPixels);
             }
@@ -402,16 +479,32 @@ nlohmann::json RunSelectionProbe(VulkanRenderer &renderer, Window &window, const
             renderer.TraceFrame(views);
         else
             renderer.DrawFrame(views);
+        const MeshStreamingStats uploads = renderer.MeshStreaming();
+        const TerrainMeshStats meshes = residency->Stats();
+        const auto mib = [](uint64_t bytes) { return double(bytes) / (1 << 20); };
         for (Json &view : result.views)
         {
-            view["meshesCreated"] = created - createdBefore;
-            view["residentMiB"] = double(stream.residentBytes) / (1 << 20);
+            view["meshesBuilt"] = meshes.buildsStarted - meshesBefore.buildsStarted;
+            view["residentMiB"] = mib(stream.residentBytes);
             view["loading"] = stream.loading;
             view["readsStarted"] = stream.readsStarted;
             view["evicted"] = stream.evicted;
             view["installMs"] = installSeconds * 1000.0;
             view["selectMs"] = selectSeconds * 1000.0;
-            view["uploadMs"] = uploadSeconds * 1000.0;
+            view["requestMs"] = requestSeconds * 1000.0;
+            view["uploadMiB"] = mib(uploads.lastFrameBytes);
+            view["gpuHeldMiB"] = mib(meshes.heldBytes);
+            view["gpuPendingMiB"] = mib(uploads.pendingBytes);
+            view["gpuUploadingMiB"] = mib(uploads.uploadingBytes);
+            view["gpuRetiringMiB"] = mib(uploads.retiringBytes);
+            view["meshesReady"] = meshes.ready;
+            view["meshesInFlight"] = meshes.building + meshes.built + meshes.uploading;
+            view["meshesRetired"] = meshes.retired - meshesBefore.retired;
+            view["deviceWaits"] = uploads.deviceWaits - uploadsBefore.deviceWaits;
+            view["queueWaits"] = uploads.queueWaits - uploadsBefore.queueWaits;
+            view["skippedDraws"] = uploads.skippedDraws - uploadsBefore.skippedDraws;
+            view["highestGeneration"] = uploads.highestGeneration;
+            view["blasBuilt"] = uploads.blasBuilt - uploadsBefore.blasBuilt;
             view["frameMs"] = Seconds(frameStart) * 1000.0;
         }
         for (const auto &entry : LogHistory::Snapshot())
@@ -490,12 +583,16 @@ nlohmann::json RunSelectionProbe(VulkanRenderer &renderer, Window &window, const
     }
 
     {
+        restart(roomyBudget, roomyGpuBudget, true);
+        Json settled = settle({eyes[0]});
         const std::filesystem::path png = out / "high-altitude-rt.png";
         FrameResult result = frame({eyes[0]}, Look::Lit, png, true);
         Json capture = result.views[0];
         capture["capture"] = png.filename().string();
         capture["path"] = "rt";
+        capture["settle"] = settled;
         summary["captures"].push_back(capture);
+        restart(roomyBudget, roomyGpuBudget, false);
     }
 
     {
@@ -550,30 +647,64 @@ nlohmann::json RunSelectionProbe(VulkanRenderer &renderer, Window &window, const
         save();
     }
 
-    // From far out and high up down to a fine tile at a steady frame rate, starting with nothing resident.
-    const auto fly = [&](const std::string &name, uint64_t budgetBytes)
+    const auto percentile = [](std::vector<double> values, double p)
     {
-        restart(budgetBytes);
-        const size_t createdBefore = created;
-        const glm::dvec3 start = at(cx - 7000, 6000, cz - 7000);
-        const glm::dvec3 end = at(cx + 100, 25, cz + 100);
-        const int frames = 1800;
+        std::sort(values.begin(), values.end());
+        return values.empty() ? 0.0 : values[std::min(values.size() - 1, size_t(p * double(values.size() - 1) + 0.5))];
+    };
+    const auto spread = [&](const std::vector<double> &values)
+    {
+        return Json{{"p50", percentile(values, 0.5)}, {"p95", percentile(values, 0.95)},
+                    {"p99", percentile(values, 0.99)}, {"max", percentile(values, 1.0)}};
+    };
+
+    // Frames at a steady rate along a path, starting with nothing resident. event runs before its frame; after
+    // each mark, the frames until nothing is missing or standing in are counted.
+    struct Flight
+    {
+        std::string name;
+        int frames = 0;
+        std::function<Eye(int)> path;
+        uint64_t cpuBudget = 0;
+        uint64_t gpuBudget = 0;
+        bool rayTracing = false;
+        std::function<void(int)> event;
+        std::vector<int> marks;
+        // TerrainCheck's otherwise.
+        std::optional<uint64_t> prefetchBudget;
+    };
+    const std::optional<uint64_t> checkPrefetchBudget = settings.view.prefetchBudgetBytes;
+    const auto fly = [&](const Flight &flight)
+    {
+        settings.view.prefetchBudgetBytes = flight.prefetchBudget ? flight.prefetchBudget : checkPrefetchBudget;
+        restart(flight.cpuBudget, flight.gpuBudget, flight.rayTracing);
+        const TerrainMeshStats meshesBefore = residency->Stats();
+        const MeshStreamingStats uploadsBefore = renderer.MeshStreaming();
         size_t worstMissing = 0, framesWithHoles = 0, framesWithStandIns = 0, totalChanged = 0;
-        std::vector<double> frameMs, selectMs, uploadMs;
+        uint64_t deviceWaits = 0, queueWaits = 0, skippedDraws = 0;
+        double peakHeld = 0.0, peakRetiring = 0.0, maxUpload = 0.0;
+        std::vector<double> frameMs, selectMs, requestMs;
         Json records = Json::array();
+        Json settles = Json::array();
+        int mark = -1;
         const auto begin = Clock::now();
-        for (int i = 0; i <= frames; ++i)
+        for (int i = 0; i <= flight.frames; ++i)
         {
             const auto next = Clock::now() + kFrame;
-            const double t = double(i) / frames;
-            const double s = t * t * (3.0 - 2.0 * t);
-            Eye e{name, start + (end - start) * s, {}, 60.0};
-            e.eye.y = std::max(e.eye.y, ground(e.eye.x, e.eye.z) + 25.0);
-            const glm::dvec3 ahead = end + glm::dvec3(600.0, 0.0, 600.0);
-            e.target = glm::dvec3(ahead.x, ground(ahead.x, ahead.z), ahead.z);
-            const bool capture = i % 150 == 0;
-            const std::filesystem::path png = out / std::format("{}-{:04}.png", name, i);
-            FrameResult result = frame({e}, Look::Detail, capture ? std::optional(png) : std::nullopt, false);
+            if (flight.event)
+                flight.event(i);
+            if (std::find(flight.marks.begin(), flight.marks.end(), i) != flight.marks.end())
+            {
+                if (mark >= 0)
+                    settles.push_back({{"from", mark}, {"frames", nullptr}});
+                mark = i;
+            }
+            Eye e = flight.path(i);
+            e.name = flight.name;
+            const bool capture = !flight.rayTracing && i % 150 == 0;
+            const std::filesystem::path png = out / std::format("{}-{:04}.png", flight.name, i);
+            FrameResult result =
+                frame({e}, Look::Detail, capture ? std::optional(png) : std::nullopt, flight.rayTracing);
             Json record = result.views[0];
             record["frame"] = i;
             record["seconds"] = Seconds(begin);
@@ -586,54 +717,133 @@ nlohmann::json RunSelectionProbe(VulkanRenderer &renderer, Window &window, const
             {
                 frameMs.push_back(record["frameMs"].get<double>());
                 selectMs.push_back(record["selectMs"].get<double>());
-                uploadMs.push_back(record["uploadMs"].get<double>());
+                requestMs.push_back(record["requestMs"].get<double>());
+                deviceWaits += record["deviceWaits"].get<uint64_t>();
+                queueWaits += record["queueWaits"].get<uint64_t>();
             }
+            skippedDraws += record["skippedDraws"].get<uint64_t>();
+            peakHeld = std::max(peakHeld, record["gpuHeldMiB"].get<double>());
+            peakRetiring = std::max(peakRetiring, record["gpuRetiringMiB"].get<double>());
+            maxUpload = std::max(maxUpload, record["uploadMiB"].get<double>());
             const size_t missing = record["missing"].get<size_t>();
+            const size_t standIns = record["coarserStandIns"].get<size_t>() + record["otherStandIns"].get<size_t>();
             worstMissing = std::max(worstMissing, missing);
             framesWithHoles += missing > 0 ? 1 : 0;
-            framesWithStandIns +=
-                record["coarserStandIns"].get<size_t>() + record["otherStandIns"].get<size_t>() > 0 ? 1 : 0;
+            framesWithStandIns += standIns > 0 ? 1 : 0;
             totalChanged += record["unitsChanged"].get<size_t>();
+            if (mark >= 0 && missing == 0 && standIns == 0)
+            {
+                settles.push_back({{"from", mark}, {"frames", i - mark}});
+                mark = -1;
+            }
             records.push_back(record);
             std::this_thread::sleep_until(next);
         }
-        const auto percentile = [](std::vector<double> values, double p)
-        {
-            std::sort(values.begin(), values.end());
-            return values.empty() ? 0.0 : values[std::min(values.size() - 1, size_t(p * double(values.size() - 1) + 0.5))];
-        };
-        const auto spread = [&](const std::vector<double> &values)
-        {
-            return Json{{"p50", percentile(values, 0.5)}, {"p95", percentile(values, 0.95)},
-                        {"p99", percentile(values, 0.99)}, {"max", percentile(values, 1.0)}};
-        };
+        if (mark >= 0)
+            settles.push_back({{"from", mark}, {"frames", nullptr}});
         const TerrainStreamingStats stats = streamer->Stats();
-        summary[name] = {{"cpuBudgetMiB", double(budgetBytes) / (1 << 20)},
-                         {"frames", frames + 1},
-                         {"seconds", Seconds(begin)},
-                         {"framesWithMissingAreas", framesWithHoles},
-                         {"worstMissingAreas", worstMissing},
-                         {"framesWithStandIns", framesWithStandIns},
-                         {"unitsChangedPerFrame", double(totalChanged) / (frames + 1)},
-                         {"meshesCreated", created - createdBefore},
-                         {"readsStarted", stats.readsStarted},
-                         {"evicted", stats.evicted},
-                         {"peakMiB", double(stats.peakBytes) / (1 << 20)},
-                         {"frameMs", spread(frameMs)},
-                         {"selectMs", spread(selectMs)},
-                         {"uploadMs", spread(uploadMs)},
-                         {"records", records}};
-        std::cout << "Flew " << name << '\n';
+        const TerrainMeshStats meshes = residency->Stats();
+        const MeshStreamingStats uploads = renderer.MeshStreaming();
+        summary[flight.name] = {{"cpuBudgetMiB", double(flight.cpuBudget) / (1 << 20)},
+                                {"gpuBudgetMiB", double(flight.gpuBudget) / (1 << 20)},
+                                {"prefetchBudgetMiB", double(*settings.view.prefetchBudgetBytes) / (1 << 20)},
+                                {"uploadMiBPerFrame", double(settings.gpu.uploadBytesPerFrame) / (1 << 20)},
+                                {"rayTracing", flight.rayTracing},
+                                {"frames", flight.frames + 1},
+                                {"seconds", Seconds(begin)},
+                                {"framesWithMissingAreas", framesWithHoles},
+                                {"worstMissingAreas", worstMissing},
+                                {"framesWithStandIns", framesWithStandIns},
+                                {"unitsChangedPerFrame", double(totalChanged) / (flight.frames + 1)},
+                                {"meshesBuilt", meshes.buildsStarted - meshesBefore.buildsStarted},
+                                {"meshesRetired", meshes.retired - meshesBefore.retired},
+                                {"meshesEvicted", meshes.evicted - meshesBefore.evicted},
+                                {"budgetWaits", meshes.budgetWaits - meshesBefore.budgetWaits},
+                                {"maxBuildMs", meshes.maxBuildSeconds * 1000.0},
+                                {"uploadedMiB", double(uploads.uploadedBytes - uploadsBefore.uploadedBytes) / (1 << 20)},
+                                {"maxUploadMiBPerFrame", maxUpload},
+                                {"blasBuilt", uploads.blasBuilt - uploadsBefore.blasBuilt},
+                                {"peakGpuHeldMiB", peakHeld},
+                                {"peakGpuRetiringMiB", peakRetiring},
+                                {"deviceWaits", deviceWaits},
+                                {"queueWaits", queueWaits},
+                                {"skippedDraws", skippedDraws},
+                                {"highestGeneration", uploads.highestGeneration},
+                                {"readsStarted", stats.readsStarted},
+                                {"evicted", stats.evicted},
+                                {"peakMiB", double(stats.peakBytes) / (1 << 20)},
+                                {"frameMs", spread(frameMs)},
+                                {"selectMs", spread(selectMs)},
+                                {"requestMs", spread(requestMs)},
+                                {"settles", settles},
+                                {"records", records}};
+        std::cout << "Flew " << flight.name << '\n';
         save();
     };
-    fly("approach", roomyBudget);
-    fly("approach-tight", tightBudget);
 
-    std::vector<MeshHandle> handles;
-    for (const auto &[key, mesh] : meshes)
-        for (const MeshHandle handle : {mesh.lit, mesh.wire})
-            if (!handle.IsNull())
-                handles.push_back(handle);
-    renderer.ReleaseModelResources(handles, {}, {});
+    // From far out and high up down to a fine tile.
+    const glm::dvec3 approachStart = at(cx - 7000, 6000, cz - 7000);
+    const glm::dvec3 approachEnd = at(cx + 100, 25, cz + 100);
+    const auto approach = [&](int i)
+    {
+        const double t = double(i) / 1800.0;
+        const double s = t * t * (3.0 - 2.0 * t);
+        Eye e{"", approachStart + (approachEnd - approachStart) * s, {}, 60.0};
+        e.eye.y = std::max(e.eye.y, ground(e.eye.x, e.eye.z) + 25.0);
+        const glm::dvec3 ahead = approachEnd + glm::dvec3(600.0, 0.0, 600.0);
+        e.target = glm::dvec3(ahead.x, ground(ahead.x, ahead.z), ahead.z);
+        return e;
+    };
+    // Low and fast in a straight line, looking ahead.
+    const auto straight = [&](int i)
+    {
+        const double x = cx - 5000.0 + 250.0 * i / 60.0;
+        return Eye{"", at(x, 300, cz - 600), at(x + 2000.0, 0, cz - 600), 60.0};
+    };
+    // Hovering, yawing half a turn a second, reversing every two seconds.
+    const auto turns = [&](int i)
+    {
+        const int leg = i / 120;
+        const double yaw = glm::radians((leg % 2 == 0 ? 3.0 : -3.0) * (i % 120) + (leg % 2 == 0 ? 0.0 : 360.0));
+        const glm::dvec3 eye = at(cx + 800, 150, cz - 400);
+        return Eye{"", eye, eye + glm::dvec3(std::cos(yaw) * 1000.0, -250.0, std::sin(yaw) * 1000.0), 60.0};
+    };
+    // A jump to another corner of the map every two and a half seconds.
+    const std::vector<glm::dvec3> corners{at(cx - 5000, 200, cz - 5000), at(cx + 5000, 120, cz + 4500),
+                                          at(cx - 4500, 400, cz + 5000), at(cx + 4800, 80, cz - 4800)};
+    const auto teleport = [&](int i)
+    {
+        const glm::dvec3 eye = corners[size_t(i / 150) % corners.size()];
+        return Eye{"", eye, at(cx, 0, cz), 60.0};
+    };
+    const std::vector<int> jumps{0, 150, 300, 450, 600, 750, 900, 1050};
+    // Halfway, the scene goes: every GPU mesh is released at once, as a scene unload does.
+    const auto unload = [&](int i)
+    {
+        if (i != 300)
+            return;
+        residency->Forget();
+        wires.clear();
+        renderer.ReleaseSceneResources();
+    };
+    const uint64_t tightGpuBudget = uint64_t(48) << 20;
+    const uint64_t roomyPrefetchBudget = uint64_t(64) << 20;
+
+    fly({"approach", 1800, approach, roomyBudget, roomyGpuBudget, false});
+    fly({"approach-rt", 1800, approach, roomyBudget, roomyGpuBudget, true});
+    fly({"approach-tight", 1800, approach, tightBudget, roomyGpuBudget, false});
+    fly({"approach-gpu-tight", 1800, approach, roomyBudget, tightGpuBudget, false});
+    fly({"straight", 1200, straight, roomyBudget, roomyGpuBudget, false});
+    fly({"straight-rt", 1200, straight, roomyBudget, roomyGpuBudget, true});
+    fly({"turns", 960, turns, roomyBudget, roomyGpuBudget, false, {}, {0}});
+    fly({"turns-rt", 960, turns, roomyBudget, roomyGpuBudget, true, {}, {0}});
+    fly({"turns-prefetch", 960, turns, roomyBudget, roomyGpuBudget, false, {}, {0}, roomyPrefetchBudget});
+    fly({"teleport", 1199, teleport, roomyBudget, roomyGpuBudget, false, {}, jumps});
+    fly({"teleport-rt", 1199, teleport, roomyBudget, roomyGpuBudget, true, {}, jumps});
+    fly({"unload", 600, straight, roomyBudget, roomyGpuBudget, false, unload, {0, 300}});
+    fly({"unload-rt", 600, straight, roomyBudget, roomyGpuBudget, true, unload, {0, 300}});
+
+    residency->RetireAll();
+    residency.reset();
     return summary;
 }
