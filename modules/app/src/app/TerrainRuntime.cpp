@@ -12,6 +12,7 @@
 #include <core/fs/Paths.h>
 #include <core/log/Log.h>
 #include <physics/PhysicsWorld.h>
+#include <renderer/RenderSettings.h>
 #include <renderer/VulkanRenderer.h>
 #include <terrain/TerrainCollision.h>
 #include <terrain/TerrainAssetPath.h>
@@ -92,16 +93,27 @@ namespace mir
 
         const TerrainStreamingSettings &settings = *load.settings;
         world.EmplaceResource<TerrainStreamingSettings>(settings);
-        world.EmplaceResource<TerrainStreamer>(settings, std::make_shared<TerrainWorkerPool>(settings.io.workerThreads));
+        mPool = std::make_shared<TerrainWorkerPool>(settings.io.workerThreads);
+        world.EmplaceResource<TerrainStreamer>(settings, mPool);
         MIR_LOG_INFO("Terrain streaming: {:.0f} MiB CPU budget, {} read workers, {} residency{}",
                      MiB(settings.cpu.budgetBytes), settings.io.workerThreads,
                      TerrainResidencyModeName(*settings.residency.mode),
                      load.localFileFound ? " (machine-local overrides applied)" : "");
-        MIR_LOG_INFO("Terrain views: refine above {} px, merge below {} px, prefetch to {} px within {:.1f} MiB, "
-                     "meshes kept {} s after their last draw",
+        MIR_LOG_INFO("Terrain views: refine above {} px, merge below {} px, prefetch to {} px within {:.1f} MiB",
                      settings.view.refineErrorPixels, settings.view.mergeErrorPixels,
-                     settings.view.prefetchErrorPixels, MiB(*settings.view.prefetchBudgetBytes),
-                     settings.view.meshRetainSeconds);
+                     settings.view.prefetchErrorPixels, MiB(*settings.view.prefetchBudgetBytes));
+
+        const TerrainStreamingSettings::Gpu &gpu = settings.gpu;
+        if (!renderer.ConfigureMeshStreaming({.stagingBytes = gpu.stagingBytes, .frameBytes = gpu.uploadBytesPerFrame}))
+        {
+            MIR_LOG_ERROR("Terrain meshes cannot stream to the GPU, so no terrain is drawn");
+            return;
+        }
+        mUploader = std::make_unique<TerrainGpuUploader>(renderer);
+        mMeshes = std::make_unique<TerrainMeshResidency>(gpu, mPool, *mUploader);
+        MIR_LOG_INFO("Terrain GPU meshes: {:.0f} MiB budget, {:.1f} MiB uploaded a frame through a {:.1f} MiB staging "
+                     "ring, kept {} s after their last want or draw",
+                     MiB(gpu.budgetBytes), MiB(gpu.uploadBytesPerFrame), MiB(gpu.stagingBytes), gpu.meshRetainSeconds);
     }
 
     TerrainStreamer *TerrainRuntime::Streamer() const
@@ -118,6 +130,8 @@ namespace mir
     {
         if (TerrainStreamer *streamer = Streamer())
             streamer->Update();
+        if (mMeshes)
+            mMeshes->Install();
     }
 
     void TerrainRuntime::Load()
@@ -167,7 +181,8 @@ namespace mir
     {
         if (!Bound())
             return;
-        mMeshes.Forget();
+        if (mMeshes)
+            mMeshes->Forget();
         for (ViewState &view : mViews)
             view.draws.clear();
     }
@@ -224,7 +239,8 @@ namespace mir
         std::vector<TerrainReleaseInfo> keep;
         for (const InstanceResources &resources : mResources)
             keep.push_back(resources.release);
-        mMeshes.RetireReleases(*mRenderer, keep);
+        if (mMeshes)
+            mMeshes->RetireReleases(keep);
         current = std::move(next);
 
         for (size_t i = 0; i < current.Instances().size(); ++i)
@@ -435,15 +451,24 @@ namespace mir
         mFrameViews.clear();
         mSelection.clear();
         TerrainStreamer *streamer = Streamer();
-        if (!Bound() || !streamer)
+        if (!Bound() || !streamer || !mMeshes)
             return;
         mFrameTime = Now();
         const TerrainStreamingSettings::View &settings = streamer->Settings().view;
-        mMeshes.Retire(*mRenderer, mFrameTime, settings.meshRetainSeconds);
+
+        // A BLAS only when the project traces; meshes made the other way are made again.
+        const RenderSettings *render = mWorld->TryResource<RenderSettings>();
+        const bool rayTracing = render && render->rayTracing && mRenderer->RayTracingSupported();
+        if (rayTracing != mUploader->RayTracing())
+        {
+            mMeshes->RetireAll();
+            mUploader->SetRayTracing(rayTracing);
+        }
 
         for (const TerrainInstanceState &instance : mWorld->Resource<TerrainWorld>().Instances())
             mSelection.push_back({instance.release->SharedHandle(), instance.placement});
-        const TerrainUnitReady ready = Ready(*streamer);
+        const TerrainUnitReady ready = Ready();
+        mFrameWants.clear();
 
         for (ViewState &view : mViews)
             view.seen = false;
@@ -470,9 +495,7 @@ namespace mir
             selection.farDistance = camera.lens.HasFarPlane() ? double(camera.lens.mFarZ) : 0.0;
             view.selector->Update(mSelection, selection, ready);
             streamer->SetInterest(view.interest, view.selector->Wants());
-            view.draws.clear();
-            AppendDraws(view.selector->Draws(), view.draws);
-            LogView(view, camera);
+            mFrameWants.insert(mFrameWants.end(), view.selector->Wants().begin(), view.selector->Wants().end());
         }
 
         for (auto it = mViews.begin(); it != mViews.end();)
@@ -485,10 +508,19 @@ namespace mir
             streamer->RemoveInterest(it->interest);
             it = mViews.erase(it);
         }
+
+        mMeshes->Request(mSelection, mFrameWants, *streamer, mFrameTime);
+        ReportMeshFailures();
         for (const ViewCamera &camera : views)
             for (size_t i = 0; i < mViews.size(); ++i)
                 if (mViews[i].viewport == camera.viewport)
+                {
+                    ViewState &view = mViews[i];
+                    view.draws.clear();
+                    AppendDraws(view.selector->Draws(), view.draws);
+                    LogView(view, camera);
                     mFrameViews.push_back(i);
+                }
     }
 
     void TerrainRuntime::AppendViewDraws(size_t view, std::vector<WorldDrawItem> &out)
@@ -502,46 +534,47 @@ namespace mir
     void TerrainRuntime::AppendVolumeDraws(size_t view, WorldPosition origin, const glm::mat4 &viewProj,
                                            std::vector<WorldDrawItem> &out)
     {
-        TerrainStreamer *streamer = Streamer();
-        if (view >= mFrameViews.size() || !streamer)
+        if (view >= mFrameViews.size() || !mMeshes)
             return;
         std::vector<TerrainDrawUnit> units;
-        mViews[mFrameViews[view]].selector->Collect({origin, viewProj}, Ready(*streamer), units);
+        mViews[mFrameViews[view]].selector->Collect({origin, viewProj}, Ready(), units);
         AppendDraws(units, out);
     }
 
-    TerrainUnitReady TerrainRuntime::Ready(const TerrainStreamer &streamer) const
+    TerrainUnitReady TerrainRuntime::Ready() const
     {
-        return [this, &streamer](const TerrainDrawUnit &unit)
-        {
-            if (mMeshes.Has(unit.geometry))
-                return true;
-            return !mMeshes.Failed(unit.geometry) &&
-                   streamer.Status(unit.geometry).state == TerrainPayloadState::Ready &&
-                   (unit.kind == TerrainUnitKind::Region ||
-                    streamer.Status(unit.normals).state == TerrainPayloadState::Ready);
-        };
+        return [this](const TerrainDrawUnit &unit) { return mMeshes->Ready(unit.geometry); };
     }
 
     void TerrainRuntime::AppendDraws(std::span<const TerrainDrawUnit> units, std::vector<WorldDrawItem> &out)
     {
-        const TerrainStreamer &streamer = *Streamer();
         const std::span<const TerrainInstanceState> instances = mWorld->Resource<TerrainWorld>().Instances();
         for (const TerrainDrawUnit &unit : units)
         {
             if (unit.instance >= instances.size())
                 continue;
-            const TerrainInstanceState &instance = instances[unit.instance];
-            std::string error;
-            const TerrainMeshCache::Mesh *mesh =
-                mMeshes.Acquire(*mRenderer, streamer, instance.release->Handle().Index(), unit, mFrameTime, error);
-            if (!error.empty())
-                Report(std::format("Terrain '{}': no mesh for {} ({}); that area is not drawn", instance.recipePath,
-                                   DescribeTerrainPayloadKey(unit.geometry), error));
+            const TerrainResidentMesh *mesh = mMeshes->Acquire(unit.geometry, mFrameTime);
             if (!mesh)
                 continue;
-            if (std::optional<WorldDrawItem> draw = MakeTerrainDraw(*mesh, instance.placement))
+            if (std::optional<WorldDrawItem> draw = MakeTerrainDraw(*mesh, instances[unit.instance].placement))
                 out.push_back(*draw);
+        }
+    }
+
+    void TerrainRuntime::ReportMeshFailures()
+    {
+        const std::span<const TerrainInstanceState> instances = mWorld->Resource<TerrainWorld>().Instances();
+        for (const auto &[key, error] : mMeshes->TakeFailures())
+        {
+            const auto instance = std::find_if(instances.begin(), instances.end(),
+                                               [&](const TerrainInstanceState &i)
+                                               {
+                                                   return i.release->Info().asset == key.asset &&
+                                                          i.release->Info().release == key.release;
+                                               });
+            Report(std::format("Terrain '{}': no mesh for {} ({}); that area is not drawn",
+                               instance == instances.end() ? std::string("?") : instance->recipePath,
+                               DescribeTerrainPayloadKey(key), error));
         }
     }
 
@@ -557,24 +590,28 @@ namespace mir
         for (const auto &[key, count] : byLevel)
             levels += std::format("{}{} {} L{}", levels.empty() ? "" : ", ", count,
                                   key.first == TerrainUnitKind::Tile ? "tile" : "Region", key.second);
+        const TerrainMeshStats m = mMeshes->Stats();
         std::string summary = std::format(
             "{} tiles and {} Regions drawn [{}] ({} coarser and {} other stand-ins, {} areas loading); wants {} "
-            "visible and {} prefetch payloads ({:.2f} MiB, {} past the prefetch budget); {} meshes cached ({} made, "
-            "{} retired)",
+            "visible and {} prefetch payloads ({:.2f} MiB, {} past the prefetch budget); GPU meshes {} ready, {} "
+            "uploading, {} building or built",
             s.drawnTiles, s.drawnRegions, levels, s.coarserFallbacks, s.otherFallbacks, s.missing, s.visibleWants,
-            s.prefetchWants, MiB(s.prefetchBytes), s.prefetchDropped, mMeshes.Size(), mMeshes.Stats().created,
-            mMeshes.Stats().retired);
+            s.prefetchWants, MiB(s.prefetchBytes), s.prefetchDropped, m.ready, m.uploading, m.building + m.built);
         if (summary == view.logged)
             return;
         view.logged = std::move(summary);
         view.loggedAt = mFrameTime;
         const TerrainStreamingStats streaming = Streamer()->Stats();
+        const MeshStreamingStats uploads = mRenderer->MeshStreaming();
         const glm::dvec3 eye(camera.pose.position.Meters());
         MIR_LOG_INFO("Terrain view {} at ({:.1f}, {:.1f}, {:.1f}), {}x{} px, {} degrees: {}; streamer {} ready, {} "
-                     "loading, {:.2f} MiB resident",
+                     "loading, {:.2f} MiB resident; GPU {:.2f} of {:.0f} MiB held, {:.2f} MiB retiring, {} built, {} "
+                     "retired, {} evicted; renderer {:.2f} MiB uploaded, {} device and {} queue waits",
                      camera.viewport, eye.x, eye.y, eye.z, camera.extent.width, camera.extent.height,
                      camera.lens.mFovYDegrees, view.logged, streaming.ready, streaming.loading,
-                     MiB(streaming.residentBytes));
+                     MiB(streaming.residentBytes), MiB(m.heldBytes), MiB(m.budgetBytes), MiB(m.retiringBytes),
+                     m.buildsStarted, m.retired, m.evicted, MiB(uploads.uploadedBytes), uploads.deviceWaits,
+                     uploads.queueWaits);
     }
 
     void TerrainRuntime::TagColliders(const TerrainSceneSpec &spec)

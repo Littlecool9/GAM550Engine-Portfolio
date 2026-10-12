@@ -32,7 +32,8 @@ namespace
         "retry": { "maxAttempts": 3, "firstDelaySeconds": 0.05, "maxDelaySeconds": 0.8, "failedHoldSeconds": 4 },
         "residency": { "mode": "Auto", "queryLeaseSeconds": 2.5 },
         "view": { "refineErrorPixels": 1.5, "mergeErrorPixels": 1.0, "prefetchErrorPixels": 0.5,
-                  "prefetchBudgetMiB": 8, "meshRetainSeconds": 3 }
+                  "prefetchBudgetMiB": 8 },
+        "gpu": { "budgetMiB": 256, "uploadMiBPerFrame": 12, "stagingMiB": 24, "meshRetainSeconds": 3 }
     })";
 
     struct Files
@@ -91,12 +92,15 @@ TEST_CASE("A complete settings file loads and the machine-local file overrides i
     CHECK(s.view.mergeErrorPixels == 1.0);
     CHECK(s.view.prefetchErrorPixels == 0.5);
     CHECK(s.view.prefetchBudgetBytes == uint64_t(8) * 1024 * 1024);
-    CHECK(s.view.meshRetainSeconds == 3.0);
+    CHECK(s.gpu.budgetBytes == uint64_t(256) * 1024 * 1024);
+    CHECK(s.gpu.uploadBytesPerFrame == uint64_t(12) * 1024 * 1024);
+    CHECK(s.gpu.stagingBytes == uint64_t(24) * 1024 * 1024);
+    CHECK(s.gpu.meshRetainSeconds == 3.0);
     CHECK(ValidateTerrainStreamingSettings(s).empty());
 
     const TerrainStreamingSettingsLoad merged =
         files.Load(kComplete, R"({ "cpu": { "budgetMiB": 1536 }, "io": { "workerThreads": 1 },
-                                   "view": { "prefetchBudgetMiB": 0 } })");
+                                   "view": { "prefetchBudgetMiB": 0 }, "gpu": { "uploadMiBPerFrame": 0.5 } })");
     REQUIRE(merged.settings);
     CHECK(merged.localFileFound);
     CHECK(merged.settings->cpu.budgetBytes == uint64_t(1536) * 1024 * 1024);
@@ -105,6 +109,8 @@ TEST_CASE("A complete settings file loads and the machine-local file overrides i
     CHECK(merged.settings->residency.mode == TerrainResidencyMode::Auto);
     CHECK(merged.settings->view.prefetchBudgetBytes == uint64_t(0));
     CHECK(merged.settings->view.refineErrorPixels == 1.5);
+    CHECK(merged.settings->gpu.uploadBytesPerFrame == uint64_t(512) * 1024);
+    CHECK(merged.settings->gpu.budgetBytes == uint64_t(256) * 1024 * 1024);
 }
 
 TEST_CASE("Missing, unknown and invalid settings are reported by path and file, and nothing loads",
@@ -128,9 +134,10 @@ TEST_CASE("Missing, unknown and invalid settings are reported by path and file, 
         CHECK_FALSE(load.settings);
         for (const char *path : {"cpu.budgetMiB is missing", "io.maxInstallsPerFrame is missing",
                                  "retry.firstDelaySeconds is missing", "retry.maxDelaySeconds is missing",
-                                 "retry.failedHoldSeconds is missing", "residency is missing", "view is missing"})
+                                 "retry.failedHoldSeconds is missing", "residency is missing", "view is missing",
+                                 "gpu is missing"})
             CHECK(Reports(load, game, path));
-        CHECK(load.problems.size() == 7);
+        CHECK(load.problems.size() == 8);
     }
     SECTION("Unknown keys and wrong types")
     {
@@ -140,7 +147,8 @@ TEST_CASE("Missing, unknown and invalid settings are reported by path and file, 
             "retry": { "maxAttempts": 3, "firstDelaySeconds": 0.05, "maxDelaySeconds": 0.8, "failedHoldSeconds": 4 },
             "residency": { "mode": "Lazy", "queryLeaseSeconds": 2.5 },
             "view": { "refineErrorPixels": 1.5, "mergeErrorPixels": 1.0, "prefetchErrorPixels": 0.5,
-                      "prefetchBudgetMiB": "some", "meshRetainSeconds": 3 },
+                      "prefetchBudgetMiB": "some" },
+            "gpu": { "budgetMiB": 256, "uploadMiBPerFrame": 12, "stagingMiB": 24, "meshRetainSeconds": 3 },
             "upload": {}
         })");
         CHECK_FALSE(load.settings);
@@ -157,14 +165,17 @@ TEST_CASE("Missing, unknown and invalid settings are reported by path and file, 
     {
         const TerrainStreamingSettingsLoad load = files.Load(
             kComplete, R"({ "cpu": { "budgetMiB": 0 }, "io": { "workerThreads": 65 }, "retry": { "maxDelaySeconds": 0.01 },
-                            "view": { "mergeErrorPixels": 2, "prefetchBudgetMiB": -1 } })");
+                            "view": { "mergeErrorPixels": 2, "prefetchBudgetMiB": -1 },
+                            "gpu": { "uploadMiBPerFrame": 0, "meshRetainSeconds": -1 } })");
         CHECK_FALSE(load.settings);
         CHECK(Reports(load, local, "cpu.budgetMiB must be positive"));
         CHECK(Reports(load, local, "io.workerThreads must be 1 to 64"));
         CHECK(Reports(load, local, "retry.maxDelaySeconds must be a finite number of seconds, at least firstDelaySeconds"));
         CHECK(Reports(load, local, "view.mergeErrorPixels must be a finite positive number of pixels, at most refineErrorPixels"));
         CHECK(Reports(load, local, "view.prefetchBudgetMiB must be zero or more"));
-        CHECK(load.problems.size() == 5);
+        CHECK(Reports(load, local, "gpu.uploadMiBPerFrame must be positive"));
+        CHECK(Reports(load, local, "gpu.meshRetainSeconds must be a finite number of seconds, zero or more"));
+        CHECK(load.problems.size() == 7);
     }
     SECTION("A file that is not a JSON object")
     {
@@ -176,12 +187,12 @@ TEST_CASE("Missing, unknown and invalid settings are reported by path and file, 
 TEST_CASE("Validation names every field of settings built in code that was left unset", "[terrain][streaming][settings]")
 {
     const std::vector<std::string> unset = ValidateTerrainStreamingSettings({});
-    CHECK(unset.size() == 14);
+    CHECK(unset.size() == 17);
     for (const char *path : {"cpu.budgetMiB", "io.workerThreads", "io.maxInstallsPerFrame", "retry.maxAttempts",
                              "retry.firstDelaySeconds", "retry.maxDelaySeconds", "retry.failedHoldSeconds",
                              "residency.mode", "residency.queryLeaseSeconds", "view.refineErrorPixels",
                              "view.mergeErrorPixels", "view.prefetchErrorPixels", "view.prefetchBudgetMiB",
-                             "view.meshRetainSeconds"})
+                             "gpu.budgetMiB", "gpu.uploadMiBPerFrame", "gpu.stagingMiB", "gpu.meshRetainSeconds"})
         CHECK(std::any_of(unset.begin(), unset.end(), [&](const std::string &p) { return p.starts_with(path); }));
 
     TerrainStreamingSettings s;
@@ -198,7 +209,10 @@ TEST_CASE("Validation names every field of settings built in code that was left 
     s.view.mergeErrorPixels = 2.0;
     s.view.prefetchErrorPixels = 2.0;
     s.view.prefetchBudgetBytes = 0;
-    s.view.meshRetainSeconds = 0.0;
+    s.gpu.budgetBytes = 1;
+    s.gpu.uploadBytesPerFrame = 1;
+    s.gpu.stagingBytes = 1;
+    s.gpu.meshRetainSeconds = 0.0;
     CHECK(ValidateTerrainStreamingSettings(s).empty());
     s.residency.queryLeaseSeconds = 0.0;
     CHECK(ValidateTerrainStreamingSettings(s) == std::vector<std::string>{

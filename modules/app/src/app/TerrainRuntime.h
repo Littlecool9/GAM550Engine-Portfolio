@@ -13,7 +13,9 @@
 #include <app/GameProject.h>
 #include <physics/PhysicsTypes.h>
 #include <renderer/ViewDrawSource.h>
+#include <terrain/TerrainExecutor.h>
 #include <terrain/TerrainIdentity.h>
+#include <terrain/TerrainMeshResidency.h>
 #include <terrain/TerrainScene.h>
 #include <terrain/TerrainStreamer.h>
 #include <terrain/TerrainViewSelection.h>
@@ -47,11 +49,12 @@ namespace mir
     public:
         ~TerrainRuntime() override;
 
-        // Loads the game's streaming settings; when they are valid, emplaces them and a TerrainStreamer, and
-        // draws terrain per viewport through the World's ViewDrawSources.
+        // Loads the game's streaming settings; when they are valid, emplaces them and a TerrainStreamer, sets up
+        // the renderer's mesh streaming and draws terrain per viewport through the World's ViewDrawSources.
         void Bind(World &world, VulkanRenderer &renderer, const GameProject &project);
 
-        // The one point per frame where finished terrain reads are installed; call before any system runs.
+        // The one point per frame where finished terrain reads, mesh builds and uploads are installed; call
+        // before any system runs.
         void Update();
 
         void Load();
@@ -106,9 +109,10 @@ namespace mir
         bool MoveCollider(InstanceResources &resources, const TerrainInstanceState &instance);
         void TagColliders(const TerrainSceneSpec &spec);
         void DestroyCollider(BodyHandle body);
-        // A unit draws once it has a mesh, or its payloads are resident to make one.
-        TerrainUnitReady Ready(const TerrainStreamer &streamer) const;
+        // A unit draws once its GPU mesh is usable.
+        TerrainUnitReady Ready() const;
         void AppendDraws(std::span<const TerrainDrawUnit> units, std::vector<WorldDrawItem> &out);
+        void ReportMeshFailures();
         void LogView(ViewState &state, const ViewCamera &camera);
         void Report(const std::string &message);
 
@@ -129,7 +133,13 @@ namespace mir
         // Parallel to TerrainWorld::Instances().
         std::vector<InstanceResources> mResources;
 
-        TerrainMeshCache mMeshes;
+        // The streamer's worker pool, which also builds meshes.
+        std::shared_ptr<TerrainWorkerPool> mPool;
+        std::unique_ptr<TerrainGpuUploader> mUploader;
+        // Null without valid settings or renderer mesh streaming.
+        std::unique_ptr<TerrainMeshResidency> mMeshes;
+        // Every viewport's wants this frame.
+        std::vector<TerrainPayloadWant> mFrameWants;
         std::vector<ViewState> mViews;
         // Into mViews, in the order of the cameras Prepare was given.
         std::vector<size_t> mFrameViews;

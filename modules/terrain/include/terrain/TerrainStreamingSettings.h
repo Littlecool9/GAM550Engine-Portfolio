@@ -80,9 +80,20 @@ namespace mir
             double prefetchErrorPixels = std::numeric_limits<double>::quiet_NaN();
             // Decoded bytes one viewport may ask for beyond what it draws; zero prefetches nothing.
             std::optional<uint64_t> prefetchBudgetBytes;
-            // A unit's GPU mesh outlives its last draw by this much.
-            double meshRetainSeconds = std::numeric_limits<double>::quiet_NaN();
         } view;
+
+        // GPU meshes of draw units: vertex and index buffers plus any BLAS.
+        struct Gpu
+        {
+            // Meshes building, uploading, held, and retired but not freed yet.
+            uint64_t budgetBytes = 0;
+            // Mesh bytes the renderer may upload in one frame, BLAS builds included.
+            uint64_t uploadBytesPerFrame = 0;
+            // The renderer's persistent staging ring.
+            uint64_t stagingBytes = 0;
+            // A mesh outlives its last want or draw by this much.
+            double meshRetainSeconds = std::numeric_limits<double>::quiet_NaN();
+        } gpu;
     };
 
     // One "<field>: <problem>" line per invalid field, named by its JSON path; empty when valid.

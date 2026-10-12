@@ -53,7 +53,10 @@ namespace mir::test
         settings.view.mergeErrorPixels = 0.75;
         settings.view.prefetchErrorPixels = 0.5;
         settings.view.prefetchBudgetBytes = uint64_t(1) << 24;
-        settings.view.meshRetainSeconds = 1.0;
+        settings.gpu.budgetBytes = uint64_t(1) << 28;
+        settings.gpu.uploadBytesPerFrame = uint64_t(1) << 22;
+        settings.gpu.stagingBytes = uint64_t(1) << 24;
+        settings.gpu.meshRetainSeconds = 1.0;
         REQUIRE(ValidateTerrainStreamingSettings(settings).empty());
         return settings;
     }

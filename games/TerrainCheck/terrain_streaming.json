@@ -20,7 +20,12 @@
     "refineErrorPixels": 1.0,
     "mergeErrorPixels": 0.75,
     "prefetchErrorPixels": 0.5,
-    "prefetchBudgetMiB": 4,
+    "prefetchBudgetMiB": 4
+  },
+  "gpu": {
+    "budgetMiB": 128,
+    "uploadMiBPerFrame": 8,
+    "stagingMiB": 32,
     "meshRetainSeconds": 2.0
   }
 }

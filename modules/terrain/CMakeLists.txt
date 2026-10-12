@@ -10,6 +10,7 @@ target_sources(engine_terrain PRIVATE
     src/terrain/TerrainHeightQuery.cpp
     src/terrain/TerrainLayout.cpp
     src/terrain/TerrainLod.cpp
+    src/terrain/TerrainMeshResidency.cpp
     src/terrain/TerrainPackFormat.cpp
     src/terrain/TerrainPackWriter.cpp
     src/terrain/TerrainRegion.cpp

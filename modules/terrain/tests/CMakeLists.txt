@@ -4,6 +4,7 @@ engine_add_module_tests(terrain
     TerrainHeightQuery.tests.cpp
     TerrainIdentity.tests.cpp
     TerrainLayout.tests.cpp
+    TerrainMeshResidency.tests.cpp
     TerrainPackFormat.tests.cpp
     TerrainPackIntegrity.tests.cpp
     TerrainRegion.tests.cpp
