@@ -121,6 +121,9 @@ namespace mir
             mDevice->WaitIdle();
 
             mFrameSync->Shutdown();
+            if (mProfileQueries)
+                vkDestroyQueryPool(mDevice->Handle(), mProfileQueries, nullptr);
+            mProfileQueries = VK_NULL_HANDLE;
 
             mMeshUploads->Shutdown(*mRayTracer);
             mMaterialStore->Shutdown();

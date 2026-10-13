@@ -31,9 +31,80 @@
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <utility>
 
 namespace mir
 {
+    bool VulkanRenderer::EnableFrameProfiling()
+    {
+        if (mProfileQueries)
+            return true;
+        const auto &properties = mDevice->Properties();
+        uint32_t count = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(mDevice->Physical(), &count, nullptr);
+        std::vector<VkQueueFamilyProperties> queues(count);
+        vkGetPhysicalDeviceQueueFamilyProperties(mDevice->Physical(), &count, queues.data());
+        const uint32_t bits = queues.at(mDevice->QueueFamily()).timestampValidBits;
+        mProfileInfo = {properties.deviceName, properties.driverVersion, properties.limits.timestampPeriod, bits};
+        if (bits == 0)
+            return false;
+        const VkQueryPoolCreateInfo info{.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+                                         .queryType = VK_QUERY_TYPE_TIMESTAMP,
+                                         .queryCount = vk::kFramesInFlight * 3};
+        if (vkCreateQueryPool(mDevice->Handle(), &info, nullptr, &mProfileQueries) != VK_SUCCESS)
+            return false;
+        mProfileSlots.resize(vk::kFramesInFlight);
+        mMeshUploads->SetProfiling(true);
+        return true;
+    }
+
+    void VulkanRenderer::BeginProfile(VkCommandBuffer cmd)
+    {
+        if (!mProfileQueries)
+            return;
+        const uint32_t slot = mFrameSync->Index();
+        RendererFrameTiming &timing = mProfileSlots[slot];
+        if (timing.serial != 0)
+        {
+            uint64_t values[6]{};
+            const VkResult result = vkGetQueryPoolResults(mDevice->Handle(), mProfileQueries, slot * 3, 3,
+                sizeof(values), values, sizeof(uint64_t) * 2, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+            if (result == VK_SUCCESS && values[1] && values[3] && values[5])
+            {
+                const uint64_t mask = mProfileInfo.timestampValidBits == 64 ? UINT64_MAX
+                    : (uint64_t{1} << mProfileInfo.timestampValidBits) - 1;
+                const double scale = mProfileInfo.timestampPeriodNanoseconds * 1e-9;
+                timing.gpuSeconds = double((values[4] - values[0]) & mask) * scale;
+                timing.uploadSeconds = double((values[2] - values[0]) & mask) * scale;
+                mProfileFinished.push_back(timing);
+            }
+        }
+        timing = {};
+        mProfileDraws = 0;
+        vkCmdResetQueryPool(cmd, mProfileQueries, slot * 3, 3);
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, mProfileQueries, slot * 3);
+    }
+
+    void VulkanRenderer::EndProfile(VkCommandBuffer cmd, uint64_t serial, bool rayTracing)
+    {
+        if (!mProfileQueries)
+            return;
+        const uint32_t slot = mFrameSync->Index();
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, mProfileQueries, slot * 3 + 2);
+        mProfileSlots[slot] = {serial, 0.0, 0.0, mProfileDraws, rayTracing};
+        mProfileSerial = serial;
+    }
+
+    std::vector<RendererFrameTiming> VulkanRenderer::TakeFrameTimings()
+    {
+        return std::exchange(mProfileFinished, {});
+    }
+
+    std::vector<double> VulkanRenderer::TakeMeshRetirementTimings()
+    {
+        return mMeshUploads->TakeRetirementTimings();
+    }
+
     void VulkanRenderer::RecordView(VkCommandBuffer cmd, const RenderView &view, uint32_t viewIndex)
     {
         const VkRect2D rect = vk::ResolveViewRect(view.rect, mSwapchain->Extent());
@@ -108,6 +179,8 @@ namespace mir
                 0, sizeof(vk::RasterPushConstants), &pushData);
 
             vkCmdDrawIndexed(cmd, mesh->mIndexCount, 1, 0, 0, 0);
+            if (mProfileQueries)
+                ++mProfileDraws;
         }
 
         // Sky last, at the far depth 0: the test (GEQUAL, no write) passes only
@@ -120,6 +193,8 @@ namespace mir
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mMaterialStore->SkyPipelineLayout(),
                 0, 1, &cameraSet, 1, &cameraOffset);
             vkCmdDraw(cmd, 3, 1, 0, 0);
+            if (mProfileQueries)
+                ++mProfileDraws;
         }
     }
 
@@ -213,9 +288,13 @@ namespace mir
         // After Begin's wait: this slot's last frame is done with its set 2 buffers.
         if (frame)
         {
+            BeginProfile(frame->cmd);
             mModelDescriptors->ResetFrame(mFrameSync->Index());
             mMeshUploads->Collect(*mResources, *mRayTracer, mFrameSync->CompletedValue());
             mMeshUploads->Record(frame->cmd, frame->signalValue, *mResources, *mRayTracer);
+            if (mProfileQueries)
+                vkCmdWriteTimestamp2(frame->cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, mProfileQueries,
+                                     mFrameSync->Index() * 3 + 1);
         }
         return frame;
     }
@@ -228,6 +307,7 @@ namespace mir
 
         mShadowMaps->RecordPasses(frame->cmd, mFrameSync->Index(), *mResources);
         RecordCommands(frame->cmd, frame->imageIndex, views);
+        EndProfile(frame->cmd, frame->signalValue, false);
         const bool submitted = mFrameSync->End(*mSwapchain, *frame);
 
         mCapture->Finish(submitted, *mSwapchain);
@@ -308,6 +388,7 @@ namespace mir
             return;
 
         RecordRtFrame(frame->cmd, frame->imageIndex, views);
+        EndProfile(frame->cmd, frame->signalValue, true);
         const bool submitted = mFrameSync->End(*mSwapchain, *frame);
         mCapture->Finish(submitted, *mSwapchain);
     }

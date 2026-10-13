@@ -16,6 +16,7 @@
 #include <volk.h>
 
 #include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <unordered_map>
 #include <utility>
@@ -55,6 +56,8 @@ namespace mir::vk
         void Clear(RayTracer &rayTracer);
 
         void FillStats(MeshStreamingStats &stats) const;
+        void SetProfiling(bool enabled) { mProfiling = enabled; }
+        std::vector<double> TakeRetirementTimings() { return std::exchange(mRetirementTimings, {}); }
 
     private:
         struct Queued
@@ -69,6 +72,7 @@ namespace mir::vk
         {
             RayTracer::MeshBlas blas;
             std::vector<std::pair<VkBuffer, VmaAllocation>> buffers;
+            std::optional<std::chrono::steady_clock::time_point> retiredAt;
         };
 
         void Free(RayTracer &rayTracer, Garbage &garbage);
@@ -92,5 +96,7 @@ namespace mir::vk
         uint64_t mBlasBuilt = 0;
         uint64_t mBlasBytes = 0;
         uint64_t mMaxFrameBytes = 0;
+        bool mProfiling = false;
+        std::vector<double> mRetirementTimings;
     };
 }

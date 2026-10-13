@@ -11,6 +11,7 @@
 #include <terrain/TerrainLod.h>
 #include <terrain/TerrainRegion.h>
 #include <terrain/TerrainRenderMesh.h>
+#include <terrain/TerrainTelemetry.h>
 
 #include <algorithm>
 #include <chrono>
@@ -228,6 +229,8 @@ namespace mir
         uint64_t held = 0;
         uint64_t nextTicket = 0;
         TerrainMeshStats stats;
+        std::shared_ptr<TerrainTelemetry> telemetry;
+        std::unordered_map<TerrainPayloadKey, bool> profileWants;
 
         Impl(const TerrainStreamingSettings::Gpu &s, std::shared_ptr<TerrainExecutor> e, TerrainMeshUploader &u)
             : settings(s), executor(std::move(e)), uploader(u)
@@ -248,6 +251,12 @@ namespace mir
         // The entry goes; its GPU mesh, if any, is retired.
         void Drop(std::unordered_map<TerrainPayloadKey, Entry>::iterator it, bool retire)
         {
+            if (telemetry)
+            {
+                const std::string key = DescribeTerrainPayloadKey(it->first);
+                telemetry->Cancel("renderable", key);
+                telemetry->Cancel("upload_ready", key);
+            }
             Entry &entry = it->second;
             switch (entry.state)
             {
@@ -334,6 +343,15 @@ namespace mir
 
     TerrainMeshResidency::~TerrainMeshResidency() = default;
 
+    void TerrainMeshResidency::SetTelemetry(std::shared_ptr<TerrainTelemetry> telemetry)
+    {
+        if (mImpl->telemetry)
+            for (const auto &[key, ignored] : mImpl->profileWants)
+                mImpl->telemetry->Cancel("renderable", DescribeTerrainPayloadKey(key));
+        mImpl->profileWants.clear();
+        mImpl->telemetry = std::move(telemetry);
+    }
+
     void TerrainMeshResidency::Install()
     {
         Impl &impl = *mImpl;
@@ -349,6 +367,10 @@ namespace mir
             impl.tickets.erase(ticket);
             Impl::Entry &entry = impl.entries.at(key);
             impl.stats.buildSeconds += finished.seconds;
+            if (impl.telemetry)
+                impl.telemetry->Record("mesh_build", finished.seconds,
+                                        TerrainReleaseInfo{.asset = key.asset, .release = key.release},
+                                        DescribeTerrainPayloadKey(key), finished.mesh.has_value());
             impl.stats.maxBuildSeconds = std::max(impl.stats.maxBuildSeconds, finished.seconds);
             if (!finished.mesh)
             {
@@ -369,6 +391,12 @@ namespace mir
             case TerrainGpuMeshState::Ready:
                 entry.state = TerrainMeshState::Ready;
                 ++impl.stats.uploadsReady;
+                if (impl.telemetry)
+                {
+                    const std::string name = DescribeTerrainPayloadKey(key);
+                    impl.telemetry->Complete("renderable", name);
+                    impl.telemetry->Complete("upload_ready", name);
+                }
                 break;
             case TerrainGpuMeshState::Failed:
                 impl.uploader.Retire(entry.mesh.id);
@@ -390,6 +418,12 @@ namespace mir
         {
             if (want.key.kind != TerrainPayloadKind::LodHeight && want.key.kind != TerrainPayloadKind::Region)
                 continue;
+            if (impl.telemetry && !Ready(want.key) && State(want.key) != TerrainMeshState::Failed)
+            {
+                impl.telemetry->Request("renderable", DescribeTerrainPayloadKey(want.key),
+                                        TerrainReleaseInfo{.asset = want.key.asset, .release = want.key.release});
+                impl.profileWants[want.key] = true;
+            }
             Impl::Want next;
             next.kind = want.key.kind == TerrainPayloadKind::Region ? TerrainUnitKind::Region : TerrainUnitKind::Tile;
             next.normals = want.key;
@@ -406,6 +440,16 @@ namespace mir
                 at->second.rank = std::min(at->second.rank, next.rank);
         }
 
+        for (auto it = impl.profileWants.begin(); it != impl.profileWants.end();)
+        {
+            if (merged.contains(it->first))
+                ++it;
+            else
+            {
+                impl.telemetry->Cancel("renderable", DescribeTerrainPayloadKey(it->first));
+                it = impl.profileWants.erase(it);
+            }
+        }
         for (auto &[key, entry] : impl.entries)
             entry.demand.reset();
         for (const auto &[key, want] : merged)
@@ -528,6 +572,9 @@ namespace mir
             }
             entry.mesh = {id, origin};
             entry.state = TerrainMeshState::Uploading;
+            if (impl.telemetry)
+                impl.telemetry->Request("upload_ready", DescribeTerrainPayloadKey(key),
+                                        TerrainReleaseInfo{.asset = key.asset, .release = key.release});
             ++impl.stats.uploadsQueued;
         }
 

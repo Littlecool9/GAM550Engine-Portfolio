@@ -121,6 +121,8 @@ namespace mir::vk
 
         const GpuMesh taken = resources.TakeMesh(handle);
         Garbage garbage;
+        if (mProfiling)
+            garbage.retiredAt = std::chrono::steady_clock::now();
         garbage.blas = rayTracer.TakeMeshBlas(handle.mIndex);
         if (taken.mVertexBuffer != VK_NULL_HANDLE)
             garbage.buffers.emplace_back(taken.mVertexBuffer, taken.mVertexAllocation);
@@ -276,6 +278,9 @@ namespace mir::vk
 
     void MeshUploader::Free(RayTracer &rayTracer, Garbage &garbage)
     {
+        if (garbage.retiredAt)
+            mRetirementTimings.push_back(std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - *garbage.retiredAt).count());
         if (garbage.blas.mBlas != VK_NULL_HANDLE || garbage.blas.mBuffer != VK_NULL_HANDLE)
             rayTracer.DestroyBLAS(garbage.blas);
         for (const auto &[buffer, allocation] : garbage.buffers)

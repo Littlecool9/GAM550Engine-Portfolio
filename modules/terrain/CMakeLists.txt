@@ -14,6 +14,7 @@ target_sources(engine_terrain PRIVATE
     src/terrain/TerrainMeshResidency.cpp
     src/terrain/TerrainPackFormat.cpp
     src/terrain/TerrainPackWriter.cpp
+    src/terrain/TerrainProfiledSource.cpp
     src/terrain/TerrainRegion.cpp
     src/terrain/TerrainRegionGrid.cpp
     src/terrain/TerrainRelease.cpp
@@ -23,6 +24,7 @@ target_sources(engine_terrain PRIVATE
     src/terrain/TerrainStreamer.cpp
     src/terrain/TerrainStreamingSettings.cpp
     src/terrain/TerrainSurface.cpp
+    src/terrain/TerrainTelemetry.cpp
     src/terrain/TerrainTileMesh.cpp
     src/terrain/TerrainViewSelection.cpp
     src/terrain/TileAddressing.cpp

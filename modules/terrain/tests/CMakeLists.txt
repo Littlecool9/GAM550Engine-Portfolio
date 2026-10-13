@@ -6,6 +6,7 @@ engine_add_module_tests(terrain
     TerrainIdentity.tests.cpp
     TerrainLayout.tests.cpp
     TerrainMeshResidency.tests.cpp
+    TerrainMeshBenchmark.tests.cpp
     TerrainPackFormat.tests.cpp
     TerrainPackIntegrity.tests.cpp
     TerrainRegion.tests.cpp
@@ -15,6 +16,7 @@ engine_add_module_tests(terrain
     TerrainStreamer.tests.cpp
     TerrainStreamingSettings.tests.cpp
     TerrainSurface.tests.cpp
+    TerrainTelemetry.tests.cpp
     TerrainTileMesh.tests.cpp
     TerrainViewSelection.tests.cpp
     TileAddressing.tests.cpp

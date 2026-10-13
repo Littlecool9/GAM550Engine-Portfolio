@@ -129,6 +129,7 @@ namespace mir
         TerrainMeshResidency(const TerrainStreamingSettings::Gpu &settings, std::shared_ptr<TerrainExecutor> executor,
                              TerrainMeshUploader &uploader);
         ~TerrainMeshResidency();
+        void SetTelemetry(std::shared_ptr<TerrainTelemetry> telemetry);
 
         TerrainMeshResidency(const TerrainMeshResidency &) = delete;
         TerrainMeshResidency &operator=(const TerrainMeshResidency &) = delete;

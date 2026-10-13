@@ -111,7 +111,7 @@ namespace mir
     class TerrainRuntime::Colliders final : public TerrainColliderPhysics
     {
     public:
-        explicit Colliders(TerrainRuntime &owner) : mOwner(owner) {}
+        explicit Colliders(TerrainRuntime &owner) : mOwner(owner), mTelemetry(owner.mTelemetry) {}
 
         std::optional<TerrainBuiltCollider> Build(const TerrainAreaSamples &samples, float quantizationMin,
                                                   float quantizationMax) const override
@@ -123,7 +123,11 @@ namespace mir
             desc.mSpacing = static_cast<float>(samples.spacing);
             desc.mQuantizationMin = quantizationMin;
             desc.mQuantizationMax = quantizationMax;
+            const auto start = std::chrono::steady_clock::now();
             SharedHeightField field = BuildHeightField(desc);
+            if (mTelemetry)
+                mTelemetry->Record("jolt_shape", std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - start).count(), {}, {}, field.Info() != nullptr);
             if (!field.Info())
                 return std::nullopt;
             const HeightFieldInfo info = *field.Info();
@@ -147,13 +151,112 @@ namespace mir
 
         void Remove(TerrainColliderId collider) override
         {
+            const auto start = std::chrono::steady_clock::now();
             if (PhysicsWorld *physics = mOwner.mWorld->TryResource<PhysicsWorld>())
                 physics->DestroyBody(BodyOf(collider));
+            if (mTelemetry)
+                mTelemetry->Record("jolt_body_retire", std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - start).count());
         }
 
     private:
         TerrainRuntime &mOwner;
+        std::shared_ptr<TerrainTelemetry> mTelemetry;
     };
+
+    void TerrainRuntime::ConfigureTelemetry(std::shared_ptr<TerrainTelemetry> telemetry, TerrainReleaseOpener opener)
+    {
+        mTelemetry = std::move(telemetry);
+        mProfileOpener = std::move(opener);
+    }
+
+    nlohmann::json TerrainRuntime::ProfileSnapshot() const
+    {
+        using Json = nlohmann::json;
+        Json out = Json::object();
+        if (const TerrainStreamer *streamer = Streamer())
+        {
+            const auto cpu = streamer->Stats();
+            out["cpu"] = {{"residentBytes", cpu.residentBytes}, {"loadingBytes", cpu.loadingBytes},
+                           {"accountedBytes", cpu.residentBytes + cpu.loadingBytes},
+                           {"peakAccountedBytes", cpu.peakBytes},
+                           {"budgetBytes", cpu.budgetBytes}, {"overBudgetBytes", cpu.overBudgetBytes},
+                           {"updateMs", cpu.lastUpdateSeconds * 1000.0}, {"reads", cpu.readsStarted},
+                           {"failedReads", cpu.readsFailed}, {"retries", cpu.retries},
+                           {"bytesRead", cpu.bytesRead}, {"evicted", cpu.evicted}, {"discarded", cpu.discarded}};
+        }
+        if (mMeshes)
+        {
+            const auto gpu = mMeshes->Stats();
+            out["meshes"] = {{"heldBytes", gpu.heldBytes}, {"retiringBytes", gpu.retiringBytes},
+                              {"accountedBytes", gpu.heldBytes + gpu.retiringBytes},
+                              {"peakAccountedBytes", gpu.peakBytes},
+                              {"budgetBytes", gpu.budgetBytes}, {"budgetWaits", gpu.budgetWaits},
+                              {"requestMs", gpu.lastRequestSeconds * 1000.0}, {"building", gpu.building},
+                              {"built", gpu.built}, {"uploading", gpu.uploading}, {"ready", gpu.ready},
+                              {"discarded", gpu.discarded}};
+        }
+        if (mCollision)
+        {
+            const auto collision = mCollision->Stats();
+            size_t held = 0;
+            for (const auto &[id, guard] : mGuards)
+                held += guard.held;
+            out["collision"] = {{"heldBytes", collision.heldBytes}, {"budgetBytes", collision.budgetBytes},
+                                 {"peakAccountedBytes", collision.peakBytes},
+                                 {"overBudgetBytes", collision.overBudgetBytes}, {"heldBodies", held},
+                                 {"building", collision.building}, {"ready", collision.ready},
+                                 {"updateMs", collision.lastUpdateSeconds * 1000.0},
+                                 {"predictionSeconds", mCollision->PredictionSeconds()}};
+        }
+        out["views"] = Json::array();
+        for (const ViewState &view : mViews)
+        {
+            const auto &stats = view.selector->Stats();
+            std::map<std::tuple<uint32_t, int32_t, int32_t>, uint32_t> coverage;
+            size_t duplicated = 0;
+            for (const auto &unit : view.selector->Draws())
+            {
+                if (unit.instance >= mSelection.size())
+                    continue;
+                TileRange tiles{unit.geometry.coord, unit.geometry.coord};
+                if (unit.kind == TerrainUnitKind::Region)
+                    tiles = mSelection[unit.instance].release->Index().regionGrid->MapTiles(
+                        {unit.geometry.level, unit.geometry.coord.x, unit.geometry.coord.z});
+                for (int64_t z = tiles.min.z; z <= tiles.max.z; ++z)
+                    for (int64_t x = tiles.min.x; x <= tiles.max.x; ++x)
+                        duplicated += ++coverage[{unit.instance, int32_t(x), int32_t(z)}] > 1;
+            }
+            out["views"].push_back({{"viewport", view.viewport}, {"drawUnits", view.draws.size()},
+                                    {"tiles", stats.drawnTiles}, {"regions", stats.drawnRegions},
+                                    {"missing", stats.missing}, {"duplicatedTiles", duplicated},
+                                    {"fallbacks", stats.coarserFallbacks + stats.otherFallbacks},
+                                    {"prefetchBytes", stats.prefetchBytes}, {"prefetchDropped", stats.prefetchDropped}});
+        }
+        out["releases"] = Json::array();
+        const auto usage = [&](const TerrainReleaseInfo &release, bool staged)
+        {
+            const auto cpu = Streamer()->Usage(release);
+            const auto gpu = mMeshes ? mMeshes->Usage(release) : TerrainReleaseUsage{};
+            const auto collision = mCollision ? mCollision->Usage(release) : TerrainReleaseUsage{};
+            out["releases"].push_back({{"asset", TerrainIdHex(release.asset.value)},
+                                       {"release", TerrainIdHex(release.release.value)}, {"staged", staged},
+                                       {"cpuBytes", cpu.bytes}, {"gpuBytes", gpu.bytes},
+                                       {"collisionBytes", collision.bytes}});
+        };
+        if (Streamer())
+        {
+            for (const auto &asset : mWorld->Resource<TerrainWorld>().Assets())
+                if (asset.release)
+                    usage(asset.release->Info(), false);
+            if (mSwitch)
+                for (const auto &release : mSwitch->Staged())
+                    usage(release->Info(), true);
+        }
+        if (mSwitch)
+            out["switch"] = {{"switched", mSwitch->Stats().switched}, {"failed", mSwitch->Stats().failed}};
+        return out;
+    }
 
     TerrainRuntime::~TerrainRuntime()
     {
@@ -199,6 +302,7 @@ namespace mir
         world.EmplaceResource<TerrainStreamingSettings>(settings);
         mPool = std::make_shared<TerrainWorkerPool>(settings.io.workerThreads);
         world.EmplaceResource<TerrainStreamer>(settings, mPool);
+        world.Resource<TerrainStreamer>().SetTelemetry(mTelemetry);
         MIR_LOG_INFO("Terrain streaming: {:.0f} MiB CPU budget, {} read workers, {} residency{}",
                      MiB(settings.cpu.budgetBytes), settings.io.workerThreads,
                      TerrainResidencyModeName(*settings.residency.mode),
@@ -207,7 +311,7 @@ namespace mir
                      settings.view.refineErrorPixels, settings.view.mergeErrorPixels,
                      settings.view.prefetchErrorPixels, MiB(*settings.view.prefetchBudgetBytes));
 
-        mSwitch = std::make_unique<TerrainReleaseSwitch>(mPool, mReleasesRoot, TerrainReleaseOpener{},
+        mSwitch = std::make_unique<TerrainReleaseSwitch>(mPool, mReleasesRoot, mProfileOpener,
                                                          [this] { return Now(); });
         mStagingVersion = mSwitch->StagingVersion();
 
@@ -236,6 +340,7 @@ namespace mir
         }
         mUploader = std::make_unique<TerrainGpuUploader>(renderer);
         mMeshes = std::make_unique<TerrainMeshResidency>(gpu, mPool, *mUploader);
+        mMeshes->SetTelemetry(mTelemetry);
         MIR_LOG_INFO("Terrain GPU meshes: {:.0f} MiB budget, {:.1f} MiB uploaded a frame through a {:.1f} MiB staging "
                      "ring, kept {} s after their last want or draw",
                      MiB(gpu.budgetBytes), MiB(gpu.uploadBytesPerFrame), MiB(gpu.stagingBytes), gpu.meshRetainSeconds);
@@ -391,6 +496,7 @@ namespace mir
 
         std::vector<TerrainIssue> issues = spec.issues;
         TerrainResolveOptions options;
+        options.open = mProfileOpener;
         options.keepLoaded = true;
         for (const TerrainReleaseAdoption &adoption : adopted)
             options.adopt.push_back(adoption.release);
@@ -546,6 +652,14 @@ namespace mir
     void TerrainRuntime::LogSwitch(const TerrainSwitchEvent &event)
     {
         const TerrainReleaseCandidate &c = event.candidate;
+        if (mTelemetry)
+        {
+            const TerrainReleaseInfo release{.asset = c.asset, .release = c.release};
+            if (event.kind == TerrainSwitchEvent::Kind::Verified)
+                mTelemetry->Record("release_verify", c.verifySeconds, release);
+            else if (event.kind == TerrainSwitchEvent::Kind::Ready)
+                mTelemetry->Record("release_prepare", c.readyAt - c.startedAt, release);
+        }
         const std::string subject = std::format("Terrain '{}' (asset {:016x})", c.logicalPath, c.asset.value);
         switch (event.kind)
         {
@@ -713,6 +827,8 @@ namespace mir
             {
                 physics.ResumeBody(body);
                 guard.held = false;
+                if (mTelemetry)
+                    mTelemetry->Record("body_hold", now - guard.since);
                 MIR_LOG_INFO("Terrain collision resumes {} after {:.3f} s held: collision {}, contact error {} m, {}",
                              who, now - guard.since, TerrainCollisionStateName(status.state), status.contactError,
                              Describe(status));
@@ -746,6 +862,18 @@ namespace mir
         for (const TerrainCollisionEvent &event : mCollision->TakeEvents())
         {
             const std::string piece = DescribeTerrainCollisionPiece(event.piece);
+            if (mTelemetry)
+            {
+                const TerrainReleaseInfo release{.asset = event.piece.asset, .release = event.piece.release};
+                if (event.kind == TerrainCollisionEvent::Kind::Placed)
+                {
+                    mTelemetry->Record("collision_build", event.buildSeconds, release, piece);
+                    if (!event.staged && event.colliders && std::isfinite(event.latencySeconds))
+                        mTelemetry->Record("collidable", event.latencySeconds, release, piece);
+                }
+                else if (event.kind == TerrainCollisionEvent::Kind::Failed)
+                    mTelemetry->Record("collision_build", event.buildSeconds, release, piece, false);
+            }
             switch (event.kind)
             {
             case TerrainCollisionEvent::Kind::Placed:

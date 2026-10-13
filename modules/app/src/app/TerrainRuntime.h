@@ -23,6 +23,8 @@
 #include <terrain/TerrainScene.h>
 #include <terrain/TerrainStreamer.h>
 #include <terrain/TerrainViewSelection.h>
+#include <terrain/TerrainTelemetry.h>
+#include <nlohmann/json.hpp>
 
 #include <glm/vec3.hpp>
 
@@ -56,6 +58,8 @@ namespace mir
     {
     public:
         ~TerrainRuntime() override;
+        void ConfigureTelemetry(std::shared_ptr<TerrainTelemetry> telemetry, TerrainReleaseOpener opener);
+        nlohmann::json ProfileSnapshot() const;
 
         // Loads the game's streaming settings; when they are valid, emplaces them and a TerrainStreamer, sets up
         // the renderer's mesh streaming and draws terrain per viewport through the World's ViewDrawSources, and
@@ -126,6 +130,8 @@ namespace mir
         };
 
         class Colliders;
+        std::shared_ptr<TerrainTelemetry> mTelemetry;
+        TerrainReleaseOpener mProfileOpener;
 
         bool Bound() const { return mWorld != nullptr; }
         TerrainStreamer *Streamer() const;

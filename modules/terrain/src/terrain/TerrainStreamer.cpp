@@ -14,6 +14,7 @@
 #include <terrain/TerrainHeightQuery.h>
 #include <terrain/TerrainRelease.h>
 #include <terrain/TerrainScene.h>
+#include <terrain/TerrainTelemetry.h>
 
 #include <algorithm>
 #include <cmath>
@@ -76,6 +77,7 @@ namespace mir
             uint64_t ticket = 0;
             // The release the bytes came from.
             TerrainReleaseInfo release;
+            TerrainPayloadKey key;
             Payload payload;
             TerrainPackError error;
             uint64_t bytesRead = 0;
@@ -98,6 +100,7 @@ namespace mir
             Finished out;
             out.ticket = job.ticket;
             out.release = job.handle->Info();
+            out.key = TerrainPayloadKeyOf(out.release, *job.record);
             const auto start = SteadyClock::now();
             TerrainResult<std::vector<std::byte>> bytes = job.handle->ReadPayload(*job.record);
             const auto read = SteadyClock::now();
@@ -347,6 +350,7 @@ namespace mir
         uint64_t resident = 0;
         uint64_t loading = 0;
         TerrainStreamingStats stats;
+        std::shared_ptr<TerrainTelemetry> telemetry;
 
         ~Impl()
         {
@@ -381,6 +385,8 @@ namespace mir
         // Accounting for an entry about to be erased with its release.
         void Drop(Entry &e)
         {
+            if (telemetry && e.key.kind == TerrainPayloadKind::Height)
+                telemetry->Cancel("queryable", DescribeTerrainPayloadKey(e.key));
             if (e.state == TerrainPayloadState::Loading)
             {
                 queue->Remove(e.queued.ticket);
@@ -460,6 +466,8 @@ namespace mir
                 return nullptr;
             Entry e;
             e.key = key;
+            if (telemetry && key.kind == TerrainPayloadKind::Height)
+                telemetry->Request("queryable", DescribeTerrainPayloadKey(key), release->info);
             e.release = std::move(release);
             e.sequence = nextSequence++;
             e.record = e.release->handle->Index().Find(key.coord, key.layer, key.kind, key.level);
@@ -561,6 +569,8 @@ namespace mir
                 if (e.state != TerrainPayloadState::Failed)
                     ++stats.canceled;
                 ForgetInQueries(e);
+                if (telemetry && e.key.kind == TerrainPayloadKind::Height)
+                    telemetry->Cancel("queryable", DescribeTerrainPayloadKey(e.key));
                 it = entries.erase(it);
             }
         }
@@ -572,6 +582,15 @@ namespace mir
                 stats.readSeconds += finished.readSeconds;
                 stats.decodeSeconds += finished.decodeSeconds;
                 stats.bytesRead += finished.bytesRead;
+                if (telemetry)
+                {
+                    const std::string name = DescribeTerrainPayloadKey(finished.key);
+                    telemetry->Record("io_checksum", finished.readSeconds, finished.release, name,
+                                      finished.bytesRead != 0);
+                    if (finished.bytesRead != 0)
+                        telemetry->Record("decode", finished.decodeSeconds, finished.release, name,
+                                          finished.error.code == Code::None);
+                }
                 const auto ticket = loadingTickets.find(finished.ticket);
                 if (ticket == loadingTickets.end())
                 {
@@ -600,6 +619,8 @@ namespace mir
                     if (const std::shared_ptr<const TileHeights> heights = As<TileHeights>(e.payload))
                         e.release->ForEachQuery([&](TerrainHeightQuery &query)
                                                 { (void)query.Insert(e.release->info, e.key.layer, heights); });
+                    if (telemetry && e.key.kind == TerrainPayloadKind::Height)
+                        telemetry->Complete("queryable", DescribeTerrainPayloadKey(e.key));
                     continue;
                 }
 
@@ -616,6 +637,8 @@ namespace mir
                     continue;
                 }
                 e.state = TerrainPayloadState::Failed;
+                if (telemetry && e.key.kind == TerrainPayloadKind::Height)
+                    telemetry->Cancel("queryable", DescribeTerrainPayloadKey(e.key));
                 e.notBefore = now + settings.retry.failedHoldSeconds;
                 if (e.key.kind == TerrainPayloadKind::Height)
                     e.release->ForEachQuery([&](TerrainHeightQuery &query)
@@ -631,6 +654,8 @@ namespace mir
                     e.state = TerrainPayloadState::Waiting;
                     e.attempts = 0;
                     e.notBefore = now;
+                    if (telemetry && e.key.kind == TerrainPayloadKind::Height)
+                        telemetry->Request("queryable", DescribeTerrainPayloadKey(e.key), e.release->info);
                     ForgetInQueries(e);
                 }
         }
@@ -654,6 +679,8 @@ namespace mir
             if (e.demand)
             {
                 e.state = TerrainPayloadState::Waiting;
+                if (telemetry && e.key.kind == TerrainPayloadKind::Height)
+                    telemetry->Request("queryable", DescribeTerrainPayloadKey(e.key), e.release->info);
                 e.payload = {};
                 e.attempts = 0;
                 return bytes;
@@ -776,6 +803,11 @@ namespace mir
     }
 
     TerrainStreamer::~TerrainStreamer() = default;
+
+    void TerrainStreamer::SetTelemetry(std::shared_ptr<TerrainTelemetry> telemetry)
+    {
+        mImpl->telemetry = std::move(telemetry);
+    }
 
     const TerrainStreamingSettings &TerrainStreamer::Settings() const
     {
@@ -949,6 +981,24 @@ namespace mir
         for (auto &[key, e] : mImpl->entries)
             if (e.state == TerrainPayloadState::Failed)
                 e.notBefore = -std::numeric_limits<double>::infinity();
+    }
+
+    void TerrainStreamer::EvictPayloads()
+    {
+        Impl &impl = *mImpl;
+        for (auto &[key, entry] : impl.entries)
+        {
+            impl.ForgetInQueries(entry);
+            if (entry.state == TerrainPayloadState::Ready)
+                ++impl.stats.evicted;
+            else if (entry.state == TerrainPayloadState::Loading || entry.state == TerrainPayloadState::Waiting)
+                ++impl.stats.canceled;
+            impl.Drop(entry);
+        }
+        impl.entries.clear();
+        for (const auto &release : impl.releases)
+            if (release->mode == TerrainResidencyMode::Eager && release->Alive())
+                impl.AddEager(*release);
     }
 
     TerrainStreamingStats TerrainStreamer::Stats() const

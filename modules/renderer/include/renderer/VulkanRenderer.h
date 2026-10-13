@@ -8,6 +8,8 @@
  */
 #pragma once
 
+#include <renderer/FrameProfile.h>
+
 #include <core/ecs/components/WorldTransform.h>
 #include <core/math/WorldCoordinates.h>
 #include <core/platform/Surface.h>
@@ -195,6 +197,11 @@ namespace mir
         // GPU bytes a queued mesh of this size holds, BLAS included.
         uint64_t MeshFootprint(uint32_t vertexCount, uint32_t indexCount, const MeshUploadOptions &options) const;
         MeshStreamingStats MeshStreaming() const;
+        bool EnableFrameProfiling();
+        const RendererProfileInfo &ProfileInfo() const { return mProfileInfo; }
+        uint64_t LastProfileSerial() const { return mProfileSerial; }
+        std::vector<RendererFrameTiming> TakeFrameTimings();
+        std::vector<double> TakeMeshRetirementTimings();
 
         VkExtent2D SwapchainExtent() const;
 
@@ -251,6 +258,8 @@ namespace mir
 
     private:
         bool RecreateSwapchain();
+        void BeginProfile(VkCommandBuffer cmd);
+        void EndProfile(VkCommandBuffer cmd, uint64_t serial, bool rayTracing);
         // Shared prelude of DrawFrame and TraceFrame; nullopt skips the frame.
         std::optional<vk::FrameContext> BeginFrame(bool prepareRtDiagnostics = false);
         // No wait: the caller idles the device first. False for a null or stale handle.
@@ -290,5 +299,11 @@ namespace mir
         std::unique_ptr<vk::MeshUploader> mMeshUploads;
 
         uint64_t mSkippedDraws = 0;
+        VkQueryPool mProfileQueries = VK_NULL_HANDLE;
+        RendererProfileInfo mProfileInfo;
+        std::vector<RendererFrameTiming> mProfileSlots;
+        std::vector<RendererFrameTiming> mProfileFinished;
+        uint64_t mProfileDraws = 0;
+        uint64_t mProfileSerial = 0;
     };
 }

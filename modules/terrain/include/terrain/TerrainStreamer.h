@@ -29,6 +29,7 @@
 
 namespace mir
 {
+    class TerrainTelemetry;
     class TerrainResidentRelease;
 
     // One payload of one published release: what requests and the CPU cache are keyed by.
@@ -157,6 +158,7 @@ namespace mir
         TerrainStreamer &operator=(const TerrainStreamer &) = delete;
 
         const TerrainStreamingSettings &Settings() const;
+        void SetTelemetry(std::shared_ptr<TerrainTelemetry> telemetry);
 
         // Held weakly: once nobody else holds a release, its payloads go at the next Update. Returns the
         // mode chosen when the release was first added. A staged release is one a release switch prepares: its
@@ -190,6 +192,8 @@ namespace mir
 
         // Failed payloads still wanted start a new round of attempts at the next Update.
         void RetryFailed();
+        // Drops CPU residency; existing payload owners and interests remain valid.
+        void EvictPayloads();
 
         TerrainStreamingStats Stats() const;
         TerrainReleaseUsage Usage(const TerrainReleaseInfo &release) const;
