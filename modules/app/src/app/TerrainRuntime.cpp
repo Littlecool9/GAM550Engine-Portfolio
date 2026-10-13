@@ -87,6 +87,24 @@ namespace mir
                 text += ": " + status.reason;
             return text;
         }
+
+        // Empty when every map tile has source LOD and normal payloads to draw.
+        std::string MissingMeshPayloads(const TerrainResidentRelease &release)
+        {
+            const TerrainIndex &index = release.Handle().Index();
+            const TileRange range = release.Layout().Tiles();
+            for (int32_t z = range.min.z; z <= range.max.z; ++z)
+                for (int32_t x = range.min.x; x <= range.max.x; ++x)
+                {
+                    const TerrainTileRecord *source = index.Find({x, z});
+                    if (source && index.Find({x, z}, source->layer, TerrainPayloadKind::LodHeight, 0) &&
+                        index.Find({x, z}, source->layer, TerrainPayloadKind::Normal, 0))
+                        continue;
+                    return std::format("tile ({}, {}) of release {:016x} has no source LOD and normal payloads to draw",
+                                       x, z, release.Info().release.value);
+                }
+            return {};
+        }
     }
 
     // Shapes come from BuildHeightField on the workers; colliders are restricted static bodies.
@@ -189,6 +207,10 @@ namespace mir
                      settings.view.refineErrorPixels, settings.view.mergeErrorPixels,
                      settings.view.prefetchErrorPixels, MiB(*settings.view.prefetchBudgetBytes));
 
+        mSwitch = std::make_unique<TerrainReleaseSwitch>(mPool, mReleasesRoot, TerrainReleaseOpener{},
+                                                         [this] { return Now(); });
+        mStagingVersion = mSwitch->StagingVersion();
+
         const TerrainStreamingSettings::Collision &collision = settings.collision;
         mColliders = std::make_shared<Colliders>(*this);
         mCollision = std::make_unique<TerrainCollisionResidency>(collision, mPool, mColliders);
@@ -234,6 +256,12 @@ namespace mir
         TerrainStreamer *streamer = Streamer();
         if (streamer)
             streamer->Update();
+        if (mSwitch && streamer)
+        {
+            mSwitch->Update(*streamer);
+            if (mSwitch->StagingVersion() != mStagingVersion)
+                ApplyResidencies();
+        }
         if (mMeshes)
             mMeshes->Install();
         if (mCollision && streamer)
@@ -244,6 +272,7 @@ namespace mir
                 Collide(mWorld->TryResource<PhysicsWorld>(), 0.0);
             ReportCollision();
         }
+        ReportSwitch();
     }
 
     void TerrainRuntime::Load()
@@ -262,6 +291,8 @@ namespace mir
     {
         if (!Bound())
             return;
+        if (mSwitch)
+            mSwitch->Resume();
 
         TerrainSceneSpec spec = CollectTerrainScene(*mWorld, mAssetIdRoot);
         if (spec == mPendingSpec)
@@ -277,16 +308,35 @@ namespace mir
         const bool poll = force || mSincePoll >= kTerrainPollSeconds;
         if (poll)
             mSincePoll = 0.0f;
-        const bool moved = poll && TerrainCurrentMoved(mWorld->Resource<TerrainWorld>(), mReleasesRoot);
+        const bool moved = poll && mSwitch && mSwitch->Poll(mWorld->Resource<TerrainWorld>());
+        std::vector<TerrainReleaseAdoption> ready = mSwitch ? mSwitch->TakeReady() : std::vector<TerrainReleaseAdoption>{};
 
-        if (!edited && !moved)
+        if (!edited && !moved && ready.empty())
         {
             TagColliders(spec);
             return;
         }
-        // A moved pointer alone keeps the loaded instances, not a half-typed edit.
-        Apply(edited ? spec : mSpec);
+        // A moved pointer or a switch alone keeps the loaded instances, not a half-typed edit.
+        Apply(edited ? spec : mSpec, std::move(ready));
         TagColliders(spec);
+    }
+
+    void TerrainRuntime::BeginPlay()
+    {
+        if (!Bound() || !mSwitch)
+            return;
+        for (const TerrainWorld::AssetState &asset : mWorld->Resource<TerrainWorld>().Assets())
+            if (asset.release)
+                MIR_LOG_INFO("Terrain '{}' (asset {:016x}): Play pins release {:016x}", asset.logicalPath,
+                             asset.asset.value, asset.release->Info().release.value);
+        for (const TerrainReleaseCandidate &candidate : mSwitch->Candidates())
+            if (candidate.state != TerrainSwitchState::Failed)
+                MIR_LOG_INFO("Terrain '{}' (asset {:016x}): Play does not wait for release {:016x}, which is {}; its "
+                             "switch resumes after Stop",
+                             candidate.logicalPath, candidate.asset.value, candidate.release.value,
+                             TerrainSwitchStateName(candidate.state));
+        mSwitch->Suspend();
+        ApplyResidencies();
     }
 
     void TerrainRuntime::ForgetMeshes()
@@ -306,6 +356,15 @@ namespace mir
         ForgetMeshes();
         if (mCollision)
             mCollision->Clear();
+        if (mSwitch)
+        {
+            mSwitch->Clear();
+            mStagingVersion = mSwitch->StagingVersion();
+        }
+        for (ViewState &view : mViews)
+            view.staged.clear();
+        mStagedWarm.clear();
+        mStagedProblems.clear();
         mGuards.clear();
         mResources.clear();
         mWorld->Resource<TerrainWorld>() = TerrainWorld{};
@@ -315,7 +374,7 @@ namespace mir
         mReported.clear();
     }
 
-    void TerrainRuntime::Apply(TerrainSceneSpec spec)
+    void TerrainRuntime::Apply(TerrainSceneSpec spec, std::vector<TerrainReleaseAdoption> adopted)
     {
         TerrainWorld &current = mWorld->Resource<TerrainWorld>();
         TerrainStreamer *streamer = Streamer();
@@ -331,9 +390,12 @@ namespace mir
         }
 
         std::vector<TerrainIssue> issues = spec.issues;
+        TerrainResolveOptions options;
+        options.keepLoaded = true;
+        for (const TerrainReleaseAdoption &adoption : adopted)
+            options.adopt.push_back(adoption.release);
         const auto started = std::chrono::steady_clock::now();
-        TerrainWorld next =
-            ResolveTerrainWorld(spec, mReleasesRoot, &current, issues, *streamer, TerrainEagerLoad::Async);
+        TerrainWorld next = ResolveTerrainWorld(spec, mReleasesRoot, &current, issues, *streamer, options);
         const double resolveSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         for (const TerrainIssue &issue : issues)
             Report(issue.message);
@@ -346,21 +408,35 @@ namespace mir
             return;
         }
 
-        mResources = Build(next);
-        std::vector<TerrainReleaseInfo> keep;
-        for (const InstanceResources &resources : mResources)
-            keep.push_back(resources.release);
-        if (mMeshes)
-            mMeshes->RetireReleases(keep);
-        current = std::move(next);
+        // What the releases switched away from still hold, taken before they retire.
+        struct Leaving
+        {
+            const TerrainReleaseAdoption *adoption = nullptr;
+            TerrainReleaseId from;
+            TerrainReleaseUsage cpu, gpu, pieces;
+        };
+        std::vector<Leaving> leaving;
+        for (const TerrainReleaseAdoption &adoption : adopted)
+            for (const TerrainWorld::AssetState &asset : current.Assets())
+                if (asset.asset == adoption.release->Info().asset && asset.release)
+                {
+                    const TerrainReleaseInfo &from = asset.release->Info();
+                    leaving.push_back({&adoption, from.release, streamer->Usage(from),
+                                       mMeshes ? mMeshes->Usage(from) : TerrainReleaseUsage{},
+                                       mCollision ? mCollision->Usage(from) : TerrainReleaseUsage{}});
+                }
 
-        std::vector<TerrainCollisionInstance> collision;
+        mResources = Build(next);
+        current = std::move(next);
+        ApplyResidencies();
+        for (const Leaving &left : leaving)
+            LogAdoption(*left.adoption, left.from, left.cpu, left.gpu, left.pieces);
+
         for (size_t i = 0; i < current.Instances().size(); ++i)
         {
             const TerrainInstanceState &instance = current.Instances()[i];
             const TerrainReleaseInfo &info = instance.release->Info();
             const TerrainResidencyMode mode = streamer->ModeOf(info).value_or(TerrainResidencyMode::Interest);
-            collision.push_back({instance.release->SharedHandle(), instance.placement, mode});
             const TerrainIndex &index = instance.release->Handle().Index();
             const TileRange tiles = instance.release->Layout().Tiles();
             const glm::dvec3 at(instance.placement.translation.Meters());
@@ -374,8 +450,6 @@ namespace mir
                                                              : "in pieces its sources' motion asks for",
                          at.x, at.y, at.z);
         }
-        if (mCollision)
-            mCollision->SetInstances(collision);
         const TerrainStreamingStats stats = streamer->Stats();
         MIR_LOG_INFO("Terrain streaming: {} payloads ({:.2f} MiB) resident of {:.0f} MiB; resolving took {:.3f} s",
                      stats.ready, MiB(stats.residentBytes), MiB(stats.budgetBytes), resolveSeconds);
@@ -400,21 +474,133 @@ namespace mir
 
     bool TerrainRuntime::HasMeshPayloads(const TerrainInstanceState &instance)
     {
-        const TerrainIndex &index = instance.release->Handle().Index();
-        const TileRange range = instance.release->Layout().Tiles();
-        for (int32_t z = range.min.z; z <= range.max.z; ++z)
-            for (int32_t x = range.min.x; x <= range.max.x; ++x)
-            {
-                const TerrainTileRecord *source = index.Find({x, z});
-                if (source && index.Find({x, z}, source->layer, TerrainPayloadKind::LodHeight, 0) &&
-                    index.Find({x, z}, source->layer, TerrainPayloadKind::Normal, 0))
-                    continue;
-                Report(std::format("Terrain '{}': tile ({}, {}) of release {:016x} has no source LOD and normal "
-                                   "payloads to draw; the instance is not loaded",
-                                   instance.recipePath, x, z, instance.release->Info().release.value));
-                return false;
-            }
-        return true;
+        const std::string missing = MissingMeshPayloads(*instance.release);
+        if (missing.empty())
+            return true;
+        Report(std::format("Terrain '{}': {}; the instance is not loaded", instance.recipePath, missing));
+        return false;
+    }
+
+    void TerrainRuntime::ApplyResidencies()
+    {
+        TerrainStreamer *streamer = Streamer();
+        if (!streamer)
+            return;
+        const std::vector<std::shared_ptr<TerrainResidentRelease>> staged =
+            mSwitch ? mSwitch->Staged() : std::vector<std::shared_ptr<TerrainResidentRelease>>{};
+        std::vector<TerrainReleaseInfo> keep;
+        std::vector<TerrainCollisionInstance> active, prewarm;
+        for (const TerrainInstanceState &instance : mWorld->Resource<TerrainWorld>().Instances())
+        {
+            const TerrainReleaseInfo &info = instance.release->Info();
+            keep.push_back(info);
+            active.push_back({instance.release->SharedHandle(), instance.placement,
+                              streamer->ModeOf(info).value_or(TerrainResidencyMode::Interest)});
+            for (const std::shared_ptr<TerrainResidentRelease> &release : staged)
+                if (release->Info().asset == info.asset)
+                {
+                    keep.push_back(release->Info());
+                    prewarm.push_back({release->SharedHandle(), instance.placement,
+                                       streamer->ModeOf(release->Info()).value_or(TerrainResidencyMode::Interest)});
+                }
+        }
+        if (mMeshes)
+            mMeshes->RetireReleases(keep);
+        if (mCollision)
+            mCollision->SetInstances(active, prewarm);
+        mStagingVersion = mSwitch ? mSwitch->StagingVersion() : 0;
+    }
+
+    bool TerrainRuntime::IsStaged(AssetId asset, TerrainReleaseId release) const
+    {
+        if (!mSwitch)
+            return false;
+        for (const std::shared_ptr<TerrainResidentRelease> &staged : mSwitch->Staged())
+            if (staged->Info().asset == asset && staged->Info().release == release)
+                return true;
+        return false;
+    }
+
+    void TerrainRuntime::ReportSwitch()
+    {
+        TerrainStreamer *streamer = Streamer();
+        if (!mSwitch || !streamer)
+            return;
+        for (const std::shared_ptr<TerrainResidentRelease> &release : mSwitch->Staged())
+        {
+            const TerrainReleaseInfo &info = release->Info();
+            auto problem = mStagedProblems.find(info.release.value);
+            if (problem == mStagedProblems.end())
+                problem = mStagedProblems.emplace(info.release.value, MissingMeshPayloads(*release)).first;
+            const auto warm = mStagedWarm.find(info.asset.value);
+            TerrainPrewarmReport report = MeasureTerrainPrewarm(info, *streamer, mMeshes.get(), mCollision.get(),
+                                                                warm != mStagedWarm.end() && warm->second);
+            if (report.failure.empty())
+                report.failure = problem->second;
+            mSwitch->Report(info.asset, report);
+        }
+        for (const TerrainSwitchEvent &event : mSwitch->TakeEvents())
+            LogSwitch(event);
+    }
+
+    void TerrainRuntime::LogSwitch(const TerrainSwitchEvent &event)
+    {
+        const TerrainReleaseCandidate &c = event.candidate;
+        const std::string subject = std::format("Terrain '{}' (asset {:016x})", c.logicalPath, c.asset.value);
+        switch (event.kind)
+        {
+        case TerrainSwitchEvent::Kind::Started:
+            MIR_LOG_INFO("{}: current names release {:016x} while release {:016x} is loaded; {:016x} stays in use while "
+                         "the new one is checked on a worker",
+                         subject, c.release.value, c.loaded.value, c.loaded.value);
+            break;
+        case TerrainSwitchEvent::Kind::Verified:
+            MIR_LOG_INFO("{}: release {:016x} verified on a worker in {:.3f} s ({} packs, {:.2f} MiB read whole, "
+                         "{:.3f} s after current moved); its working set now loads beside release {:016x}",
+                         subject, c.release.value, c.verifySeconds, c.packs, MiB(c.bytesVerified),
+                         c.verifiedAt - c.startedAt, c.loaded.value);
+            break;
+        case TerrainSwitchEvent::Kind::Dropped:
+            MIR_LOG_INFO("{}: release {:016x} is no longer switched to ({}); its checks and prewarm are dropped",
+                         subject, c.release.value, c.failure);
+            break;
+        case TerrainSwitchEvent::Kind::Failed:
+            Report(std::format("{}: release {:016x} cannot be used: {}; release {:016x} stays in use until current "
+                               "moves again",
+                               subject, c.release.value, c.failure, c.loaded.value));
+            break;
+        case TerrainSwitchEvent::Kind::Ready:
+            MIR_LOG_INFO("{}: release {:016x} is {} {:.3f} s after current moved; it replaces release {:016x} at the "
+                         "next Edit frame boundary",
+                         subject, c.release.value, c.warm ? "warm" : "as warm as the budgets let it get",
+                         c.readyAt - c.startedAt, c.loaded.value);
+            break;
+        case TerrainSwitchEvent::Kind::Unreadable:
+            Report(std::format("{}: current cannot be read ({}); release {:016x} stays in use", subject, c.failure,
+                               c.loaded.value));
+            break;
+        }
+    }
+
+    void TerrainRuntime::LogAdoption(const TerrainReleaseAdoption &adoption, TerrainReleaseId from,
+                                     const TerrainReleaseUsage &cpu, const TerrainReleaseUsage &gpu,
+                                     const TerrainReleaseUsage &pieces)
+    {
+        const TerrainReleaseCandidate &c = adoption.candidate;
+        std::string stored;
+        for (const TerrainStoredRelease &release : c.stored)
+            stored += std::format("{}{:016x} ({:.2f} MiB in {} files{})", stored.empty() ? "" : ", ",
+                                  release.release.value, MiB(release.bytes), release.files,
+                                  release.release == from      ? ", switched from"
+                                  : release.release == c.release ? ", now loaded"
+                                                                 : "");
+        MIR_LOG_INFO("Terrain '{}' (asset {:016x}): switched from release {:016x} to {:016x} at an Edit frame "
+                     "boundary, {:.3f} s after current moved; {:016x}'s {} CPU payloads ({:.2f} MiB) go at the next "
+                     "update, its {} GPU meshes ({:.2f} MiB) retire once the frames that use them finish, and its {} "
+                     "collision pieces left between steps; kept on disk, none deleted: {}",
+                     c.logicalPath, c.asset.value, from.value, c.release.value, Now() - c.startedAt, from.value,
+                     cpu.ready + cpu.inFlight, MiB(cpu.bytes), gpu.ready + gpu.inFlight, MiB(gpu.bytes),
+                     pieces.ready + pieces.inFlight, stored);
     }
 
     void TerrainRuntime::TagColliders(const TerrainSceneSpec &spec)
@@ -563,6 +749,14 @@ namespace mir
             switch (event.kind)
             {
             case TerrainCollisionEvent::Kind::Placed:
+                if (event.staged)
+                {
+                    MIR_LOG_INFO("Terrain collision: {} built ahead of its release switch at {} m, error {} m, in "
+                                 "{:.1f} ms, {:.1f} KiB; placed once the release is switched to",
+                                 piece, event.spacing, event.error.total, event.buildSeconds * 1000.0,
+                                 double(event.bytes) / 1024.0);
+                    break;
+                }
                 MIR_LOG_INFO("Terrain collision: {} placed for {} instances at {} m, error {} m (geometry {}, "
                              "quantization {}, horizontal {}, numeric {}), built in {:.1f} ms, {:.1f} KiB{}",
                              piece, event.colliders, event.spacing, event.error.total, event.error.geometry,
@@ -577,6 +771,9 @@ namespace mir
                              event.unusedSeconds);
                 break;
             case TerrainCollisionEvent::Kind::Failed:
+                // The switch reports it and keeps the loaded release.
+                if (IsStaged(event.piece.asset, event.piece.release))
+                    break;
                 Report(std::format("Terrain collision: {} failed: {}; bodies that need it are held", piece,
                                    event.message));
                 break;
@@ -615,6 +812,17 @@ namespace mir
         const TerrainUnitReady ready = Ready();
         mFrameWants.clear();
 
+        // A staged release in place of each loaded one of its asset, selected but never drawn.
+        std::map<uint64_t, std::vector<TerrainSelectionInstance>> staged;
+        if (mSwitch)
+            for (const std::shared_ptr<TerrainResidentRelease> &release : mSwitch->Staged())
+                for (const TerrainInstanceState &instance : mWorld->Resource<TerrainWorld>().Instances())
+                    if (instance.placement.asset == release->Info().asset)
+                        staged[release->Info().asset.value].push_back({release->SharedHandle(), instance.placement});
+        mStagedWarm.clear();
+        for (const auto &[asset, instances] : staged)
+            mStagedWarm[asset] = true;
+
         for (ViewState &view : mViews)
             view.seen = false;
         for (const ViewCamera &camera : views)
@@ -639,8 +847,26 @@ namespace mir
                 double(camera.extent.height) / (2.0 * std::tan(glm::radians(double(camera.lens.mFovYDegrees)) * 0.5));
             selection.farDistance = camera.lens.HasFarPlane() ? double(camera.lens.mFarZ) : 0.0;
             view.selector->Update(mSelection, selection, ready);
-            streamer->SetInterest(view.interest, view.selector->Wants());
-            mFrameWants.insert(mFrameWants.end(), view.selector->Wants().begin(), view.selector->Wants().end());
+            std::vector<TerrainPayloadWant> wants(view.selector->Wants().begin(), view.selector->Wants().end());
+
+            std::erase_if(view.staged, [&](const auto &entry) { return !staged.contains(entry.first); });
+            for (const auto &[asset, instances] : staged)
+            {
+                std::unique_ptr<TerrainViewSelector> &selector = view.staged[asset];
+                if (!selector)
+                    selector = std::make_unique<TerrainViewSelector>(settings);
+                selector->Update(instances, selection, ready);
+                const TerrainViewStats &stats = selector->Stats();
+                mStagedWarm[asset] = mStagedWarm[asset] && stats.missing == 0 && stats.coarserFallbacks == 0 &&
+                                     stats.otherFallbacks == 0;
+                // Below everything the loaded releases want.
+                for (const TerrainPayloadWant &want : selector->Wants())
+                    if (want.demand == TerrainDemand::Visible)
+                        wants.push_back({want.key, TerrainDemand::Prefetch, want.rank});
+            }
+
+            streamer->SetInterest(view.interest, wants);
+            mFrameWants.insert(mFrameWants.end(), wants.begin(), wants.end());
         }
 
         for (auto it = mViews.begin(); it != mViews.end();)
@@ -654,7 +880,10 @@ namespace mir
             it = mViews.erase(it);
         }
 
-        mMeshes->Request(mSelection, mFrameWants, *streamer, mFrameTime);
+        std::vector<TerrainSelectionInstance> meshInstances = mSelection;
+        for (const auto &[asset, instances] : staged)
+            meshInstances.insert(meshInstances.end(), instances.begin(), instances.end());
+        mMeshes->Request(meshInstances, mFrameWants, *streamer, mFrameTime);
         ReportMeshFailures();
         for (const ViewCamera &camera : views)
             for (size_t i = 0; i < mViews.size(); ++i)
@@ -711,6 +940,9 @@ namespace mir
         const std::span<const TerrainInstanceState> instances = mWorld->Resource<TerrainWorld>().Instances();
         for (const auto &[key, error] : mMeshes->TakeFailures())
         {
+            // The switch reports it and keeps the loaded release.
+            if (IsStaged(key.asset, key.release))
+                continue;
             const auto instance = std::find_if(instances.begin(), instances.end(),
                                                [&](const TerrainInstanceState &i)
                                                {

@@ -321,6 +321,7 @@ namespace mir
 
         // Play pins the terrain releases present on entry
         mTerrain->Refresh(0.0f, true);
+        mTerrain->BeginPlay();
 
         mPlaySnapshot = CaptureWorld(mWorld);
 
@@ -351,7 +352,7 @@ namespace mir
         SetEngineMode(mWorld, EngineMode::Edit);
         SetPlayState(mWorld, PlayState::Running);
 
-        // Picks up a release published during Play
+        // Starts checking a release published during Play
         mTerrain->Refresh(0.0f, true);
     }
 

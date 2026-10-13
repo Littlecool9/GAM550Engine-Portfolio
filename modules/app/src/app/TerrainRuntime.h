@@ -19,6 +19,7 @@
 #include <terrain/TerrainExecutor.h>
 #include <terrain/TerrainIdentity.h>
 #include <terrain/TerrainMeshResidency.h>
+#include <terrain/TerrainReleaseSwitch.h>
 #include <terrain/TerrainScene.h>
 #include <terrain/TerrainStreamer.h>
 #include <terrain/TerrainViewSelection.h>
@@ -67,8 +68,13 @@ namespace mir
 
         void Load();
 
-        // force polls now and applies an unsettled change.
+        // force polls now and applies an unsettled change. A newer release current names is checked and prewarmed
+        // in the background and switched to here once ready.
         void Refresh(float dt, bool force);
+
+        // After the Refresh that enters Play: Play runs on the loaded releases, and a switch still being checked or
+        // prewarmed lets its work go until Stop.
+        void BeginPlay();
 
         // Before ReleaseSceneResources frees every mesh; the next frame builds what it draws again.
         void ForgetMeshes();
@@ -98,6 +104,8 @@ namespace mir
             size_t viewport = 0;
             TerrainInterestId interest = 0;
             std::unique_ptr<TerrainViewSelector> selector;
+            // What each staged release would draw here, by asset; never drawn.
+            std::unordered_map<uint64_t, std::unique_ptr<TerrainViewSelector>> staged;
             std::vector<WorldDrawItem> draws;
             bool seen = false;
             double loggedAt = -std::numeric_limits<double>::infinity();
@@ -122,9 +130,17 @@ namespace mir
         bool Bound() const { return mWorld != nullptr; }
         TerrainStreamer *Streamer() const;
         double Now() const;
-        void Apply(TerrainSceneSpec spec);
+        void Apply(TerrainSceneSpec spec, std::vector<TerrainReleaseAdoption> adopted = {});
         std::vector<InstanceResources> Build(TerrainWorld &next);
         bool HasMeshPayloads(const TerrainInstanceState &instance);
+        // The loaded and staged releases to the mesh and collision residencies.
+        void ApplyResidencies();
+        bool IsStaged(AssetId asset, TerrainReleaseId release) const;
+        // Each staged release's prewarm to the switch, and the switch's events to the log.
+        void ReportSwitch();
+        void LogSwitch(const TerrainSwitchEvent &event);
+        void LogAdoption(const TerrainReleaseAdoption &adoption, TerrainReleaseId from, const TerrainReleaseUsage &cpu,
+                         const TerrainReleaseUsage &gpu, const TerrainReleaseUsage &pieces);
         void TagColliders(const TerrainSceneSpec &spec);
         Entity EntityAt(const TerrainPlacement &placement) const;
         // Every dynamic RigidBody and every source a game registered; bodies first, in mBodies' order.
@@ -166,6 +182,14 @@ namespace mir
         std::shared_ptr<Colliders> mColliders;
         // Null without valid settings.
         std::unique_ptr<TerrainCollisionResidency> mCollision;
+        // Null without valid settings.
+        std::unique_ptr<TerrainReleaseSwitch> mSwitch;
+        // What the residencies were last given.
+        uint64_t mStagingVersion = 0;
+        // By asset: every viewport's selection of its staged release draws only usable chosen units.
+        std::unordered_map<uint64_t, bool> mStagedWarm;
+        // By release id: why a staged release cannot draw; empty when it can.
+        std::unordered_map<uint64_t, std::string> mStagedProblems;
         std::vector<TerrainCollisionSource> mSources;
         // The bodies among mSources, and the game's sources after them.
         std::vector<BodyHandle> mBodies;
