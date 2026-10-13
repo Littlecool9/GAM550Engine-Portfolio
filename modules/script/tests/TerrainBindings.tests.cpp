@@ -119,7 +119,7 @@ namespace
         {
             std::vector<TerrainIssue> issues;
             TerrainWorld next = ResolveTerrainWorld(spec, root, world.TryResource<TerrainWorld>(), issues,
-                                                    world.Resource<TerrainStreamer>());
+                                                    world.Resource<TerrainStreamer>(), TerrainEagerLoad::Wait);
             REQUIRE(issues.empty());
             REQUIRE(next.Instances().size() == 1);
             world.EmplaceResource<TerrainWorld>(std::move(next));

@@ -107,6 +107,14 @@ namespace mir
         TerrainHeightQuery mQuery;
     };
 
+    enum class TerrainEagerLoad : uint8_t
+    {
+        // Blocks until every payload of a new Eager release is resident, and refuses it when one fails.
+        Wait,
+        // Returns at once: payloads arrive through the streamer, and their failures are reported as they come.
+        Async,
+    };
+
     // Map bounds plus translation, in world meters.
     struct TerrainWorldRect
     {
@@ -156,17 +164,17 @@ namespace mir
     private:
         friend TerrainWorld ResolveTerrainWorld(const TerrainSceneSpec &, const std::filesystem::path &,
                                                 const TerrainWorld *, std::vector<TerrainIssue> &,
-                                                TerrainStreamer &);
+                                                TerrainStreamer &, TerrainEagerLoad);
 
         std::vector<AssetState> mAssets;
         std::vector<TerrainInstanceState> mInstances;
     };
 
     // previous is not changed. Overlapping instances are all refused. New releases are added to the
-    // streamer; an Eager one is waited for and refused when any payload fails.
+    // streamer; with Wait an Eager one is waited for and refused when any payload fails.
     TerrainWorld ResolveTerrainWorld(const TerrainSceneSpec &spec, const std::filesystem::path &releasesRoot,
                                      const TerrainWorld *previous, std::vector<TerrainIssue> &issues,
-                                     TerrainStreamer &streamer);
+                                     TerrainStreamer &streamer, TerrainEagerLoad eager);
 
     // Reads only the pointer files.
     bool TerrainCurrentMoved(const TerrainWorld &world, const std::filesystem::path &releasesRoot);

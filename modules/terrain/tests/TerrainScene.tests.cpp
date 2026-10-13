@@ -138,7 +138,8 @@ namespace
     {
         const TerrainSceneSpec spec = CollectTerrainScene(world, kIdRoot);
         issues = spec.issues;
-        return ResolveTerrainWorld(spec, root, previous, issues, world.Resource<TerrainStreamer>());
+        return ResolveTerrainWorld(spec, root, previous, issues, world.Resource<TerrainStreamer>(),
+                                   TerrainEagerLoad::Wait);
     }
 
     const TerrainIssue *IssueFor(const std::vector<TerrainIssue> &issues, std::string_view recipe)

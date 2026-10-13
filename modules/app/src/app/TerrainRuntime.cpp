@@ -218,7 +218,8 @@ namespace mir
 
         std::vector<TerrainIssue> issues = spec.issues;
         const auto started = std::chrono::steady_clock::now();
-        TerrainWorld next = ResolveTerrainWorld(spec, mReleasesRoot, &current, issues, *streamer);
+        TerrainWorld next =
+            ResolveTerrainWorld(spec, mReleasesRoot, &current, issues, *streamer, TerrainEagerLoad::Wait);
         const double resolveSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         for (const TerrainIssue &issue : issues)
             Report(issue.message);
