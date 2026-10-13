@@ -11,14 +11,19 @@
 #include "TerrainRender.h"
 
 #include <app/GameProject.h>
+#include <core/ecs/Entity.h>
+#include <physics/PhysicsStepGate.h>
 #include <physics/PhysicsTypes.h>
 #include <renderer/ViewDrawSource.h>
+#include <terrain/TerrainCollisionResidency.h>
 #include <terrain/TerrainExecutor.h>
 #include <terrain/TerrainIdentity.h>
 #include <terrain/TerrainMeshResidency.h>
 #include <terrain/TerrainScene.h>
 #include <terrain/TerrainStreamer.h>
 #include <terrain/TerrainViewSelection.h>
+
+#include <glm/vec3.hpp>
 
 #include <chrono>
 #include <filesystem>
@@ -27,11 +32,13 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace mir
 {
+    class PhysicsWorld;
     class VulkanRenderer;
     class World;
 
@@ -44,13 +51,14 @@ namespace mir
     // A viewport's selection is logged when it changes, at most this often.
     inline constexpr double kTerrainViewLogSeconds = 2.0;
 
-    class TerrainRuntime final : public IViewDrawSource
+    class TerrainRuntime final : public IViewDrawSource, public PhysicsStepGate
     {
     public:
         ~TerrainRuntime() override;
 
         // Loads the game's streaming settings; when they are valid, emplaces them and a TerrainStreamer, sets up
-        // the renderer's mesh streaming and draws terrain per viewport through the World's ViewDrawSources.
+        // the renderer's mesh streaming and draws terrain per viewport through the World's ViewDrawSources, and
+        // guards each fixed step through its PhysicsStepGates.
         void Bind(World &world, VulkanRenderer &renderer, const GameProject &project);
 
         // The one point per frame where finished terrain reads, mesh builds and uploads are installed; call
@@ -74,15 +82,15 @@ namespace mir
         void AppendVolumeDraws(size_t view, WorldPosition origin, const glm::mat4 &viewProj,
                                std::vector<WorldDrawItem> &out) override;
 
+        // Holds the dynamic bodies whose terrain collision is not ready, resumes the rest and tells each which
+        // terrain pieces it may touch.
+        void BeforeStep(World &world, PhysicsWorld &physics, float dt) override;
+
     private:
         struct InstanceResources
         {
             TerrainReleaseInfo release;
             TerrainPlacement placement;
-            // Invalid for an instance streamed by interest.
-            BodyHandle collider;
-            // The selected height field's first sample.
-            TerrainLocalPosition colliderOrigin;
         };
 
         struct ViewState
@@ -96,19 +104,34 @@ namespace mir
             std::string logged;
         };
 
+        // A dynamic body the gate has seen.
+        struct Guard
+        {
+            Entity entity;
+            bool held = false;
+            double since = 0.0;
+            glm::dvec3 last{0.0};
+            TerrainCollisionStatus status;
+            bool unowned = false;
+            bool seen = false;
+            bool fresh = true;
+        };
+
+        class Colliders;
+
         bool Bound() const { return mWorld != nullptr; }
         TerrainStreamer *Streamer() const;
         double Now() const;
         void Apply(TerrainSceneSpec spec);
-        // Takes what it reuses out of old; the rest is left to destroy after the swap.
-        std::vector<InstanceResources> Build(TerrainWorld &next, std::vector<InstanceResources> &old);
-        std::optional<InstanceResources> Reuse(const TerrainInstanceState &instance,
-                                               std::vector<InstanceResources> &old);
+        std::vector<InstanceResources> Build(TerrainWorld &next);
         bool HasMeshPayloads(const TerrainInstanceState &instance);
-        BodyHandle BuildCollider(const TerrainInstanceState &instance, TerrainLocalPosition &origin);
-        bool MoveCollider(InstanceResources &resources, const TerrainInstanceState &instance);
         void TagColliders(const TerrainSceneSpec &spec);
-        void DestroyCollider(BodyHandle body);
+        Entity EntityAt(const TerrainPlacement &placement) const;
+        // Every dynamic RigidBody and every source a game registered; bodies first, in mBodies' order.
+        void CollectSources(PhysicsWorld *physics);
+        void Collide(PhysicsWorld *physics, double stepSeconds);
+        void ReportCollision();
+        std::string NameOf(Entity entity) const;
         // A unit draws once its GPU mesh is usable.
         TerrainUnitReady Ready() const;
         void AppendDraws(std::span<const TerrainDrawUnit> units, std::vector<WorldDrawItem> &out);
@@ -127,17 +150,27 @@ namespace mir
         // Plus the latest edit waiting to settle.
         TerrainSceneSpec mSpec;
         TerrainSceneSpec mPendingSpec;
+        // The newest entities, which colliders are tagged with.
+        TerrainSceneSpec mTagSpec;
         float mPendingAge = 0.0f;
         float mSincePoll = 0.0f;
 
         // Parallel to TerrainWorld::Instances().
         std::vector<InstanceResources> mResources;
 
-        // The streamer's worker pool, which also builds meshes.
+        // The streamer's worker pool, which also builds meshes and collision pieces.
         std::shared_ptr<TerrainWorkerPool> mPool;
         std::unique_ptr<TerrainGpuUploader> mUploader;
         // Null without valid settings or renderer mesh streaming.
         std::unique_ptr<TerrainMeshResidency> mMeshes;
+        std::shared_ptr<Colliders> mColliders;
+        // Null without valid settings.
+        std::unique_ptr<TerrainCollisionResidency> mCollision;
+        std::vector<TerrainCollisionSource> mSources;
+        // The bodies among mSources, and the game's sources after them.
+        std::vector<BodyHandle> mBodies;
+        std::vector<uint32_t> mGameSources;
+        std::unordered_map<uint32_t, Guard> mGuards;
         // Every viewport's wants this frame.
         std::vector<TerrainPayloadWant> mFrameWants;
         std::vector<ViewState> mViews;
