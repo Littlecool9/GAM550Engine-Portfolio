@@ -20,7 +20,10 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/MotionProperties.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/CollisionGroup.h>
+#include <Jolt/Physics/Collision/GroupFilter.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
@@ -32,10 +35,12 @@
 #include <glm/geometric.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <optional>
 #include <utility>
 #include <unordered_map>
+#include <vector>
 
 namespace
 {
@@ -170,6 +175,165 @@ namespace
         const JPH::Vec3 worldOffset = bodies.GetRotation(id) * ToJolt(localOffset);
         return bodies.GetCenterOfMassPosition(id) + worldOffset;
     }
+
+    constexpr JPH::CollisionGroup::GroupID kRestrictedGroup = 1;
+    constexpr JPH::CollisionGroup::GroupID kDynamicGroup = 2;
+
+    // Read by Jolt's jobs during a step, changed only between steps.
+    class ContactRestriction final : public JPH::GroupFilter
+    {
+    public:
+        bool CanCollide(const JPH::CollisionGroup &a, const JPH::CollisionGroup &b) const override
+        {
+            const JPH::CollisionGroup &restricted = a.GetGroupID() == kRestrictedGroup ? a : b;
+            const JPH::CollisionGroup &other = &restricted == &a ? b : a;
+            if (restricted.GetGroupID() != kRestrictedGroup || other.GetGroupID() != kDynamicGroup)
+                return true;
+            const auto found = mAllowed.find(other.GetSubGroupID());
+            return found == mAllowed.end() ||
+                   std::binary_search(found->second.begin(), found->second.end(), restricted.GetSubGroupID());
+        }
+
+        // By body index, sorted.
+        std::unordered_map<JPH::uint32, std::vector<JPH::uint32>> mAllowed;
+    };
+}
+
+namespace mir
+{
+    struct SharedHeightField::Data
+    {
+        // First, so Jolt outlives the shape.
+        detail::JoltRuntimeRef runtime;
+        JPH::RefConst<JPH::Shape> shape;
+        std::optional<HeightFieldInfo> info;
+    };
+
+    const HeightFieldInfo *SharedHeightField::Info() const
+    {
+        return mData && mData->info ? &*mData->info : nullptr;
+    }
+
+    SharedHeightField BuildHeightField(const HeightFieldDesc &desc)
+    {
+        const uint32_t stride = desc.mSampleStride;
+        if (desc.mCountX < 2 || desc.mCountZ < 2 ||
+            desc.mSamples.size() != static_cast<std::size_t>(desc.mCountX) * desc.mCountZ)
+        {
+            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: needs countX * countZ samples, at least 2 x 2");
+            return {};
+        }
+        if (stride == 0 || (desc.mCountX - 1) % stride != 0 || (desc.mCountZ - 1) % stride != 0)
+        {
+            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: count - 1 must be a multiple of the sample stride");
+            return {};
+        }
+        const float spacing = desc.mSpacing * static_cast<float>(stride);
+        if (!(desc.mSpacing > 0.0f) || !std::isfinite(spacing))
+        {
+            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: spacing must be positive and finite");
+            return {};
+        }
+        // Jolt 5.5's triangle walk breaks from block size 3 (terrain ADR 0017).
+        if ((desc.mBlockSize != 2 && desc.mBlockSize != 4) || desc.mBitsPerSample < 1 || desc.mBitsPerSample > 8)
+        {
+            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: block size must be 2 or 4, bits per sample in [1, 8]");
+            return {};
+        }
+        const bool sharedRange = !std::isnan(desc.mQuantizationMin) || !std::isnan(desc.mQuantizationMax);
+        if (sharedRange && !(std::isfinite(desc.mQuantizationMin) && std::isfinite(desc.mQuantizationMax) &&
+                             desc.mQuantizationMin <= desc.mQuantizationMax))
+        {
+            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: a quantization range needs finite min <= max");
+            return {};
+        }
+
+        const uint32_t columns = (desc.mCountX - 1) / stride + 1;
+        const uint32_t rows = (desc.mCountZ - 1) / stride + 1;
+        // Jolt's square is at least two blocks; every added sample is a hole.
+        const uint32_t side = std::max({columns, rows, 2 * desc.mBlockSize});
+        if (side > kMaxHeightFieldSide - kMaxHeightFieldSide % desc.mBlockSize)
+        {
+            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: {} x {} samples exceed Jolt's {} per side",
+                columns, rows, kMaxHeightFieldSide);
+            return {};
+        }
+
+        // Holds Jolt registered while the shape is built, with or without a PhysicsWorld.
+        auto data = std::make_shared<SharedHeightField::Data>();
+        JPH::HeightFieldShapeSettings settings;
+        settings.mScale = JPH::Vec3(spacing, 1.0f, spacing);
+        settings.mSampleCount = side;
+        settings.mBlockSize = desc.mBlockSize;
+        settings.mBitsPerSample = desc.mBitsPerSample;
+        if (sharedRange)
+        {
+            settings.mMinHeightValue = desc.mQuantizationMin;
+            settings.mMaxHeightValue = desc.mQuantizationMax;
+        }
+        settings.mHeightSamples.resize(static_cast<std::size_t>(side) * side, kHeightFieldHole);
+        for (uint32_t z = 0; z < rows; ++z)
+        {
+            for (uint32_t x = 0; x < columns; ++x)
+            {
+                const float height = desc.mSamples[static_cast<std::size_t>(z) * stride * desc.mCountX +
+                                                  static_cast<std::size_t>(x) * stride];
+                if (!std::isfinite(height))
+                {
+                    MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: sample ({}, {}) is not finite",
+                        x * stride, z * stride);
+                    return {};
+                }
+                if (sharedRange && height != kHeightFieldHole &&
+                    (height < desc.mQuantizationMin || height > desc.mQuantizationMax))
+                {
+                    MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: sample ({}, {}) is outside the quantization range",
+                        x * stride, z * stride);
+                    return {};
+                }
+                settings.mHeightSamples[static_cast<std::size_t>(z) * side + x] = height;
+            }
+        }
+
+        const JPH::ShapeSettings::ShapeResult result = settings.Create();
+        if (result.HasError())
+        {
+            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: {}", result.GetError().c_str());
+            return {};
+        }
+
+        data->shape = result.Get();
+        SharedHeightField built;
+        if (result.Get()->GetSubType() != JPH::EShapeSubType::HeightField)
+        {
+            built.mData = std::move(data);
+            return built;
+        }
+        const auto *field = static_cast<const JPH::HeightFieldShape *>(result.Get().GetPtr());
+        HeightFieldInfo info{field->GetSampleCount(), field->GetStats().mSizeBytes};
+        for (uint32_t z = 0; z < rows; ++z)
+            for (uint32_t x = 0; x < columns; ++x)
+            {
+                const float input = desc.mSamples[size_t(z) * stride * desc.mCountX + size_t(x) * stride];
+                if (input == kHeightFieldHole) continue;
+                const JPH::Vec3 decoded = field->GetPosition(x, z);
+                if (field->IsNoCollision(x, z) || !std::isfinite(decoded.GetY()))
+                {
+                    MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: a valid sample decoded to a hole");
+                    return {};
+                }
+                info.mMaxQuantizationError = std::max(info.mMaxQuantizationError, std::abs(double(decoded.GetY()) - input));
+                info.mMaxHorizontalError = std::max({info.mMaxHorizontalError,
+                    std::abs(double(decoded.GetX()) - double(x) * desc.mSpacing * stride),
+                    std::abs(double(decoded.GetZ()) - double(z) * desc.mSpacing * stride)});
+                ++info.mValidSamples;
+            }
+        info.mExtentX = field->GetPosition(columns - 1, 0).GetX();
+        info.mExtentZ = field->GetPosition(0, rows - 1).GetZ();
+        data->info = info;
+        built.mData = std::move(data);
+        return built;
+    }
 }
 
 namespace mir
@@ -216,8 +380,42 @@ namespace mir
 
             if (!dynamic)
                 mBroadPhaseDirty = true;
+            else
+                mSystem.GetBodyInterface().SetCollisionGroup(id,
+                    JPH::CollisionGroup(nullptr, kDynamicGroup, id.GetIndex()));
 
             return BodyHandle{ id.GetIndexAndSequenceNumber() };
+        }
+
+        // Mass properties are read while the body is still dynamic; Jolt only answers them then.
+        struct Held
+        {
+            JPH::Vec3 linear = JPH::Vec3::sZero();
+            JPH::Vec3 angular = JPH::Vec3::sZero();
+            float inverseMass = 0.0f;
+            JPH::Vec3 inverseInertia = JPH::Vec3::sZero();
+            JPH::Quat inertiaRotation = JPH::Quat::sIdentity();
+        };
+
+        Held *FindHeld(BodyHandle body)
+        {
+            const auto found = mHeld.find(body.mId);
+            return found == mHeld.end() ? nullptr : &found->second;
+        }
+
+        const Held *FindHeld(BodyHandle body) const
+        {
+            const auto found = mHeld.find(body.mId);
+            return found == mHeld.end() ? nullptr : &found->second;
+        }
+
+        // A held body is kinematic, so an impulse lands in the velocities it keeps.
+        void HeldImpulse(BodyHandle body, Held &held, JPH::Vec3Arg impulse, JPH::Vec3Arg angularImpulse)
+        {
+            held.linear += impulse * held.inverseMass;
+            const JPH::Mat44 axes =
+                JPH::Mat44::sRotation(mSystem.GetBodyInterface().GetRotation(ToBodyId(body)) * held.inertiaRotation);
+            held.angular += axes.Multiply3x3(held.inverseInertia * axes.Multiply3x3Transposed(angularImpulse));
         }
 
         // the first in declaration order to outlive other systems
@@ -236,6 +434,10 @@ namespace mir
         bool mBroadPhaseDirty = false;
         std::size_t mHeightFieldsBuilt = 0;
         std::unordered_map<uint32_t, HeightFieldInfo> mHeightFieldInfo;
+        // Shapes of height field bodies, which share them.
+        std::unordered_map<uint32_t, SharedHeightField> mHeightFieldShapes;
+        JPH::Ref<ContactRestriction> mRestriction = new ContactRestriction();
+        std::unordered_map<uint32_t, Held> mHeld;
     };
 
     PhysicsWorld::PhysicsWorld(const PhysicsWorldDesc &desc)
@@ -295,101 +497,24 @@ namespace mir
 
     BodyHandle PhysicsWorld::CreateStaticHeightField(const HeightFieldDesc &desc)
     {
-        const uint32_t stride = desc.mSampleStride;
-        if (desc.mCountX < 2 || desc.mCountZ < 2 ||
-            desc.mSamples.size() != static_cast<std::size_t>(desc.mCountX) * desc.mCountZ)
-        {
-            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: needs countX * countZ samples, at least 2 x 2");
+        const SharedHeightField shape = BuildHeightField(desc);
+        if (!shape.IsValid())
             return {};
-        }
-        if (stride == 0 || (desc.mCountX - 1) % stride != 0 || (desc.mCountZ - 1) % stride != 0)
-        {
-            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: count - 1 must be a multiple of the sample stride");
-            return {};
-        }
-        const float spacing = desc.mSpacing * static_cast<float>(stride);
-        if (!(desc.mSpacing > 0.0f) || !std::isfinite(spacing))
-        {
-            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: spacing must be positive and finite");
-            return {};
-        }
-        // Jolt 5.5's triangle walk breaks from block size 3 (terrain ADR 0017).
-        if ((desc.mBlockSize != 2 && desc.mBlockSize != 4) || desc.mBitsPerSample < 1 || desc.mBitsPerSample > 8)
-        {
-            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: block size must be 2 or 4, bits per sample in [1, 8]");
-            return {};
-        }
-
-        const uint32_t columns = (desc.mCountX - 1) / stride + 1;
-        const uint32_t rows = (desc.mCountZ - 1) / stride + 1;
-        // Jolt's square is at least two blocks; every added sample is a hole.
-        const uint32_t side = std::max({columns, rows, 2 * desc.mBlockSize});
-        if (side > kMaxHeightFieldSide - kMaxHeightFieldSide % desc.mBlockSize)
-        {
-            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: {} x {} samples exceed Jolt's {} per side",
-                columns, rows, kMaxHeightFieldSide);
-            return {};
-        }
-
-        JPH::HeightFieldShapeSettings settings;
-        settings.mScale = JPH::Vec3(spacing, 1.0f, spacing);
-        settings.mSampleCount = side;
-        settings.mBlockSize = desc.mBlockSize;
-        settings.mBitsPerSample = desc.mBitsPerSample;
-        settings.mHeightSamples.resize(static_cast<std::size_t>(side) * side, kHeightFieldHole);
-        for (uint32_t z = 0; z < rows; ++z)
-        {
-            for (uint32_t x = 0; x < columns; ++x)
-            {
-                const float height = desc.mSamples[static_cast<std::size_t>(z) * stride * desc.mCountX +
-                                                  static_cast<std::size_t>(x) * stride];
-                if (!std::isfinite(height))
-                {
-                    MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: sample ({}, {}) is not finite",
-                        x * stride, z * stride);
-                    return {};
-                }
-                settings.mHeightSamples[static_cast<std::size_t>(z) * side + x] = height;
-            }
-        }
-
-        const JPH::ShapeSettings::ShapeResult result = settings.Create();
-        if (result.HasError())
-        {
-            MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: {}", result.GetError().c_str());
-            return {};
-        }
-
-        if (result.Get()->GetSubType() != JPH::EShapeSubType::HeightField)
-        {
-            ++mImpl->mHeightFieldsBuilt;
-            return mImpl->CreateBody(result.Get(), desc.mOrigin, kIdentityRotation, false, true);
-        }
-        const auto *field = static_cast<const JPH::HeightFieldShape *>(result.Get().GetPtr());
-        HeightFieldInfo info{field->GetSampleCount(), field->GetStats().mSizeBytes};
-        for (uint32_t z = 0; z < rows; ++z)
-            for (uint32_t x = 0; x < columns; ++x)
-            {
-                const float input = desc.mSamples[size_t(z) * stride * desc.mCountX + size_t(x) * stride];
-                if (input == kHeightFieldHole) continue;
-                const JPH::Vec3 decoded = field->GetPosition(x, z);
-                if (field->IsNoCollision(x, z) || !std::isfinite(decoded.GetY()))
-                {
-                    MIR_LOG_ERROR("PhysicsWorld::CreateStaticHeightField: a valid sample decoded to a hole");
-                    return {};
-                }
-                info.mMaxQuantizationError = std::max(info.mMaxQuantizationError, std::abs(double(decoded.GetY()) - input));
-                info.mMaxHorizontalError = std::max({info.mMaxHorizontalError,
-                    std::abs(double(decoded.GetX()) - double(x) * desc.mSpacing * stride),
-                    std::abs(double(decoded.GetZ()) - double(z) * desc.mSpacing * stride)});
-                ++info.mValidSamples;
-            }
-        info.mExtentX = field->GetPosition(columns - 1, 0).GetX();
-        info.mExtentZ = field->GetPosition(0, rows - 1).GetZ();
         ++mImpl->mHeightFieldsBuilt;
+        return CreateStaticHeightField(shape, desc.mOrigin);
+    }
+
+    BodyHandle PhysicsWorld::CreateStaticHeightField(const SharedHeightField &shape, WorldPosition origin)
+    {
+        if (!shape.IsValid())
+            return {};
         // Enhanced internal edge removal keeps planar crossings smooth.
-        const BodyHandle body = mImpl->CreateBody(result.Get(), desc.mOrigin, kIdentityRotation, false, true);
-        if (body.IsValid()) mImpl->mHeightFieldInfo.emplace(body.mId, info);
+        const BodyHandle body = mImpl->CreateBody(shape.mData->shape, origin, kIdentityRotation, false, true);
+        if (!body.IsValid())
+            return body;
+        if (const HeightFieldInfo *info = shape.Info())
+            mImpl->mHeightFieldInfo.emplace(body.mId, *info);
+        mImpl->mHeightFieldShapes.emplace(body.mId, shape);
         return body;
     }
 
@@ -411,8 +536,87 @@ namespace mir
         bodies.RemoveBody(id);
         bodies.DestroyBody(id);
         mImpl->mHeightFieldInfo.erase(body.mId);
+        mImpl->mHeightFieldShapes.erase(body.mId);
+        mImpl->mHeld.erase(body.mId);
+        mImpl->mRestriction->mAllowed.erase(id.GetIndex());
 
         bodies.ActivateBodiesInAABox(bounds, {}, {});
+    }
+
+    void PhysicsWorld::RestrictBody(BodyHandle staticBody)
+    {
+        if (!staticBody.IsValid())
+            return;
+        JPH::BodyInterface &bodies = mImpl->mSystem.GetBodyInterface();
+        const JPH::BodyID id = ToBodyId(staticBody);
+        if (!bodies.IsAdded(id) || bodies.GetMotionType(id) != JPH::EMotionType::Static)
+            return;
+        bodies.SetCollisionGroup(id, JPH::CollisionGroup(mImpl->mRestriction, kRestrictedGroup, id.GetIndex()));
+    }
+
+    void PhysicsWorld::RestrictContacts(BodyHandle dynamicBody, std::span<const BodyHandle> allowed)
+    {
+        if (!dynamicBody.IsValid() || !mImpl->mSystem.GetBodyInterface().IsAdded(ToBodyId(dynamicBody)))
+            return;
+        std::vector<JPH::uint32> &list = mImpl->mRestriction->mAllowed[ToBodyId(dynamicBody).GetIndex()];
+        list.clear();
+        for (const BodyHandle body : allowed)
+            if (body.IsValid())
+                list.push_back(ToBodyId(body).GetIndex());
+        std::sort(list.begin(), list.end());
+    }
+
+    void PhysicsWorld::ClearContactRestriction(BodyHandle dynamicBody)
+    {
+        if (dynamicBody.IsValid())
+            mImpl->mRestriction->mAllowed.erase(ToBodyId(dynamicBody).GetIndex());
+    }
+
+    void PhysicsWorld::HoldBody(BodyHandle body)
+    {
+        if (!body.IsValid() || mImpl->FindHeld(body))
+            return;
+        JPH::BodyInterface &bodies = mImpl->mSystem.GetBodyInterface();
+        const JPH::BodyID id = ToBodyId(body);
+        if (!bodies.IsAdded(id) || bodies.GetMotionType(id) != JPH::EMotionType::Dynamic)
+            return;
+        Impl::Held held;
+        bodies.GetLinearAndAngularVelocity(id, held.linear, held.angular);
+        {
+            const JPH::BodyLockRead lock(mImpl->mSystem.GetBodyLockInterface(), id);
+            if (!lock.Succeeded())
+                return;
+            const JPH::MotionProperties &motion = *lock.GetBody().GetMotionProperties();
+            held.inverseMass = motion.GetInverseMass();
+            held.inverseInertia = motion.GetInverseInertiaDiagonal();
+            held.inertiaRotation = motion.GetInertiaRotation();
+        }
+        mImpl->mHeld.emplace(body.mId, held);
+        bodies.SetMotionType(id, JPH::EMotionType::Kinematic, JPH::EActivation::DontActivate);
+        bodies.SetLinearAndAngularVelocity(id, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+    }
+
+    void PhysicsWorld::ResumeBody(BodyHandle body)
+    {
+        const Impl::Held *held = mImpl->FindHeld(body);
+        if (!held)
+            return;
+        const Impl::Held kept = *held;
+        mImpl->mHeld.erase(body.mId);
+        JPH::BodyInterface &bodies = mImpl->mSystem.GetBodyInterface();
+        const JPH::BodyID id = ToBodyId(body);
+        bodies.SetMotionType(id, JPH::EMotionType::Dynamic, JPH::EActivation::Activate);
+        bodies.SetLinearAndAngularVelocity(id, kept.linear, kept.angular);
+    }
+
+    bool PhysicsWorld::IsBodyHeld(BodyHandle body) const
+    {
+        return mImpl->FindHeld(body) != nullptr;
+    }
+
+    glm::vec3 PhysicsWorld::Gravity() const
+    {
+        return FromJolt(mImpl->mSystem.GetGravity());
     }
 
     std::optional<WorldPosition> PhysicsWorld::BodyPosition(BodyHandle body) const
@@ -441,6 +645,8 @@ namespace mir
     {
         if (!body.IsValid())
             return glm::vec3(0.0f);
+        if (const Impl::Held *held = mImpl->FindHeld(body))
+            return FromJolt(held->linear);
 
         return FromJolt(mImpl->mSystem.GetBodyInterface().GetLinearVelocity(ToBodyId(body)));
     }
@@ -449,6 +655,8 @@ namespace mir
     {
         if (!body.IsValid())
             return glm::vec3(0.0f);
+        if (const Impl::Held *held = mImpl->FindHeld(body))
+            return FromJolt(held->angular);
 
         return FromJolt(mImpl->mSystem.GetBodyInterface().GetAngularVelocity(ToBodyId(body)));
     }
@@ -468,6 +676,11 @@ namespace mir
     {
         if (!body.IsValid())
             return;
+        if (Impl::Held *held = mImpl->FindHeld(body))
+        {
+            held->linear = ToJolt(velocity);
+            return;
+        }
 
         mImpl->mSystem.GetBodyInterface().SetLinearVelocity(ToBodyId(body), ToJolt(velocity));
     }
@@ -476,6 +689,11 @@ namespace mir
     {
         if (!body.IsValid())
             return;
+        if (Impl::Held *held = mImpl->FindHeld(body))
+        {
+            held->angular = ToJolt(velocity);
+            return;
+        }
 
         mImpl->mSystem.GetBodyInterface().SetAngularVelocity(ToBodyId(body), ToJolt(velocity));
     }
@@ -484,6 +702,11 @@ namespace mir
     {
         if (!body.IsValid())
             return;
+        if (Impl::Held *held = mImpl->FindHeld(body))
+        {
+            held->linear += ToJolt(velocity);
+            return;
+        }
 
         mImpl->mSystem.GetBodyInterface().AddLinearVelocity(ToBodyId(body), ToJolt(velocity));
     }
@@ -492,6 +715,11 @@ namespace mir
     {
         if (!body.IsValid())
             return;
+        if (Impl::Held *held = mImpl->FindHeld(body))
+        {
+            held->angular += ToJolt(velocity);
+            return;
+        }
 
         mImpl->mSystem.GetBodyInterface().AddLinearAndAngularVelocity(ToBodyId(body),
             JPH::Vec3::sZero(),
@@ -500,7 +728,7 @@ namespace mir
 
     void PhysicsWorld::AddForce(BodyHandle body, const glm::vec3 &force)
     {
-        if (!body.IsValid())
+        if (!body.IsValid() || mImpl->FindHeld(body))
             return;
 
         mImpl->mSystem.GetBodyInterface().AddForce(ToBodyId(body), ToJolt(force));
@@ -508,7 +736,7 @@ namespace mir
 
     void PhysicsWorld::AddTorque(BodyHandle body, const glm::vec3 &torque)
     {
-        if (!body.IsValid())
+        if (!body.IsValid() || mImpl->FindHeld(body))
             return;
 
         mImpl->mSystem.GetBodyInterface().AddTorque(ToBodyId(body), ToJolt(torque));
@@ -518,6 +746,11 @@ namespace mir
     {
         if (!body.IsValid())
             return;
+        if (Impl::Held *held = mImpl->FindHeld(body))
+        {
+            mImpl->HeldImpulse(body, *held, ToJolt(impulse), JPH::Vec3::sZero());
+            return;
+        }
 
         mImpl->mSystem.GetBodyInterface().AddImpulse(ToBodyId(body), ToJolt(impulse));
     }
@@ -526,6 +759,11 @@ namespace mir
     {
         if (!body.IsValid())
             return;
+        if (Impl::Held *held = mImpl->FindHeld(body))
+        {
+            mImpl->HeldImpulse(body, *held, JPH::Vec3::sZero(), ToJolt(angularImpulse));
+            return;
+        }
 
         mImpl->mSystem.GetBodyInterface().AddAngularImpulse(ToBodyId(body), ToJolt(angularImpulse));
     }
@@ -533,7 +771,7 @@ namespace mir
     void PhysicsWorld::AddForceAtOffset(BodyHandle body, const glm::vec3 &force,
         const glm::vec3 &localOffset)
     {
-        if (!body.IsValid())
+        if (!body.IsValid() || mImpl->FindHeld(body))
             return;
 
         JPH::BodyInterface &bodies = mImpl->mSystem.GetBodyInterface();
@@ -550,6 +788,12 @@ namespace mir
 
         JPH::BodyInterface &bodies = mImpl->mSystem.GetBodyInterface();
         const JPH::BodyID id = ToBodyId(body);
+        if (Impl::Held *held = mImpl->FindHeld(body))
+        {
+            const JPH::Vec3 arm = bodies.GetRotation(id) * ToJolt(localOffset);
+            mImpl->HeldImpulse(body, *held, ToJolt(impulse), arm.Cross(ToJolt(impulse)));
+            return;
+        }
 
         bodies.AddImpulse(id, ToJolt(impulse), OffsetToWorldPoint(bodies, id, localOffset));
     }

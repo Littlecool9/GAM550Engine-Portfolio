@@ -8,6 +8,7 @@
  */
 #include <physics/PhysicsSystem.h>
 
+#include <physics/PhysicsStepGate.h>
 #include <physics/PhysicsWorld.h>
 #include <physics/components/RigidBody.h>
 
@@ -21,6 +22,7 @@
 
 #include <cmath>
 #include <optional>
+#include <vector>
 
 namespace
 {
@@ -192,6 +194,59 @@ TEST_CASE("Writing the Transform teleports the body", "[physics]")
     const mir::WorldVec3 position = fixture.TransformOf(entity).Position();
     REQUIRE(std::abs(position.x - 3.0) < 0.01);
     REQUIRE(position.y > 9.9f);
+}
+
+namespace
+{
+    // Holds every dynamic body while closed and records where the bodies were when it ran.
+    class RecordingGate final : public mir::PhysicsStepGate
+    {
+    public:
+        bool open = false;
+        int calls = 0;
+        std::vector<mir::WorldVec3> seen;
+
+        void BeforeStep(mir::World &world, mir::PhysicsWorld &physics, float) override
+        {
+            ++calls;
+            seen.clear();
+            world.GetOrCreateQuery<mir::RigidBody>().ForEach(
+                [&](mir::Entity, mir::RigidBody &rigidBody)
+                {
+                    const std::optional<mir::WorldPosition> at = physics.BodyPosition(rigidBody.body);
+                    REQUIRE(at);
+                    seen.push_back(at->Meters());
+                    if (open)
+                        physics.ResumeBody(rigidBody.body);
+                    else
+                        physics.HoldBody(rigidBody.body);
+                });
+        }
+    };
+}
+
+TEST_CASE("Step gates see new bodies and teleports before the step and can hold a body", "[physics]")
+{
+    PhysicsFixture fixture;
+    RecordingGate gate;
+    fixture.world.EmplaceResource<mir::PhysicsStepGates>().gates.push_back(&gate);
+    const mir::Entity entity = fixture.Add(glm::vec3(0.0f, 5.0f, 0.0f), kDynamicSphere);
+
+    fixture.Run(30);
+    CHECK(gate.calls == 30);
+    REQUIRE(gate.seen.size() == 1);
+    CHECK(gate.seen[0] == mir::WorldVec3(0.0, 5.0, 0.0));
+    CHECK(fixture.TransformOf(entity).Position() == mir::WorldVec3(0.0, 5.0, 0.0));
+
+    fixture.world.GetComponent<mir::Transform>(entity)->SetPosition(glm::vec3(3.0f, 10.0f, 0.0f));
+    fixture.Run(1);
+    REQUIRE(gate.seen.size() == 1);
+    CHECK(gate.seen[0] == mir::WorldVec3(3.0, 10.0, 0.0));
+    CHECK(fixture.TransformOf(entity).Position() == mir::WorldVec3(3.0, 10.0, 0.0));
+
+    gate.open = true;
+    fixture.Run(30);
+    CHECK(fixture.TransformOf(entity).Position().y < 9.0);
 }
 
 namespace

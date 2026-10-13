@@ -50,6 +50,11 @@ namespace mir
         // Jolt's block size; 4 takes ~55% of the memory for ~1.6x the error.
         uint32_t mBlockSize = 2;
         uint32_t mBitsPerSample = 8;
+
+        // Jolt's 16-bit height range; shapes given one range decode a sample they share alike away from
+        // their max sides. NaN takes the samples' own range.
+        float mQuantizationMin = std::numeric_limits<float>::quiet_NaN();
+        float mQuantizationMax = std::numeric_limits<float>::quiet_NaN();
     };
 
     struct HeightFieldInfo
@@ -64,6 +69,25 @@ namespace mir
         double mExtentX = 0.0;
         double mExtentZ = 0.0;
     };
+
+    // A built height field shape that static bodies at any number of places share. Immutable.
+    class SharedHeightField
+    {
+    public:
+        bool IsValid() const { return mData != nullptr; }
+        // Null for a shape Jolt did not make a height field of.
+        const HeightFieldInfo *Info() const;
+
+    private:
+        friend class PhysicsWorld;
+        friend SharedHeightField BuildHeightField(const HeightFieldDesc &desc);
+
+        struct Data;
+        std::shared_ptr<const Data> mData;
+    };
+
+    // Any thread; mOrigin is not used. Invalid (logged) on bad input.
+    SharedHeightField BuildHeightField(const HeightFieldDesc &desc);
 
     struct RayHit
     {
@@ -110,9 +134,26 @@ namespace mir
 
         // Builds the shape once; Step never rebuilds it. Invalid handle (logged) on bad input.
         BodyHandle CreateStaticHeightField(const HeightFieldDesc &desc);
+        // A static body at origin for a shape built elsewhere; between steps only.
+        BodyHandle CreateStaticHeightField(const SharedHeightField &shape, WorldPosition origin);
 
         // Between steps only. Wakes bodies resting on it.
         void DestroyBody(BodyHandle body);
+
+        // A restricted static body collides only with the dynamic bodies allowed to touch it.
+        void RestrictBody(BodyHandle staticBody);
+        // The restricted bodies this dynamic body may touch from the next step on; it passes through the others.
+        void RestrictContacts(BodyHandle dynamicBody, std::span<const BodyHandle> allowed);
+        // Lets the body touch every restricted body again.
+        void ClearContactRestriction(BodyHandle dynamicBody);
+
+        // Takes a dynamic body out of the simulation: steps keep its pose and its velocities wait for
+        // ResumeBody. While held, velocity changes and impulses land in the kept velocities; forces are dropped.
+        void HoldBody(BodyHandle body);
+        void ResumeBody(BodyHandle body);
+        bool IsBodyHeld(BodyHandle body) const;
+
+        glm::vec3 Gravity() const;
 
         // nullopt for an invalid handle, or if the simulation left the body at
         // a non-finite position; there is no default place to report instead.

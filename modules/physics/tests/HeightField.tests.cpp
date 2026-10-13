@@ -737,3 +737,118 @@ TEST_CASE("A sample stride builds the collider from every stride-th sample", "[p
         CHECK(worst <= (hills ? 2.0 * kHillsQuantization : 2.0 * kPlaneQuantization));
     }
 }
+
+TEST_CASE("One built height field shape serves static bodies at several places", "[physics][heightfield]")
+{
+    const Terrain terrain(Hills, glm::dvec3(0.0));
+    const std::vector<float> area = terrain.Area();
+    HeightFieldDesc desc;
+    desc.mSamples = area;
+    desc.mCountX = kAreaSide;
+    desc.mCountZ = kAreaSide;
+    desc.mSpacing = static_cast<float>(kSpacing);
+    const SharedHeightField shape = BuildHeightField(desc);
+    REQUIRE(shape.IsValid());
+    REQUIRE(shape.Info());
+
+    PhysicsWorld world;
+    const glm::dvec3 offsets[2] = {glm::dvec3(-1000.0, 5.0, 0.0), glm::dvec3(1000.0, -3.0, 600.0)};
+    BodyHandle bodies[2];
+    for (int i = 0; i < 2; ++i)
+    {
+        bodies[i] = world.CreateStaticHeightField(shape, At(offsets[i]));
+        REQUIRE(bodies[i].IsValid());
+        const std::optional<HeightFieldInfo> info = world.HeightFieldInfoOf(bodies[i]);
+        REQUIRE(info);
+        CHECK(info->mSampleCount == shape.Info()->mSampleCount);
+        CHECK(info->mMaxQuantizationError == shape.Info()->mMaxQuantizationError);
+    }
+    CHECK(world.HeightFieldsBuilt() == 0);
+
+    for (const glm::dvec2 at : {glm::dvec2(10.0, 20.0), glm::dvec2(300.5, 17.25), glm::dvec2(511.0, 1.0)})
+    {
+        double heights[2];
+        for (int i = 0; i < 2; ++i)
+        {
+            const std::optional<RayHit> hit = Down(world, offsets[i] + glm::dvec3(at.x, 400.0, at.y), 600.0f);
+            REQUIRE(hit);
+            CHECK(hit->mBody == bodies[i]);
+            heights[i] = double(hit->mPoint.Meters().y) - offsets[i].y;
+        }
+        CHECK(std::abs(heights[0] - heights[1]) <= 1e-3);
+    }
+
+    world.DestroyBody(bodies[0]);
+    CHECK_FALSE(Down(world, offsets[0] + glm::dvec3(10.0, 400.0, 20.0), 600.0f));
+    CHECK(Down(world, offsets[1] + glm::dvec3(10.0, 400.0, 20.0), 600.0f));
+}
+
+TEST_CASE("Shapes given one quantization range decode the samples they share alike away from their max sides",
+          "[physics][heightfield]")
+{
+    const Terrain terrain(Hills, glm::dvec3(0.0));
+    const std::vector<float> area = terrain.Area();
+    const float low = *std::min_element(area.begin(), area.end());
+    const float high = *std::max_element(area.begin(), area.end());
+
+    const auto block = [&](uint32_t first, uint32_t last)
+    {
+        std::vector<float> samples;
+        for (uint32_t z = 0; z < kAreaSide; ++z)
+            for (uint32_t x = first; x <= last; ++x)
+                samples.push_back(area[size_t(z) * kAreaSide + x]);
+        return samples;
+    };
+    const std::vector<float> west = block(0, 80), east = block(64, 128);
+    for (const bool shared : {false, true})
+    {
+        INFO((shared ? "one range" : "own ranges"));
+        const auto build = [&](const std::vector<float> &samples, uint32_t columns)
+        {
+            HeightFieldDesc desc;
+            desc.mSamples = samples;
+            desc.mCountX = columns;
+            desc.mCountZ = kAreaSide;
+            desc.mSpacing = static_cast<float>(kSpacing);
+            if (shared)
+            {
+                desc.mQuantizationMin = low;
+                desc.mQuantizationMax = high;
+            }
+            return BuildHeightField(desc);
+        };
+        const SharedHeightField a = build(west, 81), b = build(east, 65);
+        REQUIRE(a.IsValid());
+        REQUIRE(b.IsValid());
+        PhysicsWorld wa, wb;
+        REQUIRE(wa.CreateStaticHeightField(a, At({0.0, 0.0, 0.0})).IsValid());
+        REQUIRE(wb.CreateStaticHeightField(b, At({64 * kSpacing, 0.0, 0.0})).IsValid());
+
+        double worst = 0.0;
+        for (uint32_t z = 0; z + 2 < kAreaSide; ++z)
+            for (uint32_t x = 64; x + 2 <= 80; ++x)
+            {
+                const glm::dvec3 above{x * kSpacing, area[size_t(z) * kAreaSide + x] + 1.0, z * kSpacing};
+                const std::optional<RayHit> ha = Down(wa, above, 2.0f), hb = Down(wb, above, 2.0f);
+                REQUIRE(ha);
+                REQUIRE(hb);
+                worst = std::max(worst, std::abs(double(ha->mPoint.Meters().y) - double(hb->mPoint.Meters().y)));
+            }
+        if (shared)
+            CHECK(worst <= 1e-4);
+        else
+            CHECK(worst > 1e-3);
+    }
+
+    HeightFieldDesc outside;
+    outside.mSamples = west;
+    outside.mCountX = 81;
+    outside.mCountZ = kAreaSide;
+    outside.mSpacing = static_cast<float>(kSpacing);
+    outside.mQuantizationMin = low + 1.0f;
+    outside.mQuantizationMax = high;
+    CHECK_FALSE(BuildHeightField(outside).IsValid());
+    outside.mQuantizationMin = high;
+    outside.mQuantizationMax = low;
+    CHECK_FALSE(BuildHeightField(outside).IsValid());
+}

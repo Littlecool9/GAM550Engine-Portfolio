@@ -8,6 +8,7 @@
  */
 #include <physics/PhysicsSystem.h>
 
+#include <physics/PhysicsStepGate.h>
 #include <physics/PhysicsWorld.h>
 
 #include <core/ecs/EngineMode.h>
@@ -86,6 +87,11 @@ namespace mir
 
                 rigidBody.transformVersion = transform.Version();
             });
+
+        // Spawns and teleports above are already in the world, so they pass the gates like any move.
+        if (PhysicsStepGates *gates = context.world.TryResource<PhysicsStepGates>())
+            for (PhysicsStepGate *gate : gates->gates)
+                gate->BeforeStep(context.world, *physics, context.dt);
 
         physics->Step(context.dt);
 
