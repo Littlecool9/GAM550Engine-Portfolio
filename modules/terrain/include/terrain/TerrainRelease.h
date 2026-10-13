@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace mir
 {
@@ -68,6 +69,8 @@ namespace mir
 
     // Reads every pack whole and checks it.
         TerrainPackError VerifyAllPacks() const;
+        // One pack of Index().packs: its size, checksum, header and every payload in it.
+        TerrainPackError VerifyPack(size_t pack) const;
 
     private:
         TerrainReleaseHandle(std::shared_ptr<const TerrainIndex> index, std::shared_ptr<TerrainByteSource> source);
@@ -88,4 +91,15 @@ namespace mir
     // A missing pointer is NotFound without a log line.
     TerrainResult<TerrainReleaseId> PeekTerrainCurrentPointer(const std::filesystem::path &releasesRoot,
                                                               AssetId asset);
+
+    // A release directory as it is kept on disk.
+    struct TerrainStoredRelease
+    {
+        TerrainReleaseId release;
+        uint32_t files = 0;
+        uint64_t bytes = 0;
+    };
+
+    // Every release directory of the asset, ordered by id; reads directory entries and file sizes only.
+    std::vector<TerrainStoredRelease> ListTerrainReleases(const std::filesystem::path &releasesRoot, AssetId asset);
 }

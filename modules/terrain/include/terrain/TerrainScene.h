@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -88,6 +89,8 @@ namespace mir
         [[nodiscard]] static TerrainResult<std::shared_ptr<TerrainResidentRelease>> Open(
             const std::filesystem::path &releasesRoot, AssetId asset, TerrainReleaseId release);
         [[nodiscard]] static std::shared_ptr<TerrainResidentRelease> Create(TerrainReleaseHandle handle);
+        [[nodiscard]] static std::shared_ptr<TerrainResidentRelease> Create(
+            std::shared_ptr<const TerrainReleaseHandle> handle);
 
         const TerrainReleaseInfo &Info() const { return mHandle->Info(); }
         const TerrainLayout &Layout() const { return mHandle->Layout(); }
@@ -113,6 +116,24 @@ namespace mir
         Wait,
         // Returns at once: payloads arrive through the streamer, and their failures are reported as they come.
         Async,
+    };
+
+    // Opens one release, on any thread; the identity it opened is checked by the caller.
+    using TerrainReleaseOpener = std::function<TerrainResult<TerrainReleaseHandle>(AssetId, TerrainReleaseId)>;
+
+    // OpenTerrainRelease under releasesRoot.
+    TerrainReleaseOpener TerrainReleaseFileOpener(std::filesystem::path releasesRoot);
+
+    struct TerrainResolveOptions
+    {
+        TerrainEagerLoad eager = TerrainEagerLoad::Async;
+        // An asset with a loaded release keeps it whatever current names; a TerrainReleaseSwitch brings the
+        // newer one once it is verified.
+        bool keepLoaded = false;
+        // Verified releases that replace the loaded ones of their assets.
+        std::vector<std::shared_ptr<TerrainResidentRelease>> adopt;
+        // Null opens from the releases root.
+        TerrainReleaseOpener open;
     };
 
     // Map bounds plus translation, in world meters.
@@ -164,7 +185,7 @@ namespace mir
     private:
         friend TerrainWorld ResolveTerrainWorld(const TerrainSceneSpec &, const std::filesystem::path &,
                                                 const TerrainWorld *, std::vector<TerrainIssue> &,
-                                                TerrainStreamer &, TerrainEagerLoad);
+                                                TerrainStreamer &, const TerrainResolveOptions &);
 
         std::vector<AssetState> mAssets;
         std::vector<TerrainInstanceState> mInstances;
@@ -175,6 +196,9 @@ namespace mir
     TerrainWorld ResolveTerrainWorld(const TerrainSceneSpec &spec, const std::filesystem::path &releasesRoot,
                                      const TerrainWorld *previous, std::vector<TerrainIssue> &issues,
                                      TerrainStreamer &streamer, TerrainEagerLoad eager);
+    TerrainWorld ResolveTerrainWorld(const TerrainSceneSpec &spec, const std::filesystem::path &releasesRoot,
+                                     const TerrainWorld *previous, std::vector<TerrainIssue> &issues,
+                                     TerrainStreamer &streamer, const TerrainResolveOptions &options);
 
     // Reads only the pointer files.
     bool TerrainCurrentMoved(const TerrainWorld &world, const std::filesystem::path &releasesRoot);

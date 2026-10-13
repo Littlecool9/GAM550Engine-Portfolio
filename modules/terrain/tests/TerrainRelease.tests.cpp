@@ -175,6 +175,50 @@ TEST_CASE("A release opened before the pointer moves keeps reading its own files
     std::filesystem::remove_all(root);
 }
 
+TEST_CASE("Packs verify one at a time, and an asset's kept releases are listed with their sizes",
+          "[terrain][release]")
+{
+    const std::filesystem::path root = MakeScratchDir("stored");
+    const Fixture f;
+    const TerrainReleaseInfo infoA = Info(f.asset, 0xA);
+    const TerrainReleaseInfo infoB = Info(f.asset, 0xB);
+    const TerrainEncodedRelease a = Encode(infoA, f.layout, BuildTiles(f.layout), f.options);
+    const std::filesystem::path dirA = WriteRelease(root, infoA, a);
+    WriteRelease(root, infoB, Encode(infoB, f.layout, BuildTiles(f.layout, 1.0f), f.options));
+    PointCurrentAt(root, f.asset, infoB.release);
+    std::filesystem::create_directories(TerrainAssetReleasesDir(root, f.asset) / "not-a-release");
+
+    const TerrainReleaseHandle handle = OpenOk(OpenTerrainRelease(root, f.asset, infoA.release));
+    REQUIRE(handle.Index().packs.size() == a.packs.size());
+    REQUIRE(a.packs.size() > 1);
+    for (size_t p = 0; p < handle.Index().packs.size(); ++p)
+        CHECK(handle.VerifyPack(p).code == Code::None);
+    CHECK(handle.VerifyPack(handle.Index().packs.size()).code == Code::InvalidInput);
+
+    const std::string damaged = TerrainPackFileName(handle.Index().packs[1].chunk);
+    std::optional<std::vector<std::byte>> bytes = ReadBytes(dirA / damaged);
+    REQUIRE(bytes);
+    bytes->back() ^= std::byte{0x40};
+    REQUIRE(WriteBytes(dirA / damaged, *bytes));
+    CHECK(handle.VerifyPack(0).code == Code::None);
+    const TerrainPackError corrupt = handle.VerifyPack(1);
+    CHECK(corrupt.code == Code::Corrupt);
+    CHECK(Mentions(corrupt, damaged));
+    CHECK(handle.VerifyAllPacks().code == Code::Corrupt);
+
+    uint64_t bytesA = a.index.size();
+    for (const TerrainEncodedPack &pack : a.packs)
+        bytesA += pack.bytes.size();
+    const std::vector<TerrainStoredRelease> stored = ListTerrainReleases(root, f.asset);
+    REQUIRE(stored.size() == 2);
+    CHECK(stored[0].release == infoA.release);
+    CHECK(stored[0].files == a.packs.size() + 1);
+    CHECK(stored[0].bytes == bytesA);
+    CHECK(stored[1].release == infoB.release);
+    CHECK(ListTerrainReleases(root, TerrainAsset("terrain/none.terrain.json")).empty());
+    std::filesystem::remove_all(root);
+}
+
 // Run explicitly ("[.regenerate]") only after a deliberate format change.
 TEST_CASE("Regenerate the committed terrain fixture", "[.regenerate]")
 {

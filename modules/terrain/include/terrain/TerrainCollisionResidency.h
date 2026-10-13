@@ -173,6 +173,8 @@ namespace mir
         size_t colliders = 0;
         double unusedSeconds = 0.0;
         std::string message;
+        // Built for a staged release: placed once it is set active.
+        bool staged = false;
     };
 
     struct TerrainCollisionStats
@@ -190,6 +192,8 @@ namespace mir
         uint64_t builds = 0;
         uint64_t retired = 0;
         uint64_t evicted = 0;
+        // Finished builds whose piece was gone; never placed.
+        uint64_t discarded = 0;
         // Worker time, summed, and the slowest build.
         double buildSeconds = 0.0;
         double maxBuildSeconds = 0.0;
@@ -228,7 +232,10 @@ namespace mir
         TerrainCollisionResidency &operator=(const TerrainCollisionResidency &) = delete;
 
         // The TerrainWorld's instances. At a safe point: colliders of placements and releases no longer here go now.
-        void SetInstances(std::span<const TerrainCollisionInstance> instances);
+        // Staged instances are those of a release a switch prepares: their pieces are built ahead, as prefetch, for
+        // what the sources would need there, and placed only once a later call sets them active.
+        void SetInstances(std::span<const TerrainCollisionInstance> instances,
+                          std::span<const TerrainCollisionInstance> staged = {});
         // Spacings and error for pieces built from now on.
         void SetPolicy(const TerrainCollisionPolicy &policy);
 
@@ -240,6 +247,9 @@ namespace mir
         void Update(std::span<const TerrainCollisionSource> sources, TerrainStreamer &streamer, double now,
                     double stepSeconds);
         const TerrainCollisionAnswer &Answer(size_t source) const;
+        // Of a staged release, as of the last Update: the pieces the sources would need there, and an Eager one's
+        // whole piece; ready counts the built ones.
+        TerrainCollisionStatus StagedStatus(const TerrainReleaseInfo &release) const;
 
         void ForEachCollider(const std::function<void(const TerrainPlacement &, TerrainColliderId)> &visit) const;
 
@@ -251,6 +261,7 @@ namespace mir
 
         std::vector<TerrainCollisionEvent> TakeEvents();
         TerrainCollisionStats Stats() const;
+        TerrainReleaseUsage Usage(const TerrainReleaseInfo &release) const;
 
     private:
         struct Impl;

@@ -8,6 +8,7 @@
  */
 
 #include "TerrainPackTestSupport.h"
+#include "TerrainResidencyTestSupport.h"
 #include "TerrainStreamingTestSupport.h"
 
 #include <terrain/TerrainCollisionResidency.h>
@@ -34,72 +35,6 @@ namespace
 {
     using State = TerrainCollisionState;
     constexpr double kStep = 1.0 / 60.0;
-
-    class FakeShape final : public TerrainColliderShape
-    {
-    public:
-        double spacing = 0.0;
-        uint32_t countX = 0;
-        uint32_t countZ = 0;
-        GlobalSampleIndex first;
-        TerrainLocalPosition origin;
-        float quantizationMin = 0.0f;
-        float quantizationMax = 0.0f;
-    };
-
-    // Shapes are counted, colliders recorded by id.
-    class FakePhysics final : public TerrainColliderPhysics
-    {
-    public:
-        std::optional<TerrainBuiltCollider> Build(const TerrainAreaSamples &samples, float quantizationMin,
-                                                  float quantizationMax) const override
-        {
-            ++builds;
-            if (refuse)
-                return std::nullopt;
-            auto shape = std::make_shared<FakeShape>();
-            shape->spacing = samples.spacing;
-            shape->countX = samples.countX;
-            shape->countZ = samples.countZ;
-            shape->first = samples.samples.min;
-            shape->origin = samples.origin;
-            shape->quantizationMin = quantizationMin;
-            shape->quantizationMax = quantizationMax;
-            TerrainBuiltCollider built;
-            built.shape = shape;
-            built.quantizationError = 0.001;
-            built.extentX = samples.spacing * (samples.countX - 1);
-            built.extentZ = samples.spacing * (samples.countZ - 1);
-            built.bytes = samples.heights.size() * sizeof(float);
-            return built;
-        }
-
-        TerrainColliderId Place(const TerrainColliderShape &shape, WorldPosition origin,
-                                const TerrainPlacement &placement) override
-        {
-            placed[next] = {static_cast<const FakeShape *>(&shape), origin, placement};
-            return next++;
-        }
-
-        void Remove(TerrainColliderId collider) override
-        {
-            REQUIRE(placed.erase(collider) == 1);
-            ++removed;
-        }
-
-        struct Placed
-        {
-            const FakeShape *shape = nullptr;
-            WorldPosition origin;
-            TerrainPlacement placement;
-        };
-
-        mutable std::atomic<int> builds = 0;
-        std::atomic<bool> refuse = false;
-        std::map<TerrainColliderId, Placed> placed;
-        int removed = 0;
-        TerrainColliderId next = 1;
-    };
 
     // Rolling ground: a resample coarser than the source misses its bends by a measurable amount.
     float Ground(double x, double z)

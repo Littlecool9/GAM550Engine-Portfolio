@@ -102,6 +102,8 @@ namespace mir
         uint64_t buildsStarted = 0;
         // Dropped because nobody wanted them any more or their release went.
         uint64_t buildsCanceled = 0;
+        // Finished builds whose entry was gone; never uploaded.
+        uint64_t discarded = 0;
         uint64_t uploadsQueued = 0;
         uint64_t uploadsReady = 0;
         uint64_t retired = 0;
@@ -154,6 +156,8 @@ namespace mir
         // Build and upload failures since the last call, each once.
         std::vector<std::pair<TerrainPayloadKey, std::string>> TakeFailures();
         TerrainMeshStats Stats() const;
+        // Waiting is always zero: a mesh waits for room before it has an entry.
+        TerrainReleaseUsage Usage(const TerrainReleaseInfo &release) const;
 
     private:
         struct Impl;

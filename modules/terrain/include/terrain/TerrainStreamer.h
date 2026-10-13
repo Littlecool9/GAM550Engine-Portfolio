@@ -112,7 +112,7 @@ namespace mir
         // Wants dropped before their read started.
         uint64_t canceled = 0;
         uint64_t evicted = 0;
-        // Finished reads whose entry was gone.
+        // Finished reads whose entry or release was gone; never installed.
         uint64_t discarded = 0;
         uint64_t bytesRead = 0;
         // Worker time, summed.
@@ -121,6 +121,21 @@ namespace mir
         // Main-thread time spent in Update.
         double lastUpdateSeconds = 0.0;
         double maxUpdateSeconds = 0.0;
+    };
+
+    // One release's share of a residency: what a release switch waits for, and what an old release still holds.
+    struct TerrainReleaseUsage
+    {
+        // Wanted, and held back by a budget.
+        size_t waiting = 0;
+        // Being read, retried, built or uploaded.
+        size_t inFlight = 0;
+        size_t ready = 0;
+        size_t failed = 0;
+        // Counted in the residency's budget.
+        uint64_t bytes = 0;
+        // The first failure's message.
+        std::string failure;
     };
 
     using TerrainInterestId = uint32_t;
@@ -144,8 +159,10 @@ namespace mir
         const TerrainStreamingSettings &Settings() const;
 
         // Held weakly: once nobody else holds a release, its payloads go at the next Update. Returns the
-        // mode chosen when the release was first added.
-        TerrainResidencyMode Add(const std::shared_ptr<TerrainResidentRelease> &release);
+        // mode chosen when the release was first added. A staged release is one a release switch prepares: its
+        // mode is chosen as if the other releases of its asset were gone, and an Eager one's payloads are only
+        // prefetched until it is added again unstaged.
+        TerrainResidencyMode Add(const std::shared_ptr<TerrainResidentRelease> &release, bool staged = false);
         std::shared_ptr<TerrainResidentRelease> Find(AssetId asset, TerrainReleaseId release) const;
         std::optional<TerrainResidencyMode> ModeOf(const TerrainReleaseInfo &release) const;
 
@@ -175,6 +192,7 @@ namespace mir
         void RetryFailed();
 
         TerrainStreamingStats Stats() const;
+        TerrainReleaseUsage Usage(const TerrainReleaseInfo &release) const;
 
     private:
         struct Impl;

@@ -8,6 +8,7 @@
  */
 
 #include "TerrainPackTestSupport.h"
+#include "TerrainResidencyTestSupport.h"
 #include "TerrainStreamingTestSupport.h"
 
 #include <terrain/TerrainExecutor.h>
@@ -35,100 +36,6 @@ using namespace mir::test;
 namespace
 {
     using Demand = TerrainDemand;
-
-    // What the residency is told by a renderer: queued, then recorded, then complete.
-    class FakeUploader final : public TerrainMeshUploader
-    {
-    public:
-        enum class Stage
-        {
-            Queued,
-            Recorded,
-            Ready,
-            Failed,
-        };
-
-        struct Mesh
-        {
-            TerrainPayloadKey geometry;
-            uint64_t bytes = 0;
-            size_t vertices = 0;
-            Stage stage = Stage::Queued;
-        };
-
-        uint64_t Footprint(uint32_t vertices, uint32_t indices) const override
-        {
-            return uint64_t(vertices) * 64 + uint64_t(indices) * 4;
-        }
-
-        uint64_t QueuedBytes() const override
-        {
-            uint64_t bytes = 0;
-            for (const auto &[id, mesh] : meshes)
-                bytes += mesh.stage == Stage::Queued ? mesh.bytes : 0;
-            return bytes;
-        }
-
-        TerrainGpuMeshId Upload(TerrainMeshData &&data) override
-        {
-            uploadOrder.push_back(data.geometry);
-            if (refuse)
-                return 0;
-            const TerrainGpuMeshId id = nextId++;
-            meshes[id] = {data.geometry, Footprint(uint32_t(data.vertices.size()), uint32_t(data.indices.size())),
-                          data.vertices.size()};
-            return id;
-        }
-
-        TerrainGpuMeshState State(TerrainGpuMeshId id) const override
-        {
-            switch (meshes.at(id).stage)
-            {
-            case Stage::Ready: return TerrainGpuMeshState::Ready;
-            case Stage::Failed: return TerrainGpuMeshState::Failed;
-            default: return TerrainGpuMeshState::Uploading;
-            }
-        }
-
-        void Retire(TerrainGpuMeshId id) override
-        {
-            const auto found = meshes.find(id);
-            REQUIRE(found != meshes.end());
-            retired.push_back(found->second.geometry);
-            if (found->second.stage != Stage::Queued)
-                retiring += found->second.bytes;
-            meshes.erase(found);
-        }
-
-        uint64_t RetiringBytes() const override { return retiring; }
-
-        // A frame: what was recorded completes when complete holds, and everything queued is recorded.
-        void Frame(const std::function<bool(const TerrainPayloadKey &)> &complete = {})
-        {
-            for (auto &[id, mesh] : meshes)
-                if (mesh.stage == Stage::Recorded && (!complete || complete(mesh.geometry)))
-                    mesh.stage = Stage::Ready;
-            for (auto &[id, mesh] : meshes)
-                if (mesh.stage == Stage::Queued)
-                    mesh.stage = Stage::Recorded;
-        }
-
-        void FailRecorded()
-        {
-            for (auto &[id, mesh] : meshes)
-                if (mesh.stage == Stage::Recorded)
-                    mesh.stage = Stage::Failed;
-        }
-
-        void FreeRetired() { retiring = 0; }
-
-        std::map<TerrainGpuMeshId, Mesh> meshes;
-        std::vector<TerrainPayloadKey> uploadOrder;
-        std::vector<TerrainPayloadKey> retired;
-        uint64_t retiring = 0;
-        bool refuse = false;
-        TerrainGpuMeshId nextId = 1;
-    };
 
     // 4 x 4 tiles of 64 m at 4 m with an 8 m LOD, level 0 Regions of 2 x 2 tiles and one root.
     TerrainEncodedRelease ResidencyRelease(const TerrainReleaseInfo &info)
