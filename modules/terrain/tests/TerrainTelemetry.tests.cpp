@@ -191,3 +191,44 @@ TEST_CASE("Terrain collision profiling keeps pending work until a collider is pl
     CHECK_FALSE(canceled[0].success);
     CHECK(telemetry->Pending().empty());
 }
+
+TEST_CASE("Forgetting GPU meshes cancels their outstanding readiness and upload samples", "[terrain][telemetry]")
+{
+    const auto layout = TerrainLayout::CreateFromTileSize(64.0, 4.0, {0.0, 0.0, 64.0, 64.0});
+    REQUIRE(layout);
+    const auto tiles = test::BuildTiles(*layout);
+    const auto lods = test::BuildTestLods(std::span(&*layout, 1), tiles);
+    const auto info = test::Info(AssetId{10}, 11);
+    const TerrainTileWrite input{&tiles.front()};
+    const auto encoded = EncodeTerrainRelease(info, std::span(&*layout, 1), std::span(&input, 1), lods);
+    REQUIRE(encoded);
+    auto opened = test::OpenInMemory(*encoded.value);
+    auto release = TerrainResidentRelease::Create(std::move(opened.handle));
+    auto executor = std::make_shared<TerrainManualExecutor>();
+    const auto settings = test::StreamingSettings(1 << 20, TerrainResidencyMode::Eager);
+    TerrainStreamer streamer(settings, executor);
+    streamer.Add(release);
+    streamer.Update();
+    executor->RunAll();
+    streamer.Update();
+    double now = 0.0;
+    auto telemetry = std::make_shared<TerrainTelemetry>([&] { return now; });
+    test::FakeUploader uploader;
+    TerrainMeshResidency meshes(settings.gpu, executor, uploader);
+    meshes.SetTelemetry(telemetry);
+    const TerrainSelectionInstance instance{release->SharedHandle(), {info.asset, WorldPosition{}}};
+    const TerrainPayloadWant want{TerrainPayloadKeyOf(info, *release->Handle().Index().Find({0, 0}, 0, TerrainPayloadKind::LodHeight)), TerrainDemand::Visible, 0};
+    meshes.Request(std::span(&instance, 1), std::span(&want, 1), streamer, now);
+    executor->RunAll();
+    meshes.Install();
+    now = 0.1;
+    meshes.Request(std::span(&instance, 1), std::span(&want, 1), streamer, now);
+    REQUIRE(telemetry->Pending().at("renderable") == 1);
+    REQUIRE(telemetry->Pending().at("upload_ready") == 1);
+    uploader.meshes.clear();
+    now = 0.2;
+    meshes.Forget();
+    CHECK(telemetry->Pending().empty());
+    const auto samples = telemetry->TakeSamples();
+    CHECK(std::count_if(samples.begin(), samples.end(), [](const auto &sample) { return !sample.success; }) == 2);
+}

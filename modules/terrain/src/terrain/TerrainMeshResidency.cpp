@@ -606,6 +606,18 @@ namespace mir
     void TerrainMeshResidency::RetireReleases(std::span<const TerrainReleaseInfo> keep)
     {
         Impl &impl = *mImpl;
+        for (auto it = impl.profileWants.begin(); it != impl.profileWants.end();)
+        {
+            const bool kept = std::any_of(keep.begin(), keep.end(),
+                [&](const TerrainReleaseInfo &release) { return SameRelease(it->first, release); });
+            if (kept)
+                ++it;
+            else
+            {
+                impl.telemetry->Cancel("renderable", DescribeTerrainPayloadKey(it->first));
+                it = impl.profileWants.erase(it);
+            }
+        }
         for (auto it = impl.entries.begin(); it != impl.entries.end();)
         {
             const bool kept = std::any_of(keep.begin(), keep.end(),
@@ -625,6 +637,14 @@ namespace mir
     void TerrainMeshResidency::Forget()
     {
         Impl &impl = *mImpl;
+        if (impl.telemetry)
+        {
+            for (const auto &[key, entry] : impl.entries)
+                impl.telemetry->Cancel("upload_ready", DescribeTerrainPayloadKey(key));
+            for (const auto &[key, ignored] : impl.profileWants)
+                impl.telemetry->Cancel("renderable", DescribeTerrainPayloadKey(key));
+        }
+        impl.profileWants.clear();
         impl.queue->Clear();
         impl.tickets.clear();
         impl.entries.clear();
