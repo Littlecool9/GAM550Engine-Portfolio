@@ -57,6 +57,16 @@ namespace mir::test
         settings.gpu.uploadBytesPerFrame = uint64_t(1) << 22;
         settings.gpu.stagingBytes = uint64_t(1) << 24;
         settings.gpu.meshRetainSeconds = 1.0;
+        settings.collision.spacingsMeters = {8.0, 4.0, 2.0, 1.0};
+        settings.collision.maxErrorMeters = 0.05;
+        settings.collision.pieceTiles = 2;
+        settings.collision.seamOverlapMeters = 64.0;
+        settings.collision.bodyToleranceMeters = 0.05;
+        settings.collision.loadLatencySeconds = 0.25;
+        settings.collision.latencyMarginSeconds = 0.25;
+        settings.collision.prefetchSeconds = 1.0;
+        settings.collision.budgetBytes = uint64_t(1) << 26;
+        settings.collision.retainSeconds = 1.0;
         REQUIRE(ValidateTerrainStreamingSettings(settings).empty());
         return settings;
     }

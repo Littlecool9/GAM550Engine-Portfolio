@@ -94,7 +94,35 @@ namespace mir
             // A mesh outlives its last want or draw by this much.
             double meshRetainSeconds = std::numeric_limits<double>::quiet_NaN();
         } gpu;
+
+        // Height field pieces built from resident final heights.
+        struct Collision
+        {
+            // Uniform collision spacings, coarse to fine; the coarsest also makes the coarse pieces.
+            std::vector<double> spacingsMeters;
+            // Contact error a piece stays within to count as ready.
+            double maxErrorMeters = std::numeric_limits<double>::quiet_NaN();
+            // Tiles a side of a piece of an Interest release; an Eager release collides as one piece.
+            uint32_t pieceTiles = 0;
+            // How far a piece reaches past its max sides into the next one, where bodies change pieces.
+            double seamOverlapMeters = std::numeric_limits<double>::quiet_NaN();
+            // Contact error a dynamic RigidBody accepts from a coarse piece.
+            double bodyToleranceMeters = std::numeric_limits<double>::quiet_NaN();
+            // Request-to-collidable time assumed until one is measured, and what is added to it.
+            double loadLatencySeconds = std::numeric_limits<double>::quiet_NaN();
+            double latencyMarginSeconds = std::numeric_limits<double>::quiet_NaN();
+            // Pieces this much further along a source's motion are read and built ahead.
+            double prefetchSeconds = std::numeric_limits<double>::quiet_NaN();
+            // Height field shape bytes held; pieces a source needs may pass it.
+            uint64_t budgetBytes = 0;
+            // A piece outlives its last need by this much.
+            double retainSeconds = std::numeric_limits<double>::quiet_NaN();
+        } collision;
     };
+
+    // Jolt quantizes a height field's last cells against a shorter block range, so near a piece's max sides
+    // its surface may differ from its neighbour's; bodies change pieces this many cells away from any side.
+    inline constexpr uint32_t kTerrainSeamMarginCells = 2;
 
     // One "<field>: <problem>" line per invalid field, named by its JSON path; empty when valid.
     std::vector<std::string> ValidateTerrainStreamingSettings(const TerrainStreamingSettings &settings);

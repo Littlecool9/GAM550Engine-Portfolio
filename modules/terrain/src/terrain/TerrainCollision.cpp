@@ -84,7 +84,7 @@ namespace mir
 
     bool ValidTerrainCollisionPolicy(const TerrainCollisionPolicy &policy)
     {
-        if (!std::isfinite(policy.maxError) || policy.maxError < 0) return false;
+        if (!std::isfinite(policy.maxError) || policy.maxError < 0 || policy.spacings.empty()) return false;
         double previous = std::numeric_limits<double>::infinity();
         for (double spacing : policy.spacings)
         {
@@ -97,11 +97,20 @@ namespace mir
     TerrainResult<TerrainUniformSamples> BuildTerrainUniformSamples(const TerrainIndex &index,
         const TerrainHeightQuery &query, double spacing)
     {
+        if (query.Release() != index.release)
+            return detail::Fail<TerrainUniformSamples>(TerrainPackErrorCode::WrongIdentity,
+                                                       "the resident query belongs to another release");
+        const TerrainSourceTileLookup sources = [&query](uint32_t layer, TileCoord tile)
+        { return query.ResidentTile(layer, tile); };
+        return BuildTerrainUniformSamples(index, sources, spacing, index.layout.Bounds());
+    }
+
+    TerrainResult<TerrainUniformSamples> BuildTerrainUniformSamples(const TerrainIndex &index,
+        const TerrainSourceTileLookup &sources, double spacing, const TerrainLocalBounds &region)
+    {
         using detail::Fail;
         using Code = TerrainPackErrorCode;
-        if (query.Release() != index.release)
-            return Fail<TerrainUniformSamples>(Code::WrongIdentity, "the resident query belongs to another release");
-        const auto uniform = TerrainLayout::CreateFromTileSize(index.layout.TileSize(), spacing, index.layout.Bounds());
+        const auto uniform = TerrainLayout::CreateFromTileSize(index.layout.TileSize(), spacing, region);
         if (!uniform)
             return Fail<TerrainUniformSamples>(Code::Unsupported, "{} m does not form an exact tile grid", spacing);
         if (!(static_cast<float>(spacing) > 0) || !std::isfinite(static_cast<float>(spacing)))
@@ -129,7 +138,7 @@ namespace mir
                 const auto *record = index.Find(tile);
                 if (!record || record->layer >= index.layers.size())
                     return Fail<TerrainUniformSamples>(Code::Corrupt, "tile ({}, {}) has no unique source", x, z);
-                const auto source = query.ResidentTile(record->layer, tile);
+                const auto source = sources(record->layer, tile);
                 if (!source)
                     return Fail<TerrainUniformSamples>(Code::NotFound, "tile ({}, {}) has no resident final source", x, z);
                 const auto &layout = index.layers[record->layer];
@@ -199,7 +208,7 @@ namespace mir
                         (std::abs(c-d)+std::abs(d-a))/spacing, (std::abs(b-a)+std::abs(c-b))/spacing});
                 }
             const auto *record = index.Find(tile);
-            const auto source = query.ResidentTile(record->layer, tile);
+            const auto source = sources(record->layer, tile);
             auto deviation = RefinementDeviation(index.layers[record->layer], *source, *uniform, block);
             if (!deviation) deviation = TerrainRegularDeviation(index.layers[record->layer], *source, *uniform, block);
             if (!deviation)

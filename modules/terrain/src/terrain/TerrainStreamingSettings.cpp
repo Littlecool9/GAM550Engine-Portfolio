@@ -79,6 +79,36 @@ namespace mir
                 emit("gpu", "stagingMiB", "must be positive");
             if (!NonNegative(g.meshRetainSeconds))
                 emit("gpu", "meshRetainSeconds", "must be a finite number of seconds, zero or more");
+
+            const TerrainStreamingSettings::Collision &c = s.collision;
+            bool spacings = !c.spacingsMeters.empty();
+            for (size_t i = 0; i < c.spacingsMeters.size(); ++i)
+                spacings = spacings && std::isfinite(c.spacingsMeters[i]) && c.spacingsMeters[i] > 0.0 &&
+                           (i == 0 || c.spacingsMeters[i] < c.spacingsMeters[i - 1]);
+            if (!spacings)
+                emit("collision", "spacingsMeters", "must list positive finite spacings, coarse to fine, each finer");
+            if (!NonNegative(c.maxErrorMeters))
+                emit("collision", "maxErrorMeters", "must be a finite number of meters, zero or more");
+            if (c.pieceTiles == 0)
+                emit("collision", "pieceTiles", "must be at least 1");
+            const uint32_t seamCells = 2 * kTerrainSeamMarginCells;
+            if (!std::isfinite(c.seamOverlapMeters) || c.seamOverlapMeters <= 0.0 ||
+                (spacings && c.seamOverlapMeters <= seamCells * c.spacingsMeters.front()))
+                emit("collision", "seamOverlapMeters",
+                     std::format("must be a finite number of meters, more than {} cells of the coarsest spacing",
+                                 seamCells));
+            if (!NonNegative(c.bodyToleranceMeters))
+                emit("collision", "bodyToleranceMeters", "must be a finite number of meters, zero or more");
+            if (!NonNegative(c.loadLatencySeconds))
+                emit("collision", "loadLatencySeconds", "must be a finite number of seconds, zero or more");
+            if (!NonNegative(c.latencyMarginSeconds))
+                emit("collision", "latencyMarginSeconds", "must be a finite number of seconds, zero or more");
+            if (!NonNegative(c.prefetchSeconds))
+                emit("collision", "prefetchSeconds", "must be a finite number of seconds, zero or more");
+            if (c.budgetBytes == 0)
+                emit("collision", "budgetMiB", "must be positive");
+            if (!NonNegative(c.retainSeconds))
+                emit("collision", "retainSeconds", "must be a finite number of seconds, zero or more");
         }
 
         // Local objects merge into the game's key by key; any other local value replaces the game's.
@@ -144,6 +174,30 @@ namespace mir
                     return std::nullopt;
                 }
                 return value->get<double>();
+            }
+
+            std::optional<std::vector<double>> Numbers(const json *section, std::string_view name, std::string_view key)
+            {
+                const json *value = Find(section, name, key);
+                if (!value)
+                    return std::nullopt;
+                std::vector<double> numbers;
+                if (value->is_array())
+                    for (const json &item : *value)
+                    {
+                        if (!item.is_number() || !std::isfinite(item.get<double>()))
+                        {
+                            numbers.clear();
+                            break;
+                        }
+                        numbers.push_back(item.get<double>());
+                    }
+                if (numbers.empty())
+                {
+                    Problem(name, key, "must be a list of finite numbers");
+                    return std::nullopt;
+                }
+                return numbers;
             }
 
             std::optional<uint32_t> Count(const json *section, std::string_view name, std::string_view key)
@@ -278,7 +332,7 @@ namespace mir
         Reader reader(merged, local ? &*local : nullptr, gameName, localName, load.problems);
         for (auto it = merged.begin(); it != merged.end(); ++it)
             if (it.key() != "cpu" && it.key() != "io" && it.key() != "retry" && it.key() != "residency" &&
-                it.key() != "view" && it.key() != "gpu")
+                it.key() != "view" && it.key() != "gpu" && it.key() != "collision")
                 reader.Problem(it.key(), "", "is not a known section");
 
         // Zero, which fails validation, unless the value is at least one byte.
@@ -331,6 +385,24 @@ namespace mir
         g.uploadBytesPerFrame = bytesOf(gpu, "gpu", "uploadMiBPerFrame");
         g.stagingBytes = bytesOf(gpu, "gpu", "stagingMiB");
         g.meshRetainSeconds = reader.Number(gpu, "gpu", "meshRetainSeconds").value_or(g.meshRetainSeconds);
+
+        const json *collision = reader.Section(
+            "collision", {"spacingsMeters", "maxErrorMeters", "pieceTiles", "seamOverlapMeters", "bodyToleranceMeters",
+                          "loadLatencySeconds", "latencyMarginSeconds", "prefetchSeconds", "budgetMiB",
+                          "retainSeconds"});
+        TerrainStreamingSettings::Collision &c = s.collision;
+        c.spacingsMeters = reader.Numbers(collision, "collision", "spacingsMeters").value_or(c.spacingsMeters);
+        c.maxErrorMeters = reader.Number(collision, "collision", "maxErrorMeters").value_or(c.maxErrorMeters);
+        c.pieceTiles = reader.Count(collision, "collision", "pieceTiles").value_or(0);
+        c.seamOverlapMeters = reader.Number(collision, "collision", "seamOverlapMeters").value_or(c.seamOverlapMeters);
+        c.bodyToleranceMeters =
+            reader.Number(collision, "collision", "bodyToleranceMeters").value_or(c.bodyToleranceMeters);
+        c.loadLatencySeconds = reader.Number(collision, "collision", "loadLatencySeconds").value_or(c.loadLatencySeconds);
+        c.latencyMarginSeconds =
+            reader.Number(collision, "collision", "latencyMarginSeconds").value_or(c.latencyMarginSeconds);
+        c.prefetchSeconds = reader.Number(collision, "collision", "prefetchSeconds").value_or(c.prefetchSeconds);
+        c.budgetBytes = bytesOf(collision, "collision", "budgetMiB");
+        c.retainSeconds = reader.Number(collision, "collision", "retainSeconds").value_or(c.retainSeconds);
 
         Check(s, [&](std::string_view section, std::string_view key, std::string_view problem)
               { reader.Problem(section, key, problem); });

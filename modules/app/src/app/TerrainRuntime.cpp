@@ -376,7 +376,8 @@ namespace mir
                                instance.recipePath));
             return {};
         }
-        const TerrainCollisionPolicy defaults;
+        const TerrainStreamingSettings::Collision &collision = Streamer()->Settings().collision;
+        const TerrainCollisionPolicy defaults{collision.spacingsMeters, collision.maxErrorMeters};
         const auto *configured = mWorld->TryResource<TerrainCollisionPolicy>();
         const auto &policy = configured ? *configured : defaults;
         if (!ValidTerrainCollisionPolicy(policy))

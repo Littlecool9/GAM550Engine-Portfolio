@@ -27,5 +27,17 @@
     "uploadMiBPerFrame": 8,
     "stagingMiB": 32,
     "meshRetainSeconds": 2.0
+  },
+  "collision": {
+    "spacingsMeters": [8.0, 4.0, 2.0, 1.0],
+    "maxErrorMeters": 0.05,
+    "pieceTiles": 4,
+    "seamOverlapMeters": 64.0,
+    "bodyToleranceMeters": 0.05,
+    "loadLatencySeconds": 0.5,
+    "latencyMarginSeconds": 0.5,
+    "prefetchSeconds": 2.0,
+    "budgetMiB": 64,
+    "retainSeconds": 2.0
   }
 }

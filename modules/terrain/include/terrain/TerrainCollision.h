@@ -3,14 +3,18 @@
 #include <terrain/TerrainAreaSamples.h>
 #include <terrain/TerrainHeightQuery.h>
 #include <terrain/TerrainPlacement.h>
-#include <array>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <vector>
 
 namespace mir
 {
+    // The streaming settings' collision spacings and error; a World resource of this type overrides them.
     struct TerrainCollisionPolicy
     {
-        std::array<double, 4> spacings{8.0, 4.0, 2.0, 1.0};
-        double maxError = 0.05;
+        std::vector<double> spacings;
+        double maxError = std::numeric_limits<double>::quiet_NaN();
     };
 
     bool ValidTerrainCollisionPolicy(const TerrainCollisionPolicy &policy);
@@ -35,6 +39,12 @@ namespace mir
 
     TerrainResult<TerrainUniformSamples> BuildTerrainUniformSamples(const TerrainIndex &index,
         const TerrainHeightQuery &query, double spacing);
+
+    // A tile's resident final source in a layer, or null.
+    using TerrainSourceTileLookup = std::function<std::shared_ptr<const TileHeights>(uint32_t layer, TileCoord tile)>;
+    // The part of the map inside bounds, from the sources the lookup gives; any thread when the lookup is.
+    TerrainResult<TerrainUniformSamples> BuildTerrainUniformSamples(const TerrainIndex &index,
+        const TerrainSourceTileLookup &sources, double spacing, const TerrainLocalBounds &bounds);
     bool TerrainCollisionCovers(const TerrainUniformSamples &samples, const TerrainPlacement &placement,
         WorldPosition origin, double extentX, double extentZ);
     std::optional<TerrainCollisionError> TerrainCollisionErrorBudget(const TerrainUniformSamples &samples,

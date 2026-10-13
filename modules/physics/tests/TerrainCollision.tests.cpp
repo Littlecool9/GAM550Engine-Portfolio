@@ -30,6 +30,9 @@ namespace
     const glm::dvec3 kFar{150000.5, -20.0, -150000.25};
     double Plane(double x, double z) { return 50.0 + kPlaneX*x + kPlaneZ*z; }
 
+    // The P2 prototype's spacings and error.
+    TerrainCollisionPolicy PrototypePolicy() { return {{8.0, 4.0, 2.0, 1.0}, 0.05}; }
+
     WorldPosition At(glm::dvec3 p)
     {
         const auto result = WorldPosition::FromDoubleMeters(p);
@@ -163,7 +166,7 @@ namespace
     };
 
     std::optional<Selected> Select(Fixture &fixture, PhysicsWorld &world, const char *name,
-                                  TerrainCollisionPolicy policy = {})
+                                  TerrainCollisionPolicy policy = PrototypePolicy())
     {
         for (double spacing : policy.spacings)
         {
@@ -377,7 +380,7 @@ TEST_CASE("Uniform collision selects the coarsest proven candidate and refuses u
     CHECK(selected->samples.area.spacing==1);
     CHECK(selected->error.total<=0.05);
     world.DestroyBody(selected->body);
-    TerrainCollisionPolicy impossible; impossible.maxError=0;
+    TerrainCollisionPolicy impossible=PrototypePolicy(); impossible.maxError=0;
     CHECK_FALSE(Select(fixture,world,"zero-budget",impossible));
     CHECK(world.BodyCount()==0);
 }
@@ -413,7 +416,7 @@ TEST_CASE("Decimal native policy measures scale drift and rejects inward decoded
     auto fixture=UniformFixture(0.1,256,{0,0,25.6,25.6});
     for(double spacing : {8.,4.,2.,1.}) CHECK_FALSE(BuildTerrainUniformSamples(fixture.handle->Index(),*fixture.query,spacing));
     PhysicsWorld world;
-    TerrainCollisionPolicy native; native.spacings={0.8,0.4,0.2,0.1};
+    TerrainCollisionPolicy native=PrototypePolicy(); native.spacings={0.8,0.4,0.2,0.1};
     const auto selected=Select(fixture,world,"decimal-native",native); REQUIRE(selected);
     CHECK(selected->error.horizontal>0);
     CHECK(selected->error.total<=0.05);
@@ -501,7 +504,7 @@ TEST_CASE("Translated collision coverage rejects a rounded endpoint with missing
     CHECK(world.RayCast(At({6.7999997138977051, 10, 3}), {0, -1, 0}, 20));
     world.DestroyBody(body);
 
-    TerrainCollisionPolicy policy;
+    TerrainCollisionPolicy policy = PrototypePolicy();
     policy.spacings = {0.9, 0.5, 0.25, 0.125};
     const auto selected = Select(fixture, world, "translated-decoded-support", policy);
     REQUIRE(selected);
@@ -530,12 +533,14 @@ TEST_CASE("Height-field metadata measures actual quantization, stride, holes and
 
 TEST_CASE("Collision policies reject invalid values and absent or foreign final sources", "[physics][terrain][p2collision]")
 {
-    TerrainCollisionPolicy policy;
+    TerrainCollisionPolicy policy=PrototypePolicy();
     CHECK(ValidTerrainCollisionPolicy(policy));
     policy.spacings[2]=0; CHECK_FALSE(ValidTerrainCollisionPolicy(policy));
-    policy={}; policy.spacings[2]=8; CHECK_FALSE(ValidTerrainCollisionPolicy(policy));
-    policy={}; policy.maxError=std::numeric_limits<double>::quiet_NaN(); CHECK_FALSE(ValidTerrainCollisionPolicy(policy));
-    policy={}; policy.maxError=-1; CHECK_FALSE(ValidTerrainCollisionPolicy(policy));
+    policy=PrototypePolicy(); policy.spacings[2]=8; CHECK_FALSE(ValidTerrainCollisionPolicy(policy));
+    policy=PrototypePolicy(); policy.maxError=std::numeric_limits<double>::quiet_NaN(); CHECK_FALSE(ValidTerrainCollisionPolicy(policy));
+    policy=PrototypePolicy(); policy.maxError=-1; CHECK_FALSE(ValidTerrainCollisionPolicy(policy));
+    CHECK_FALSE(ValidTerrainCollisionPolicy({}));
+    policy=PrototypePolicy(); policy.spacings.clear(); CHECK_FALSE(ValidTerrainCollisionPolicy(policy));
     Fixture fixture;
     auto absent=TerrainHeightQuery::Create(*fixture.handle);
     const auto unavailable=BuildTerrainUniformSamples(fixture.handle->Index(),absent,1);
