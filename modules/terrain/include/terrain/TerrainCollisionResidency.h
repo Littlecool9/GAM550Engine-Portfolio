@@ -227,6 +227,7 @@ namespace mir
                                   std::shared_ptr<TerrainExecutor> executor,
                                   std::shared_ptr<TerrainColliderPhysics> physics);
         ~TerrainCollisionResidency();
+        void SetTelemetry(std::shared_ptr<TerrainTelemetry> telemetry);
 
         TerrainCollisionResidency(const TerrainCollisionResidency &) = delete;
         TerrainCollisionResidency &operator=(const TerrainCollisionResidency &) = delete;

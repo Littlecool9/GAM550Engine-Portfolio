@@ -12,6 +12,7 @@
 
 #include "TerrainPackTestSupport.h"
 #include "TerrainStreamingTestSupport.h"
+#include "TerrainResidencyTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -147,4 +148,46 @@ TEST_CASE("Terrain query readiness is sampled at the install point after merged 
     streamer.Update();
     CHECK(streamer.Stats().readsStarted == 2);
     CHECK(streamer.Status(want.key).state == TerrainPayloadState::Ready);
+}
+
+TEST_CASE("Terrain collision profiling keeps pending work until a collider is placed or canceled", "[terrain][telemetry]")
+{
+    auto opened = test::OpenInMemory(test::EncodeEdge(AssetId{8}, 9));
+    auto release = TerrainResidentRelease::Create(std::move(opened.handle));
+    auto executor = std::make_shared<TerrainManualExecutor>();
+    const auto settings = test::StreamingSettings(1 << 20, TerrainResidencyMode::Eager);
+    TerrainStreamer streamer(settings, executor);
+    streamer.Add(release);
+    streamer.Update();
+    executor->RunAll();
+    streamer.Update();
+    double now = 0.0;
+    auto telemetry = std::make_shared<TerrainTelemetry>([&] { return now; });
+    auto physics = std::make_shared<test::FakePhysics>();
+    TerrainCollisionResidency collision(settings.collision, executor, physics);
+    collision.SetTelemetry(telemetry);
+    const TerrainCollisionInstance instance{release->SharedHandle(), {release->Info().asset, WorldPosition{}}, TerrainResidencyMode::Eager};
+    collision.SetInstances(std::span(&instance, 1));
+    collision.Update({}, streamer, now, 0.0);
+    REQUIRE(telemetry->Pending().at("collidable") == 1);
+    executor->RunAll();
+    CHECK(telemetry->TakeSamples().empty());
+    now = 0.25;
+    collision.Install(now);
+    const auto samples = telemetry->TakeSamples();
+    REQUIRE(samples.size() == 1);
+    CHECK(samples[0].success);
+    CHECK(samples[0].seconds == 0.25);
+    CHECK(samples[0].release.release == release->Info().release);
+    CHECK(telemetry->Pending().empty());
+    collision.Clear();
+    collision.SetInstances(std::span(&instance, 1));
+    collision.Update({}, streamer, now, 0.0);
+    REQUIRE(telemetry->Pending().at("collidable") == 1);
+    now = 0.5;
+    collision.Clear();
+    const auto canceled = telemetry->TakeSamples();
+    REQUIRE(canceled.size() == 1);
+    CHECK_FALSE(canceled[0].success);
+    CHECK(telemetry->Pending().empty());
 }

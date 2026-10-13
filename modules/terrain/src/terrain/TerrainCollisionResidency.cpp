@@ -11,6 +11,7 @@
 #include "PackInternal.h"
 
 #include <terrain/TerrainLayout.h>
+#include <terrain/TerrainTelemetry.h>
 
 #include <algorithm>
 #include <chrono>
@@ -462,6 +463,7 @@ namespace mir
         std::optional<TerrainInterestId> interest;
         uint64_t nextTicket = 1;
         TerrainCollisionStats stats;
+        std::shared_ptr<TerrainTelemetry> telemetry;
 
         Impl(const TerrainStreamingSettings::Collision &s, std::shared_ptr<TerrainExecutor> e,
              std::shared_ptr<TerrainColliderPhysics> p)
@@ -593,6 +595,8 @@ namespace mir
 
         void Drop(std::unordered_map<PieceKey, Entry, PieceKeyHash>::iterator it)
         {
+            if (telemetry)
+                telemetry->Cancel("collidable", DescribeTerrainCollisionPiece(NameOf(it->first)));
             Entry &entry = it->second;
             if (entry.state == State::Building)
             {
@@ -788,6 +792,11 @@ namespace mir
             mImpl->policy = policy;
     }
 
+    void TerrainCollisionResidency::SetTelemetry(std::shared_ptr<TerrainTelemetry> telemetry)
+    {
+        mImpl->telemetry = std::move(telemetry);
+    }
+
     void TerrainCollisionResidency::Install(double now)
     {
         Impl &impl = *mImpl;
@@ -814,6 +823,8 @@ namespace mir
                 entry.buildFailed = true;
                 entry.message = std::move(built.message);
                 event.kind = TerrainCollisionEvent::Kind::Failed;
+                if (impl.telemetry)
+                    impl.telemetry->Cancel("collidable", DescribeTerrainCollisionPiece(NameOf(key)));
                 event.message = entry.message;
                 impl.events.push_back(std::move(event));
                 continue;
@@ -854,6 +865,9 @@ namespace mir
                 event.colliders += collider.id != 0;
                 Worst(event.error, collider.error);
             }
+            if (impl.telemetry && !event.staged && !entry.colliders.empty() &&
+                std::all_of(entry.colliders.begin(), entry.colliders.end(), [](const auto &collider) { return collider.id != 0; }))
+                impl.telemetry->Complete("collidable", DescribeTerrainCollisionPiece(NameOf(key)));
             impl.events.push_back(std::move(event));
         }
 
@@ -931,6 +945,9 @@ namespace mir
             entry.prefetched = entry.prefetched || !needed;
             entry.rank = std::min(entry.rank, static_cast<float>(rank));
             entry.lastWanted = now;
+            if (impl.telemetry && needed && entry.state != Impl::State::Ready)
+                impl.telemetry->Request("collidable", DescribeTerrainCollisionPiece(NameOf(key)),
+                                        TerrainReleaseInfo{.asset = key.asset, .release = key.release});
             if (needed && entry.state != Impl::State::Ready && !std::isfinite(entry.firstNeeded))
                 entry.firstNeeded = now;
         };
@@ -1329,7 +1346,11 @@ namespace mir
     {
         Impl &impl = *mImpl;
         for (auto &[key, entry] : impl.entries)
+        {
+            if (impl.telemetry)
+                impl.telemetry->Cancel("collidable", DescribeTerrainCollisionPiece(NameOf(key)));
             impl.RemoveColliders(entry);
+        }
         impl.queue->Clear();
         impl.tickets.clear();
         impl.entries.clear();

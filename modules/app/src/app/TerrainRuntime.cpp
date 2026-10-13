@@ -318,6 +318,7 @@ namespace mir
         const TerrainStreamingSettings::Collision &collision = settings.collision;
         mColliders = std::make_shared<Colliders>(*this);
         mCollision = std::make_unique<TerrainCollisionResidency>(collision, mPool, mColliders);
+        mCollision->SetTelemetry(mTelemetry);
         PhysicsStepGates *gates = world.TryResource<PhysicsStepGates>();
         if (!gates)
             gates = &world.EmplaceResource<PhysicsStepGates>();
@@ -868,8 +869,6 @@ namespace mir
                 if (event.kind == TerrainCollisionEvent::Kind::Placed)
                 {
                     mTelemetry->Record("collision_build", event.buildSeconds, release, piece);
-                    if (!event.staged && event.colliders && std::isfinite(event.latencySeconds))
-                        mTelemetry->Record("collidable", event.latencySeconds, release, piece);
                 }
                 else if (event.kind == TerrainCollisionEvent::Kind::Failed)
                     mTelemetry->Record("collision_build", event.buildSeconds, release, piece, false);
