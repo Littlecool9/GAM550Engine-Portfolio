@@ -248,6 +248,25 @@ TEST_CASE("An Eager release collides as one piece, ready only once its colliders
     CHECK(std::isfinite(events[0].latencySeconds));
 }
 
+TEST_CASE("A slow Eager build does not stretch the prediction of every source", "[terrain][collision]")
+{
+    Fixture f(TerrainResidencyMode::Eager);
+    f.Place({{0.0, 0.0, 0.0}});
+    const std::vector<TerrainCollisionSource> sources{Falling({10.0, 12.5, 10.0})};
+    const double prediction = f.residency->PredictionSeconds();
+
+    f.Step(sources);
+    f.clock.Advance(100.0 * prediction);
+    f.Run(4, sources);
+    REQUIRE(f.residency->Answer(0).status.state == State::Ready);
+
+    const std::vector<TerrainCollisionEvent> events = f.residency->TakeEvents();
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].piece.whole);
+    CHECK(events[0].latencySeconds >= 100.0 * prediction);
+    CHECK(f.residency->PredictionSeconds() == prediction);
+}
+
 TEST_CASE("Interest pieces are built only where a source's predicted range reaches the ground",
           "[terrain][collision]")
 {

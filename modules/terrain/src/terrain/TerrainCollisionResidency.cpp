@@ -813,9 +813,13 @@ namespace mir
             if (std::isfinite(entry.firstNeeded))
             {
                 event.latencySeconds = now - entry.firstNeeded;
-                impl.latencies.push_back(event.latencySeconds);
-                while (impl.latencies.size() > kLatencySamples)
-                    impl.latencies.pop_front();
+                // A whole piece is needed from the start, not by a prediction, so its wait does not size one.
+                if (!key.whole)
+                {
+                    impl.latencies.push_back(event.latencySeconds);
+                    while (impl.latencies.size() > kLatencySamples)
+                        impl.latencies.pop_front();
+                }
                 impl.stats.maxLatencySeconds = std::max(impl.stats.maxLatencySeconds, event.latencySeconds);
             }
             event.kind = TerrainCollisionEvent::Kind::Placed;
