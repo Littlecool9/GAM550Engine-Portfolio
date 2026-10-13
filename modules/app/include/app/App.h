@@ -50,6 +50,7 @@ namespace mir
     class ScriptSystem;
     class ModelSystem;
     class TerrainRuntime;
+    class TerrainBenchmark;
     class MeshResolveSystem;
 
     struct AppDesc
@@ -72,6 +73,7 @@ namespace mir
         // 0: run until the window closes
         uint64_t mMaxFrames = 0;
         std::filesystem::path mCapturePath;
+        std::filesystem::path mTerrainBenchmarkPath;
 
         // debug: draw UIDemoScreen, every core widget, as the game UI
         bool mUIDemo = false;
@@ -211,6 +213,7 @@ namespace mir
 
         // Handles only, freed with the renderer and the World
         std::unique_ptr<TerrainRuntime> mTerrain;
+        std::unique_ptr<TerrainBenchmark> mTerrainBenchmark;
 
         AppDesc mDesc;
         GameProject mProject;

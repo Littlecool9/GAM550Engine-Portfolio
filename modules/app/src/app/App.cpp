@@ -12,6 +12,7 @@
 #include "MeshResolveSystem.h"
 #include "SceneResolve.h"
 #include "TerrainRuntime.h"
+#include "TerrainBenchmark.h"
 #include <animation/ModelPlayer.h>
 #include <animation/ModelSystem.h>
 #include <assets/AssetPath.h>
@@ -42,6 +43,7 @@
 #include <script/ComponentRegistration.h>
 #include <script/ScriptSystem.h>
 #include <terrain/ComponentRegistration.h>
+#include <terrain/TerrainAssetPath.h>
 #include <terrain/TerrainScene.h>
 
 #if MIR_WITH_EDITOR
@@ -83,9 +85,17 @@ namespace mir
     {
         mDesc = desc;
         mProject = desc.mProject;
+        if (!mDesc.mTerrainBenchmarkPath.empty())
+        {
+            mTerrainBenchmark = TerrainBenchmark::Load(mDesc.mTerrainBenchmarkPath);
+            if (!mTerrainBenchmark)
+                return false;
+            mDesc.mEnableValidation = mTerrainBenchmark->ValidationEnabled();
+            mDesc.mFixedDeltaSeconds = mTerrainBenchmark->DeltaSeconds();
+        }
         mProjectToOpen.reset();
         mSwitchHookFired = false;
-        mFixedTimestep = FixedTimestep{ .mStep = desc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
+        mFixedTimestep = FixedTimestep{ .mStep = mDesc.mFixedDeltaSeconds, .mMaxSteps = desc.mMaxFixedSteps };
 
         //audio teardown to call when other things fail to initialize
         const auto fail = [this]
@@ -135,7 +145,7 @@ namespace mir
 
         mSplash.SetProgress("Initializing renderer...", 0.2f);
         if (!mRenderer.Initialize(
-            { .window = mWindow.get(), .appName = desc.mAppName, .enableValidation = desc.mEnableValidation }))
+            { .window = mWindow.get(), .appName = desc.mAppName, .enableValidation = mDesc.mEnableValidation }))
         {
             MIR_LOG_ERROR("Renderer initialization failed");
             // Frees whatever Initialize created before it failed; the window must outlive the surface.
@@ -222,6 +232,10 @@ namespace mir
 
         mRenderSystem = &mScheduler.AddSystem<RenderSystem>(SystemPhase::Render, mRenderer);
 
+        if (mTerrainBenchmark)
+        {
+            mTerrainBenchmark->Configure(*mTerrain, TerrainReleasesRoot(mProject.mRootDir));
+        }
         mTerrain->Bind(mWorld, mRenderer, mProject);
 
         if (mDesc.mUIDemo)
@@ -476,17 +490,27 @@ namespace mir
 
         SystemContext startContext = MakeContext(0.0f);
         mScheduler.Start(startContext);
+        if (mTerrainBenchmark && !mTerrainBenchmark->Start(*this))
+            return;
+        bool benchmarkCompleted = false;
 
         auto previous = std::chrono::steady_clock::now();
 
         while (!mWindow->ShouldClose())
         {
+            if (mTerrainBenchmark)
+                mTerrainBenchmark->Pace();
+            const auto frameStart = std::chrono::steady_clock::now();
             mWindow->PollEvents();
 
             const auto now = std::chrono::steady_clock::now();
-            const float dt = std::min(std::chrono::duration<float>(now - previous).count(), mDesc.mMaxDeltaSeconds);
+            const double interval = std::chrono::duration<double>(now - previous).count();
+            const float dt = mTerrainBenchmark ? mTerrainBenchmark->DeltaSeconds()
+                : std::min(float(interval), mDesc.mMaxDeltaSeconds);
             previous = now;
             mElapsed += dt;
+            if (mTerrainBenchmark)
+                mTerrainBenchmark->BeginFrame(*this, mFrame);
 
         #if MIR_WITH_EDITOR
             mAssetImport.Update(IsEditing(mWorld));
@@ -552,6 +576,8 @@ namespace mir
         #endif
 
             mScriptReloadWatcher.Poll(Assets(), dt);
+            if (mTerrainBenchmark)
+                mTerrainBenchmark->ApplyCameras(*this, *mRenderSystem);
 
             // advances in every mode; FixedUpdate systems check IsSimulating
             // themselves, as ScriptSystem does
@@ -566,6 +592,13 @@ namespace mir
                 ToggleFullscreen();
 
             audio::Update();
+            if (mTerrainBenchmark)
+            {
+                benchmarkCompleted = mTerrainBenchmark->EndFrame(*this, *mTerrain, mFrame,
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - frameStart).count(), interval);
+                if (benchmarkCompleted)
+                    mWindow->RequestClose();
+            }
 
             ++mFrame;
 
@@ -575,6 +608,8 @@ namespace mir
             if (mDesc.mMaxFrames != 0 && mFrame >= mDesc.mMaxFrames)
                 mWindow->RequestClose();
         }
+        if (mTerrainBenchmark && !mTerrainBenchmark->Save(benchmarkCompleted))
+            MIR_LOG_ERROR("Terrain benchmark did not complete; partial trace retained");
     }
 
     UIRect App::GameUIArea() const

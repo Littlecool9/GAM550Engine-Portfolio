@@ -24,6 +24,7 @@ target_sources(engine_app PRIVATE
     src/app/MeshResolveSystem.cpp
     src/app/SceneResolve.cpp
     src/app/TerrainRender.cpp
+    src/app/TerrainBenchmark.cpp
     src/app/TerrainRuntime.cpp
 )
 

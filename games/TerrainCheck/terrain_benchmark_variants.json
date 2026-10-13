@@ -1,0 +1,8 @@
+[
+  { "name": "baseline", "overrides": {} },
+  { "name": "prefetch", "overrides": { "view": { "prefetchBudgetMiB": 8 }, "gpu": { "meshRetainSeconds": 4 } } },
+  { "name": "larger-caches", "overrides": { "cpu": { "budgetMiB": 32 }, "residency": { "mode": "Interest" }, "view": { "prefetchBudgetMiB": 12 }, "gpu": { "budgetMiB": 192, "meshRetainSeconds": 4 } } },
+  { "name": "tight-upload", "overrides": { "view": { "prefetchBudgetMiB": 8 }, "gpu": { "budgetMiB": 64, "uploadMiBPerFrame": 2, "stagingMiB": 16, "meshRetainSeconds": 1 } } },
+  { "name": "lod-relaxed", "overrides": { "view": { "refineErrorPixels": 1.5, "mergeErrorPixels": 1, "prefetchErrorPixels": 0.75, "prefetchBudgetMiB": 8 }, "gpu": { "meshRetainSeconds": 4 } } },
+  { "name": "collision-smaller", "overrides": { "view": { "prefetchBudgetMiB": 8 }, "gpu": { "meshRetainSeconds": 4 }, "collision": { "pieceTiles": 2, "loadLatencySeconds": 0.1, "latencyMarginSeconds": 0.25, "prefetchSeconds": 1, "budgetMiB": 16, "retainSeconds": 4 } } }
+]

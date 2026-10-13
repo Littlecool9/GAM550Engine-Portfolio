@@ -35,6 +35,7 @@ namespace
         // 0: run until the window closes
         uint64_t mMaxFrames = 0;
         std::string mCapturePath;
+        std::string mTerrainBenchmarkPath;
         bool mNoEditor = false;
         bool mUIDemo = false;
 
@@ -72,6 +73,11 @@ namespace
             {
                 options.mNoEditor = true;
             }
+            else if (arg == "--terrain-benchmark" && i + 1 < argc)
+            {
+                options.mTerrainBenchmarkPath = argv[++i];
+                options.mNoEditor = true;
+            }
             else if (arg == "--ui-demo")
             {
                 options.mUIDemo = true;
@@ -98,6 +104,16 @@ namespace
         {
             MIR_LOG_ERROR("--capture needs --frames");
             return std::nullopt;
+        }
+        if (!options.mTerrainBenchmarkPath.empty())
+        {
+            if (!options.mProjectSwitches.empty() || !options.mCapturePath.empty() || options.mUIDemo)
+            {
+                MIR_LOG_ERROR("--terrain-benchmark cannot be combined with project switching, capture or UI demo");
+                return std::nullopt;
+            }
+            if (options.mGameDir.empty())
+                options.mGameDir = "games/TerrainCheck";
         }
         return options;
     }
@@ -169,6 +185,7 @@ int main(int argc, char **argv)
     desc.mProject = *project;
     desc.mMaxFrames = options->mMaxFrames;
     desc.mCapturePath = options->mCapturePath;
+    desc.mTerrainBenchmarkPath = options->mTerrainBenchmarkPath;
     // a build without the editor is always the game; --no-editor is then a no-op
     desc.mEnableEditorLayout = mir::App::kHasEditor && !options->mNoEditor;
     desc.mUIDemo = options->mUIDemo;
@@ -191,7 +208,7 @@ int main(int argc, char **argv)
     app.Shutdown();
 
     // a bounded (test) run fails if anything logged an error
-    const bool bounded = options->mMaxFrames != 0;
+    const bool bounded = options->mMaxFrames != 0 || !options->mTerrainBenchmarkPath.empty();
     const int exitCode = (bounded && AnyErrorLogged()) ? 1 : 0;
 
     // switching games restarts the process; a bounded run waits for the child

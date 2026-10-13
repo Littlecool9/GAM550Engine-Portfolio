@@ -290,6 +290,14 @@ if(BUILD_TESTING)
         set_tests_properties(smoke.TerrainCheck.game-mode PROPERTIES
             LABELS smoke
             TIMEOUT 120)
+        add_test(NAME smoke.terrain-benchmark
+            COMMAND "${CMAKE_COMMAND}"
+                "-DENGINE=$<TARGET_FILE:MjolnirEngine>"
+                "-DPLAN=${CMAKE_SOURCE_DIR}/games/TerrainCheck/terrain_benchmark.json"
+                "-DOUTPUT=${CMAKE_BINARY_DIR}/terrain-benchmark-smoke.json"
+                "-DRUN_DIR=$<TARGET_FILE_DIR:MjolnirEngine>"
+                -P "${CMAKE_SOURCE_DIR}/cmake/CheckTerrainBenchmark.cmake")
+        set_tests_properties(smoke.terrain-benchmark PROPERTIES LABELS smoke TIMEOUT 120)
     endif()
 
     # Restarts HelloWorld -> EmptyScene -> HelloWorld, as Open Project does

@@ -1,0 +1,298 @@
+{
+  "schemaVersion": 1,
+  "output": "../../builds/bench/terrain-benchmark.json",
+  "fixedDeltaSeconds": 0.016666666666666666,
+  "pace": true,
+  "rayTracing": true,
+  "cacheState": "uncontrolled",
+  "hardware": {
+    "cpu": "AMD Ryzen 7 5800H",
+    "ramGiB": 16,
+    "gpu": "NVIDIA GeForce RTX 3070 Laptop GPU",
+    "vramGiB": 8,
+    "storage": "NVMe"
+  },
+  "routes": [
+    {
+      "name": "high-altitude",
+      "frames": 240,
+      "from": [
+        153000.5,
+        2980,
+        -81500.25
+      ],
+      "to": [
+        153000.5,
+        2980,
+        -81500.25
+      ],
+      "target": [
+        153000.5,
+        100,
+        -77000.25
+      ],
+      "yawDegreesPerSecond": 0,
+      "viewports": 1,
+      "fovYDegrees": 60.0,
+      "interests": 1,
+      "querySpacingMeters": 1.0,
+      "action": "none",
+      "failureReads": 0,
+      "interestHeightMeters": 140.0,
+      "landingClearanceMeters": null
+    },
+    {
+      "name": "approach-landing",
+      "frames": 600,
+      "from": [
+        153000.5,
+        2480,
+        -80000.25
+      ],
+      "to": [
+        153000.5,
+        650,
+        -77000.25
+      ],
+      "target": [
+        153000.5,
+        100,
+        -77000.25
+      ],
+      "yawDegreesPerSecond": 0,
+      "viewports": 1,
+      "fovYDegrees": 60.0,
+      "interests": 1,
+      "querySpacingMeters": 1.0,
+      "action": "none",
+      "failureReads": 0,
+      "interestHeightMeters": 140.0,
+      "landingClearanceMeters": 2.0
+    },
+    {
+      "name": "straight-high-speed",
+      "frames": 1080,
+      "from": [
+        151200.5,
+        650,
+        -77000.25
+      ],
+      "to": [
+        154800.5,
+        650,
+        -77000.25
+      ],
+      "target": [
+        156000.5,
+        100,
+        -77000.25
+      ],
+      "yawDegreesPerSecond": 0,
+      "viewports": 1,
+      "fovYDegrees": 60.0,
+      "interests": 2,
+      "querySpacingMeters": 1.0,
+      "action": "none",
+      "failureReads": 0,
+      "interestHeightMeters": 140.0,
+      "landingClearanceMeters": null
+    },
+    {
+      "name": "sharp-turns",
+      "frames": 360,
+      "from": [
+        153000.5,
+        650,
+        -77000.25
+      ],
+      "to": [
+        153000.5,
+        650,
+        -77000.25
+      ],
+      "target": [
+        154800.5,
+        100,
+        -77000.25
+      ],
+      "yawDegreesPerSecond": 180,
+      "viewports": 1,
+      "fovYDegrees": 60.0,
+      "interests": 2,
+      "querySpacingMeters": 1.0,
+      "action": "none",
+      "failureReads": 0,
+      "interestHeightMeters": 140.0,
+      "landingClearanceMeters": null
+    },
+    {
+      "name": "teleport-0",
+      "frames": 120,
+      "from": [
+        151250.5,
+        650,
+        -78750.25
+      ],
+      "to": [
+        151250.5,
+        650,
+        -78750.25
+      ],
+      "target": [
+        153000.5,
+        100,
+        -77000.25
+      ],
+      "yawDegreesPerSecond": 0,
+      "viewports": 1,
+      "fovYDegrees": 60.0,
+      "interests": 2,
+      "querySpacingMeters": 1.0,
+      "action": "none",
+      "failureReads": 0,
+      "interestHeightMeters": 140.0,
+      "landingClearanceMeters": null
+    },
+    {
+      "name": "teleport-1",
+      "frames": 120,
+      "from": [
+        154750.5,
+        650,
+        -75250.25
+      ],
+      "to": [
+        154750.5,
+        650,
+        -75250.25
+      ],
+      "target": [
+        153000.5,
+        100,
+        -77000.25
+      ],
+      "yawDegreesPerSecond": 0,
+      "viewports": 1,
+      "fovYDegrees": 60.0,
+      "interests": 2,
+      "querySpacingMeters": 1.0,
+      "action": "none",
+      "failureReads": 0,
+      "interestHeightMeters": 140.0,
+      "landingClearanceMeters": null
+    },
+    {
+      "name": "teleport-2",
+      "frames": 120,
+      "from": [
+        151250.5,
+        650,
+        -75250.25
+      ],
+      "to": [
+        151250.5,
+        650,
+        -75250.25
+      ],
+      "target": [
+        153000.5,
+        100,
+        -77000.25
+      ],
+      "yawDegreesPerSecond": 0,
+      "viewports": 1,
+      "fovYDegrees": 60.0,
+      "interests": 2,
+      "querySpacingMeters": 1.0,
+      "action": "none",
+      "failureReads": 0,
+      "interestHeightMeters": 140.0,
+      "landingClearanceMeters": null
+    },
+    {
+      "name": "teleport-3",
+      "frames": 120,
+      "from": [
+        154750.5,
+        650,
+        -78750.25
+      ],
+      "to": [
+        154750.5,
+        650,
+        -78750.25
+      ],
+      "target": [
+        153000.5,
+        100,
+        -77000.25
+      ],
+      "yawDegreesPerSecond": 0,
+      "viewports": 1,
+      "fovYDegrees": 60.0,
+      "interests": 2,
+      "querySpacingMeters": 1.0,
+      "action": "none",
+      "failureReads": 0,
+      "interestHeightMeters": 140.0,
+      "landingClearanceMeters": null
+    },
+    {
+      "name": "multiple-views-interests",
+      "frames": 300,
+      "from": [
+        153000.5,
+        650,
+        -78000.25
+      ],
+      "to": [
+        153500.5,
+        650,
+        -77500.25
+      ],
+      "target": [
+        153000.5,
+        100,
+        -77000.25
+      ],
+      "yawDegreesPerSecond": 0,
+      "viewports": 2,
+      "fovYDegrees": 60.0,
+      "interests": 3,
+      "querySpacingMeters": 1.0,
+      "action": "none",
+      "failureReads": 0,
+      "interestHeightMeters": 140.0,
+      "landingClearanceMeters": null
+    },
+    {
+      "name": "read-failures",
+      "frames": 300,
+      "from": [
+        153000.5,
+        650,
+        -77000.25
+      ],
+      "to": [
+        153000.5,
+        650,
+        -77000.25
+      ],
+      "target": [
+        153000.5,
+        100,
+        -76900.25
+      ],
+      "yawDegreesPerSecond": 0,
+      "viewports": 1,
+      "fovYDegrees": 60.0,
+      "interests": 2,
+      "querySpacingMeters": 1.0,
+      "action": "reload",
+      "failureReads": 2,
+      "interestHeightMeters": 140.0,
+      "landingClearanceMeters": null
+    }
+  ],
+  "validation": false
+}
