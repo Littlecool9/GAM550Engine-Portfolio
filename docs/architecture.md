@@ -209,7 +209,7 @@ type. The flow is in [A file](#a-file).
 ```
 PollEvents                       close flag and framebuffer size refresh here
 dt = min(elapsed, mMaxDeltaSeconds)
-TerrainRuntime::Update           installs finished terrain reads, mesh builds and uploads (every mode); then, in Edit, its Refresh
+TerrainRuntime::Update           installs finished terrain reads, mesh builds, uploads and collision pieces (every mode); then, in Edit, its Refresh
 ImGuiRuntime::BeginFrame         the NewFrame trio
 Editor::DrawLayout               -> EditorActions (scene action, game to open)
 UIContext::BeginFrame/EndFrame   game UI into the background list, scene viewport or whole window
@@ -224,7 +224,9 @@ Ordering between features is expressed as a phase, never as registration order.
 
 `ScriptSystem` runs in `PreUpdate`. `FixedUpdate` is for physics and its sync
 back to `Transform`; it runs zero or more times a frame with the fixed step as
-`dt`. `TransformPropagateSystem` runs in `PostUpdate`, after it. `RenderSystem`
+`dt`. Before each step `PhysicsSystem` calls the `PhysicsStepGates` World
+resource's gates; app's terrain is one, placing collision pieces and holding
+bodies whose ground is not collidable yet (#128). `TransformPropagateSystem` runs in `PostUpdate`, after it. `RenderSystem`
 runs in `Render`, after all of them, so every `WorldTransform` it reads is
 already current for the frame being drawn.
 

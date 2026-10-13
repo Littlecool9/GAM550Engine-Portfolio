@@ -13,8 +13,9 @@ and from a game to its published releases, and the scene side: the
 which pins one release per asset, the streamer that reads payload ranges on
 a small worker pool and keeps them resident within a data-driven CPU budget
 (#126), and each viewport's choice of tiles and Regions to draw and payloads to
-want (#125). It does not bake, publish, draw or collide terrain itself; collision is
-built by physics from these samples. Generating, baking and publishing
+want (#125), the GPU meshes those need (#127) and the height field pieces
+collision sources need (#128). It does not bake, publish, draw or collide
+terrain itself; collision shapes are built by physics from these samples. Generating, baking and publishing
 heights is offline work: the `terrain_bake` library and the headless
 `TerrainTool` executable in `tools/TerrainTool/` read a source recipe, produce
 heights on this module's grid, encode a candidate release with this module's
@@ -101,7 +102,7 @@ These sizes may change after P3 measurements.
 | Chunk | Spatial grouping for index organization and possible regional work; does not require all member tiles resident |
 | `.tpack` | Physical container; format 1 maps each occupied chunk to one file |
 | Render patch / Region | Draw geometry; P1 has one mesh per tile, while future coarse Regions may combine tiles independently of chunks |
-| Physics area | Sample block for one collision shape; current App uses one area per terrain instance, independent of tile/chunk size |
+| Physics area | Sample block for one collision shape; since #128 one whole-map piece per Eager release and pieces of `collision.pieceTiles` tiles otherwise, independent of chunk size |
 
 The following results describe the **2026-10-03 measurement build**. CPU
 experiments used `BakeFinalHeights`, `BuildTerrainTileMesh`,
@@ -449,21 +450,28 @@ ships:
   "residency": { "mode": "Auto", "queryLeaseSeconds": 2.0 },
   "view": { "refineErrorPixels": 1.0, "mergeErrorPixels": 0.75, "prefetchErrorPixels": 0.5,
             "prefetchBudgetMiB": 4 },
-  "gpu": { "budgetMiB": 128, "uploadMiBPerFrame": 8, "stagingMiB": 32, "meshRetainSeconds": 2.0 } }
+  "gpu": { "budgetMiB": 128, "uploadMiBPerFrame": 8, "stagingMiB": 32, "meshRetainSeconds": 2.0 },
+  "collision": { "spacingsMeters": [8.0, 4.0, 2.0, 1.0], "maxErrorMeters": 0.05, "pieceTiles": 4,
+                 "seamOverlapMeters": 64.0, "bodyToleranceMeters": 0.05, "loadLatencySeconds": 0.5,
+                 "latencyMarginSeconds": 0.5, "prefetchSeconds": 2.0, "budgetMiB": 64, "retainSeconds": 2.0 } }
 ```
 
 These are provisional development-machine values, not measured budgets; #130
 measures and replaces them. The `view` section is #125's (see the next
-section) and the `gpu` section #127's; the 16 MiB budget (256 MiB in #126)
-keeps TerrainCheck's 2 x 2 map Eager while its larger map streams by interest.
+section), the `gpu` section #127's and the `collision` section #128's (see
+[Collision residency](#collision-residency-issue-128)); the 16 MiB budget
+(256 MiB in #126) keeps TerrainCheck's 2 x 2 map Eager while its larger map
+streams by interest.
 
-**Stop-gap until collision residency (#128).** App's height field still covers
-a whole instance, so only an Eager release gets a collider. `ResolveTerrainWorld`
-waits for an Eager release (`WaitForEager`, which blocks the main thread at
-scene load, on Play entry and at an Edit switch, never during Play) and refuses
-it when any payload failed; app then builds the height field from the resident
-heights, without a read. An Interest release resolves, its queries stream and
-the viewports draw it as it loads (#125), but it has no collider yet.
+**No wait at load (#128).** The engine resolves with `TerrainEagerLoad::Async`:
+an Eager release's payloads are requested as `Required` and arrive like any
+others, and collision residency holds the bodies that need ground not yet
+collidable. A payload that fails is reported when it fails, and the bodies
+that need it stay held. `TerrainEagerLoad::Wait` (`WaitForEager`, refusing a
+release when any payload failed) remains for tests and tools that want a whole
+release resident before they look at it. #126 had the engine wait for every
+Eager release at scene load, on Play entry and at an Edit switch, as a stop-gap
+until this.
 
 **Measurements** (Ryzen 7 5800H, NVMe; development baselines, not budgets).
 TerrainCheck's release is 35 payloads, 5.77 MiB decoded; resolving it with the
@@ -552,7 +560,8 @@ instances; since #127 they are built, uploaded and retired asynchronously (see
 tiles of 256 m at 8 m (one LOD), a level 0 Region over each quarter and one
 root, placed at (153000.5, -20, -77000.25) beside the 2 x 2 map in the scene
 camera's view. Its 14.5 MiB of payloads do not fit what the 16 MiB budget leaves
-after the Eager 2 x 2 map, so it streams by interest (no collider until #128).
+after the Eager 2 x 2 map, so it streams by interest (and, since #128, collides
+in pieces that bodies ask for).
 From the scene camera (`smoke.TerrainCheck.game-mode`) the 2 x 2 map draws as
 four source-LOD tiles and the streamed map, after about a second of loading
 from nothing, as its four level 0 Regions; the coarse root fills in first.
@@ -686,6 +695,153 @@ most 14 units). The scene unload frees everything at once (one device wait in
 `ReleaseSceneResources`, outside the measured frames); the highest mesh
 generation then keeps counting.
 
+### Collision residency (issue #128)
+
+A `TerrainCollisionResidency` (`terrain/TerrainCollisionResidency.h`) keeps the
+height field pieces that collision sources need. A worker builds them, and they
+are placed only between fixed steps. It sits behind a small
+`TerrainColliderPhysics` interface that app implements over `PhysicsWorld`, so
+the terrain module still sees no Jolt type. Every dynamic `RigidBody` is a
+source. A game registers others in the `TerrainCollisionSources` World
+resource, with inputs a body cannot give: a flight floor, a planned range, its
+own tolerance. It reads their status back from the same resource.
+
+```cpp
+TerrainCollisionResidency collision(settings.collision, workerPool, colliders);  // one per app
+collision.SetInstances(instances);             // at a safe point: the TerrainWorld's releases and placements
+// before every fixed step:
+collision.Install(now);                        // finished builds become colliders, unused pieces retire
+collision.Update(sources, streamer, now, dt);  // needs, reads, builds and one answer per source
+const TerrainCollisionAnswer &answer = collision.Answer(i);
+if (answer.status.state == TerrainCollisionState::Pending) physics.HoldBody(body);
+physics.RestrictContacts(body, BodiesOf(answer.contacts));
+```
+
+**Pieces.** An Eager release collides as one piece over the whole map, needed
+from its first frame and selected coarse to fine as in P2. An Interest release
+is cut into pieces of `collision.pieceTiles` tiles a side. Each piece reaches
+`collision.seamOverlapMeters` past its max x and z sides into its neighbours. A
+worker samples a piece from the resident final heights of its tiles
+(`BuildTerrainUniformSamples` over a `TerrainSourceTileLookup`) and asks the
+physics side for the shape (`BuildHeightField`, any thread). Every piece of a
+release is quantized against the release's height range, and every piece starts
+on an even sample, so Jolt's 2 x 2 blocks line up where pieces overlap.
+Instances of one release share each piece's shape with a body per placement; a
+placement the build did not see gets its own error and coverage check.
+
+**Seams.** A body touches only the colliders it is given
+(`PhysicsWorld::RestrictContacts`, a Jolt group filter): the piece whose inner
+part holds its whole footprint for the coming step, which is the piece shrunk on
+its seam sides by `kTerrainSeamMarginCells` cells. So a body never meets the
+boundary edges of another piece, which Jolt treats as active edges. Inside an
+overlap both pieces have the same triangles and the same quantized heights,
+except the last cells before a piece's max sides, where Jolt quantizes against a
+shorter block; the margin keeps hand-overs away from those cells. A body wider
+than the overlap lets one piece hold has no single owner. It touches every
+piece it overlaps, and app logs a warning once.
+
+**Need.** For each source and placement the residency predicts a box over τ
+seconds: from the position along the velocity, widened by the radius plus half
+the acceleration times τ squared, joined with the source's own range, and with
+its lowest point raised to the floor. τ is `collision.loadLatencySeconds` or the
+slowest of the last 16 measured request-to-collidable times of Interest pieces,
+whichever is larger, plus `collision.latencyMarginSeconds`; an Eager whole
+piece is needed from the start, so its build time is left out. A piece is needed when its inner
+part meets the box and the lowest predicted point is within the larger of
+`maxErrorMeters` and the source's tolerance of the piece's indexed maximum
+height. The same box over τ + `collision.prefetchSeconds` makes prefetch wants.
+Needed pieces want their tiles as `Required` through one streamer interest,
+prefetch pieces as `Prefetch`.
+
+**Readiness.** A piece's fine spacing starts at the coarsest policy spacing
+that is no coarser than its finest source and refines while the measured error
+(geometry, quantization, horizontal and numeric, as in P2) is above
+`maxErrorMeters`. When the policy has a coarser spacing, a coarse piece at the
+coarsest one is built first. It stands in while the fine piece is not
+collidable, for a source whose tolerance its measured error is within. A
+source's answer is `Ready`, `CoarseSufficient`, `Pending` or `Failed`, with
+counts, the largest contact error it relies on and the first failure's reason.
+A failed build is not retried; a failed read clears once the streamer reads the
+payload.
+
+**Protection.** App's `TerrainRuntime` is a `PhysicsStepGate`. Before each
+fixed step `PhysicsSystem` calls it. It installs finished pieces, updates the
+needs and holds every dynamic body whose answer is `Pending` or `Failed`
+(`PhysicsWorld::HoldBody`: kinematic at its pose with its velocities kept;
+impulses and velocity changes while held go into the kept velocity, forces are
+dropped). It resumes the body when the answer becomes `Ready` or
+`CoarseSufficient`. Spawn, load and teleport go through the same gate, and
+other bodies keep simulating. Holds, resumes, teleports, placed and retired
+pieces are logged at INFO, failures as errors. Colliders change only in
+`Install`, which runs in the gate and at the top of a frame, so never during a
+step or a query.
+
+**Budget.** `collision.budgetBytes` caps the shape bytes held. A piece nobody
+has needed for `collision.retainSeconds` is retired. Over the budget, unneeded
+pieces go first, then prefetch ones; needed pieces may pass it
+(`Stats().overBudgetBytes`).
+
+**Settings.** The `collision` section holds the P2 policy numbers
+(`spacingsMeters`, `maxErrorMeters`, which a `TerrainCollisionPolicy` World
+resource still overrides) and the residency's own. `seamOverlapMeters` must be
+more than twice the margin at the coarsest spacing. TerrainCheck's values (in
+the [settings example](#streaming-and-cpu-residency-issue-126)) are provisional
+development values, not measured ones.
+
+**Seam choice** (prototype in local ADR 0024; Jolt 5.5, P1's 2 x 2 tiles of
+256 m at 4 m, sphere and box at 8 m/s over P1's tilted plane). Gate from the
+#128 issue comment: no step velocity jump above 0.3 m/s and a gap within the
+single shape's envelope, about −5 mm to +1.8 mm. The first two columns are P1's
+corner path in 12 headings, the last one 3 sites x 24 headings across whole
+bands:
+
+| Variant | Jumps > 0.3 m/s, largest | Gap | Across bands: jumps, largest |
+|---|---|---|---|
+| one shape (P1) | 0, 0.135 m/s | −4.6 to +1.8 mm | 0, 0.163 m/s |
+| a body per tile, shared range | 11, 2.82 m/s | −20.1 to +22.8 mm | 34, 1.88 m/s |
+| bodies overlapping 1 / 8 cells | 17 / 11, 2.97 / 2.80 m/s | to +22 mm | 34 / 38 |
+| `MutableCompoundShape`, adjacent / 1 cell | 11 / 17, 2.8 m/s | to +23 mm | 33 / 33 |
+| compound, 8 cells overlap | 0, 0.134 m/s | −4.6 to +1.8 mm | 4, 0.82 m/s |
+| overlap 5 or 8 cells, shared range, one owner (chosen) | 0, 0.135 m/s | −4.6 to +1.8 mm | 0, 0.163 m/s |
+
+Separate bodies snag because another body's boundary edges are active edges
+that enhanced internal edge removal cannot void. A compound fails across the
+band because each child's last cells are quantized against a shorter block. An
+owner per body avoids both. On the gentle relief it does as well as the single
+shape, which itself jumps above 0.3 m/s in 8 of the 72 band runs there.
+
+**Seam test.** `[collision-seams]` slides P1's sphere and box through the
+residency in Interest mode (pieces of one tile) and in Eager mode (one shape),
+over P1's corner, two hand-over bands and along two wider bands. Jolt is built
+without cross-platform determinism, so each build repeats itself exactly but
+Debug and Release round differently. A start moved by 1 µm already shifts the
+single shape's lowest gap by up to 0.75 mm on P1's corner path and 1.9 mm on a
+hand-over band. So the approved gate is checked where the single shape, over
+start moves of 0 to 1 mm, keeps to it; elsewhere pieces must stay within the
+single shape's own spread, widened by that spread. Every run of either keeps
+step jumps within 0.3 m/s, and on P1's corner path pieces equal the single
+shape exactly:
+
+| Build | P1 corner, one shape = pieces | Lowest gap, one shape / pieces: hand-over bands | wider bands | Largest jump, pieces |
+|---|---|---|---|---|
+| Release | 0.1345 m/s, −4.567 to +1.834 mm | −10.86 / −10.91, −10.85 / −10.69 mm | −19.04 / −18.37, −3.98 / −3.98 mm | 0.149 m/s |
+| Debug | 0.1350 m/s, −5.004 to +1.830 mm | −10.82 / −10.87, −10.83 / −10.70 mm | −18.49 / −20.10, −3.95 / −3.95 mm | 0.151 m/s |
+
+The gate's figures are P1's own Debug measurement of this path rounded to
+0.1 mm (ADR 0017), so the single shape itself sits on them. Away from the
+corner the single shape's lowest gap reaches −19 mm on the same plane: the gap
+is Jolt's contact slop over a quantized surface, not a seam effect.
+
+**Measurements** (TerrainCheck, Release, `--no-editor`; development
+baselines). The 2 x 2 map's whole piece at 1 m builds in 1.13 to 1.16 s on a
+worker (683.7 KiB, error 3.9 mm, nearly all quantization), so the Play sphere is
+held for 1.23 to 1.27 s at spawn and then rests where it did in P1. The 16 x 16
+map's first 8 m piece builds in 10.1 ms (66.1 KiB, error 8.0 mm) and is
+collidable 0.09 s after `StreamedSphere` first needs it; the sphere is held
+0.099 s and then rolls down the slope. In Debug the whole 1 m piece takes about
+19 s, so the 2 x 2 map's sphere waits that long (through all of a Debug smoke
+run).
+
 ### Tile meshes
 
 The first renderer draws terrain as ordinary triangle meshes built from a
@@ -706,11 +862,13 @@ The mesh has no renderer types. `app` converts it to renderer vertices,
 uploads it (traced like any mesh when ray tracing is on) and places the draw at placement plus
 origin in double (see [renderer.md](renderer.md) and [app.md](app.md)).
 
-The collider is one shape over the whole map (ADR 0017), so
-`BuildTerrainAreaSamples` gathers every tile's samples into one row-major
-block: exactly the cells the tile meshes cover, each sample taken from the tile
-that owns it, with its first sample as a terrain-local origin. `app` hands it to
-`PhysicsWorld::CreateStaticHeightField` at placement plus that origin.
+`BuildTerrainAreaSamples` gathers tiles' samples into one row-major block:
+exactly the cells the tile meshes cover, each sample taken from the tile that
+owns it, with its first sample as a terrain-local origin. A collision piece is
+such a block over a uniform layout of the piece's bounds
+(`BuildTerrainUniformSamples`); `app` hands it to `PhysicsWorld::BuildHeightField`
+and places the shape at placement plus that origin (see
+[Collision residency](#collision-residency-issue-128)).
 
 ### Scene instances and pinned releases
 
@@ -725,16 +883,18 @@ per instance.
 // TerrainInstance { "recipePath": "terrain/relief-2x2.terrain.json" }
 const TerrainSceneSpec spec = CollectTerrainScene(world, project.mAssetIdRoot);  // ids, placements, refusals
 std::vector<TerrainIssue> issues = spec.issues;
-TerrainWorld terrain = ResolveTerrainWorld(spec, TerrainReleasesRoot(gameDir), &loaded, issues, streamer);
+TerrainWorld terrain = ResolveTerrainWorld(spec, TerrainReleasesRoot(gameDir), &loaded, issues, streamer,
+                                           TerrainEagerLoad::Async);
 const TerrainHeightResult ground = terrain.HeightAt(position, 4.0);            // the instance holding the point
 ```
 
 `ResolveTerrainWorld` opens the release each asset's `current` names (its index
 only) as a `TerrainResidentRelease`: handle plus height query, the one source an
-instance's mesh, collider and queries derive from. It reuses one the streamer
-already holds, adds a new one to the streamer, and for an Eager release waits
-until every payload is resident, refusing the release when one fails (see
-[Streaming](#streaming-and-cpu-residency-issue-126)). Given what is loaded, it
+instance's meshes, collision pieces and queries derive from. It reuses one the
+streamer already holds and adds a new one to the streamer. With
+`TerrainEagerLoad::Wait` it also waits until every payload of a new Eager
+release is resident, refusing the release when one fails; with `Async` it
+returns at once (see [Streaming](#streaming-and-cpu-residency-issue-126)). Given what is loaded, it
 keeps an asset whose pointer has not moved without reading anything, and when a
 moved pointer names a release that does not load, it keeps the old one and
 remembers the refusal. `TerrainCurrentMoved` is the cheap poll that decides
@@ -742,7 +902,8 @@ whether a resolve is worth running. Instances whose effective XZ bounds (map
 bounds plus translation) overlap are refused; touching ones both load.
 
 App owns the `TerrainWorld` World resource and replaces it only at an Edit frame
-boundary, together with the meshes and colliders (see [app.md](app.md)). One Play
+boundary, handing its releases and placements to the collision residency at the
+same point (see [app.md](app.md)). One Play
 keeps the releases it entered with; a publish during Play is adopted at the
 first Edit frame boundary after Stop.
 
@@ -938,7 +1099,13 @@ tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-
 | `TerrainStreamer` | `terrain/TerrainStreamer.h` | asynchronous payload reads and CPU residency: `Add` (residency mode), `Find`, `ModeOf`, `AddInterest`/`SetInterest`/`RemoveInterest`, `Update` (the per-frame install point), `WaitForEager`, `WaitForCompletion`, `Status`, `Heights`/`Lod`/`Normals`/`Region`, `RetryFailed`, `Stats` |
 | `TerrainPayloadKey`, `TerrainPayloadWant`, `TerrainDemand`, `TerrainPayloadState`, `TerrainPayloadStatus`, `TerrainStreamingStats` | `terrain/TerrainStreamer.h` | the key (asset, release, kind, level, layer, tile or Region), a want with demand and rank, the states, budget and counters; `TerrainPayloadKeyOf`, `TerrainPayloadFootprint`, `DescribeTerrainPayloadKey` |
 | `TerrainExecutor`, `TerrainWorkerPool`, `TerrainManualExecutor` | `terrain/TerrainExecutor.h` | where background jobs run: a pool of `std::jthread`s, or a queue a test runs by hand |
-| `TerrainStreamingSettings`, `TerrainResidencyMode`, `LoadTerrainStreamingSettings`, `ValidateTerrainStreamingSettings` | `terrain/TerrainStreamingSettings.h` | the CPU budget, IO, retry, residency, per-viewport detail (`view`) and GPU mesh (`gpu`) settings with no code defaults; the game file plus the machine-local override, every problem by path and file |
+| `TerrainStreamingSettings`, `TerrainResidencyMode`, `LoadTerrainStreamingSettings`, `ValidateTerrainStreamingSettings` | `terrain/TerrainStreamingSettings.h` | the CPU budget, IO, retry, residency, per-viewport detail (`view`), GPU mesh (`gpu`) and collision piece (`collision`) settings with no code defaults; the game file plus the machine-local override, every problem by path and file; `kTerrainSeamMarginCells` |
+| `TerrainCollisionPolicy`, `ValidTerrainCollisionPolicy`, `TerrainUniformSamples`, `TerrainCollisionError` | `terrain/TerrainCollision.h` | P2's collision spacings and error (from the `collision` settings; a World resource overrides them); a uniform block with its deviation, slope and height bound; the error sum |
+| `BuildTerrainUniformSamples`, `TerrainSourceTileLookup`, `TerrainCollisionErrorBudget`, `TerrainCollisionCovers` | `terrain/TerrainCollision.h` | a uniform block over the whole map from a height query, or over any bounds from a source lookup (any thread); its error for a placement and decoded shape; whether the decoded shape covers it |
+| `TerrainCollisionResidency` | `terrain/TerrainCollisionResidency.h` | height field pieces collision sources need: `SetInstances`, `SetPolicy`, `Install` (finished builds placed, unused retired; between fixed steps), `Update` (needs, reads, builds, answers), `Answer`, `ForEachCollider`, `Clear`, `PredictionSeconds`, `TakeEvents`, `Stats` |
+| `TerrainCollisionSource`, `TerrainCollisionSources`, `TerrainCollisionState`, `TerrainCollisionStatus`, `TerrainCollisionAnswer` | `terrain/TerrainCollisionResidency.h` | a source's position, velocity, radius, acceleration, tolerance, floor and range; the World resource for a game's sources and their status; Ready, CoarseSufficient, Pending, Failed with counts and contact error; the colliders a source may touch and whether it has one owner |
+| `TerrainColliderPhysics`, `TerrainColliderShape`, `TerrainBuiltCollider`, `TerrainColliderId`, `kTerrainColliderHole` | `terrain/TerrainCollisionResidency.h` | the physics side a caller implements (`Build` on any thread with one quantization range, `Place` and `Remove` between steps); an opaque shared shape with its measured errors, extent and bytes |
+| `TerrainCollisionOwners`, `TerrainCollisionPieceArea`, `TerrainCollisionEvent`, `TerrainCollisionPieceName`, `TerrainCollisionStats` | `terrain/TerrainCollisionResidency.h` | which pieces a footprint may touch; placed, retired and failed pieces with spacing, error, build time, latency and bytes; held, peak and budget bytes, builds and latencies |
 | `TerrainViewSelector` | `terrain/TerrainViewSelection.h` | one viewport's selection over placed releases: `Update` (detail in every direction with hysteresis, frustum draws, wants), `Draws`, `Collect` (the same detail in another volume), `Wants`, `Stats` |
 | `TerrainMeshResidency` | `terrain/TerrainMeshResidency.h` | GPU meshes of draw units within the `gpu` budgets: `Install` (finished builds and uploads), `Request` (every viewport's wants: builds, hand-over, retirement), `State`, `Ready`, `Acquire`, `RetireReleases`, `RetireAll`, `Forget`, `TakeFailures`, `Stats` |
 | `TerrainMeshUploader`, `TerrainMeshData`, `TerrainGpuMeshId`, `TerrainGpuMeshState`, `TerrainMeshState`, `TerrainResidentMesh`, `TerrainMeshStats` | `terrain/TerrainMeshResidency.h` | the renderer side a caller implements (footprint, queued bytes, upload, state, retire, retiring bytes); a built mesh in its own frame; an upload's id and state; where a unit's mesh is; a ready mesh's id and origin; held, retiring and peak bytes and counters |
@@ -952,7 +1119,7 @@ tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-
 | `CollectTerrainScene` | `terrain/TerrainScene.h` | reads every `TerrainInstance` and its Transform; resolves the asset id, checks the placement |
 | `TerrainResidentRelease` | `terrain/TerrainScene.h` | one release opened (index only) with its height query, filled by a streamer; `Open`, `Create`, `Info`, `Layout`, `Handle`, `SharedHandle`, `Query`, `Lookup` |
 | `TerrainWorld`, `TerrainInstanceState`, `TerrainWorldRect` | `terrain/TerrainScene.h` | World resource: per asset the pinned release and what `current` last named, per instance placement, effective XZ bounds and release; `HeightAt`, `SameDerivedState`, `RemoveInstance` |
-| `ResolveTerrainWorld`, `TerrainCurrentMoved` | `terrain/TerrainScene.h` | resolve a spec against the releases through a streamer, reusing what is loaded and waiting for Eager releases; the Edit poll |
+| `ResolveTerrainWorld`, `TerrainEagerLoad`, `TerrainCurrentMoved` | `terrain/TerrainScene.h` | resolve a spec against the releases through a streamer, reusing what is loaded; with `Wait` a new Eager release is waited for, with `Async` (the engine) not; the Edit poll |
 | `PeekTerrainCurrentPointer` | `terrain/TerrainRelease.h` | `ReadTerrainCurrentPointer` without the FileIO log line when nothing is published |
 
 ## Rules
@@ -1079,9 +1246,9 @@ streamer's jobs read one record range and decode it, touching only the byte
 source, the immutable index and the decoders, so concurrent reads are safe for
 both byte sources. Entries, height queries and the budget change only in
 `TerrainStreamer::Update`, which never reads or waits; `WaitForEager` is the
-only blocking call and runs only at Edit frame boundaries. Budgets, IO and
-retry numbers come only from `TerrainStreamingSettings`, which has no code
-defaults.
+only blocking call, and the engine no longer makes it (tests and tools do).
+Budgets, IO and retry numbers come only from `TerrainStreamingSettings`, which
+has no code defaults.
 
 **A viewport's draw set covers each point at most once.** A Region is replaced
 only by all its children, so drawn units never overlap; a unit that is not
@@ -1127,10 +1294,27 @@ this module: a caller gathers a release's samples into one block and hands it
 to `PhysicsWorld::CreateStaticHeightField` with the block's first sample as the
 shape origin, so Jolt's triangles are `TriangulateCell`'s. Jolt stores heights
 in 8 bits per 2 x 2 block, which puts the collider up to 3.2 cm from this
-surface on the twisty test terrain and under 5 mm on gentle ground. P1 builds
+surface on the twisty test terrain and under 5 mm on gentle ground. P1 built
 one shape over the whole 2x2 area: per-tile shapes quantize their shared edge
 differently (up to 3.3 cm apart) and snag sliding boxes at the seam. See ADR
-0017 (local).
+0017 (local). Pieces of one release share one quantization range and overlap
+(#128, ADR 0024, local).
+
+**A body touches one piece, away from its seams.** Each step a dynamic body
+may touch only the colliders its answer names: the one piece whose inner part
+holds its footprint, never another piece's boundary edges. A body with no
+single owner touches every piece it overlaps and is reported. Pieces overlap by
+more than twice the margin, start on an even sample and share their release's
+quantization range, so in the inner overlap two pieces are the same Jolt
+surface.
+
+**A body never steps onto ground that is not collidable.** Before each fixed
+step, a dynamic body whose predicted range needs a piece that is neither ready
+nor stood in for by a coarse piece within its tolerance is held at its pose
+with its velocity kept, and resumes when it is. Spawn, load and teleport pass
+the same gate; only the bodies that need the missing piece wait. Colliders are
+placed and removed only in `TerrainCollisionResidency::Install`, between steps
+and outside any query; workers only build shapes from the job's own heights.
 
 **Edges and corners give one height.** On a cell edge the height depends only
 on the edge's two samples, and both sides reduce to the same expression, so a
@@ -1233,18 +1417,20 @@ positive area refuse both instances, whatever their order; sharing an edge or a
 corner is fine, and on the shared edge `TerrainWorld::HeightAt` answers from the
 first instance.
 
-**An Eager release is used whole or not at all.** `ResolveTerrainWorld` waits
-until every payload of an Eager release is resident, each range checked
-against its record, before anything derives from it. A failure is a
+**A failed payload is reported, never replaced.** With `TerrainEagerLoad::Wait`
+`ResolveTerrainWorld` waits until every payload of an Eager release is
+resident, each range checked against its record, and a failure is a
 `TerrainIssue` naming the recipe, asset, release, payload and cause; for an
 asset that is already loaded, the old release stays and the message says so.
-No stand-in terrain.
+With `Async`, the engine's choice, a failure surfaces where it is used: a
+height query answers `Failed`, a draw unit stays missing and a collision piece
+fails, holding the bodies that need it. No stand-in terrain either way.
 
 **Resolving reuses what is pinned.** An asset whose `current` still names what
 the previous `TerrainWorld` examined keeps that outcome, a release or a refusal,
 without reading the release again. So a broken publish is reported once, not on
 every poll, and a release stays the same object (and the same meshes and
-collider) until `current` moves to one that loads.
+collision pieces) until `current` moves to one that loads.
 
 **A unit is drawable only once its GPU copy is.** `TerrainMeshResidency::Ready`
 is true only after the uploader reported the upload complete, and results land
@@ -1265,7 +1451,7 @@ while its queued bytes are below the same budget.
 
 ## State
 
-*As of 2026-10-11.* Format 2 supports sparse layers, independent payload
+*As of 2026-10-12.* Format 2 supports sparse layers, independent payload
 ranges and unique per-tile source records (#145). Recipes and runtime meshes
 still use one layer until the remaining P2 issues are integrated. See
 [the P2 summary](../terrain-p2-summary.md) for validation and full-map measurements.
@@ -1280,14 +1466,16 @@ it. Since #125 every viewport selects its own tiles and Regions
 (`TerrainViewSelector`) and wants their payloads; since #127 a
 `TerrainMeshResidency` builds their meshes on the worker pool and app uploads
 them through the renderer's asynchronous mesh queue within the `gpu` budgets,
-drawing a unit only once its GPU copy is usable. App still needs a whole release resident
-(Eager) for its height field and waits for it at load, a stop-gap until #128
-adds collision residency; an Interest release is drawn but has no collider.
+drawing a unit only once its GPU copy is usable. Since #128 a
+`TerrainCollisionResidency` builds the height field pieces collision sources
+need on the same pool (one whole piece for an Eager release, pieces by interest
+otherwise), and app holds each dynamic body whose ground is not collidable yet
+before each fixed step; nothing waits at load.
 Scenes load terrain (#118): app's private `TerrainRuntime` resolves every
-`TerrainInstance` into the `TerrainWorld` resource and builds one height field
-per Eager instance from the pinned release, and `games/TerrainCheck/` (a 2x2
+`TerrainInstance` into the `TerrainWorld` resource and hands its pinned
+releases to the collision residency, and `games/TerrainCheck/` (a 2x2
 relief at (150000.5, -20, -75000.25), ray tracing requested, plus a 16 x 16
-tile map that streams by interest) runs as `smoke.TerrainCheck` and
+tile map that streams by interest, with a sphere on each) runs as `smoke.TerrainCheck` and
 `smoke.TerrainCheck.game-mode`. Offline callers: the `terrain_bake`
 library (#113: recipe, fingerprint, "mir.relief" generator; #115: bake,
 candidate directory, validation; #116: publish, sync, the per-asset lock) and
@@ -1347,7 +1535,16 @@ concurrent range reads of one file source; a mover crossing a 12 x 12 map
 within the budget with every read on a worker; a hidden `[streaming-measure]`
 case for the numbers below), `TerrainStreamingSettings` (a complete file and
 the key-by-key local override; missing, unknown, mistyped and invalid keys by
-path and file; unset fields of settings built in code), `TerrainViewSelection`
+path and file; unset fields of settings built in code; collision spacings and
+the seam overlap), `TerrainCollisionResidency` (with a fake physics side and a
+manual executor: an Eager release as one piece, ready only once placed, its
+slow build leaving the prediction alone; pieces
+only where a predicted range reaches the ground; needs ahead of a fast source
+and prefetch beyond; a coarse stand-in within tolerance; slow and failed reads
+pending or failed, never ready; retirement and the budget; pieces shared by
+sources; owners of a footprint and the unowned case; even starts and one
+quantization range; instance changes; a piece that makes no shape),
+`TerrainViewSelection`
 (a 9 x 9 map of three tile LODs and four Region levels: every point drawn once
 from eyes high, low, at the edge and outside the map at three focal lengths;
 near fine and far coarse within the refine bound; LOD hysteresis while the focal
@@ -1381,17 +1578,24 @@ spelling of one asset id, queries/meshes/collider block from one release at the
 far placement, missing/corrupt/incompatible releases next to a working one,
 touching and overlapping instances, a release pinned across a publish and the
 safe-point switch, a broken publish reported once and never re-read; every
-resolve goes through a streamer on a worker pool, Eager).
-`engine_terrain_tests` links `mir::scene` for that last file only.
+resolve goes through a streamer on a worker pool, Eager, with `Wait`).
+`engine_terrain_tests` links `mir::scene` for that last file only. Jolt-backed
+collision residency is tested in `modules/physics/tests/TerrainCollisionResidency.tests.cpp`
+(bodies held over Eager terrain until placed, a fast descent held short of
+unloaded ground, low runs over ridges with hard turns, a failed piece holding
+only its bodies until a retry, a teleport, and the `[collision-seams]` crossing
+above), with the terrain test support headers.
 
 ## Backlog
 
-1. Streaming after #127: collision interests and per-body protection that
-   replace the Eager wait at load (#128; Jolt shape builds can go to the same
-   worker pool), release switches verified off the main thread (#129) and
-   measured budgets and thresholds with telemetry (#130), including the `gpu`
-   values and the prefetch budget, which decides how much ground behind a
-   turning camera is already on the GPU. `Update` walks
+1. Streaming after #128: release switches verified off the main thread (#129;
+   collision pieces are keyed by release and must switch with meshes and
+   queries) and measured budgets and thresholds with telemetry (#130),
+   including the `gpu` and `collision` values and the prefetch budget, which
+   decides how much ground behind a turning camera is already on the GPU.
+   Collision residency only makes sure the ground is there: bodies keep Jolt's
+   discrete motion quality, so a very fast body can still sink into or pass a
+   thin ridge between steps, as on any static body. `Update` walks
    every entry each frame, so its cost grows with the number of known payloads;
    the streaming measurement read through a warm file cache. The selection
    walks every unit it chooses each frame (about a millisecond on the prototype
@@ -1412,9 +1616,11 @@ resolve goes through a streamer on a worker pool, Eager).
 6. Render LOD meshes build on the same builder: a coarser step over the same
    samples, never finer than the tile's spacing. Region meshes are baked
    payloads (#124), not built at runtime.
-7. Colliders over more than one shape (maps past Jolt's 32768 samples a side,
-   P3 residency) bring the per-tile seam back; measure overlap or a compound
-   shape before choosing.
+7. An Eager release still collides as one piece, so it is limited to Jolt's
+   32768 samples a side and its whole piece is built before anything on it
+   simulates (about a second for TerrainCheck's 1 m piece in Release). Pieces by
+   interest have no such limit; whether large Eager maps should use them too is
+   open.
 8. Removing old releases (and renamed-but-never-current ones) once a
    cross-process use protocol says which ones no running engine holds.
 9. Bake and validate in bounded memory (per chunk or tile row) before maps grow
@@ -1430,6 +1636,19 @@ resolve goes through a streamer on a worker pool, Eager).
     out of P3).
 
 ## Changed
+
+*2026-10-12* — **Collision residency (#128).** Was: app built one height field
+over a whole Eager instance at load, the engine waited for every Eager release
+at load, on Play entry and at an Edit switch, an Interest release had no
+collider, every instance built its own shape, and `TerrainCollisionPolicy` had
+code defaults. Now: `TerrainCollisionResidency` builds the pieces that dynamic
+bodies and game sources need on the worker pool (Eager: one whole piece;
+Interest: overlapping pieces with one quantization range and an owner per
+body), places them between fixed steps and shares each shape across instances;
+app holds a body before each step until its ground is collidable. The engine
+resolves with `TerrainEagerLoad::Async`. `TerrainStreamingSettings` gains the
+`collision` section, which also holds the policy's spacings and error.
+TerrainCheck gains `StreamedSphere` on its streamed map.
 
 *2026-10-11* — **GPU meshes within budgets and without waits (#127).** Was: app
 built a drawn unit's mesh on the main thread and uploaded it with the

@@ -198,7 +198,7 @@ them with the rest of Play's changes.
 | `mEditor` | after the renderer | before it | its Vulkan backend needs a live device, its GLFW backend a live window |
 | `mCommands` | before `mWorld` | after it | outlives the world it records against |
 | `mWorld`, `mScheduler`, `mScriptHost`, `mScene` | with `App` | with `App` | no external resources |
-| `mTerrain` (`TerrainRuntime`, private) | in `Initialize`, after `RenderSystem` | with `App` | holds handles only: its meshes go with the renderer, its height fields with the World's `PhysicsWorld` |
+| `mTerrain` (`TerrainRuntime`, private) | in `Initialize`, after `RenderSystem` | with `App` | holds handles only: its meshes go with the renderer, its height field bodies with the World's `PhysicsWorld`; it unregisters itself from the `ViewDrawSources` and `PhysicsStepGates` resources |
 | `mProject`, `mAvailableProjects`, `mProjectToOpen` | with `App` | with `App` | plain data |
 | `mAssetManifest` | first `Assets()` | after the cache | owns the parsed manifest |
 | `mAssetCache` | with the manifest | before it | holds a raw pointer into it |
@@ -249,20 +249,25 @@ App is the only place terrain meets the renderer and physics, since neither
 module may link `terrain`. A scene holds terrain as `TerrainInstance`
 components; the `TerrainWorld` World resource holds what they resolve to (see
 [terrain.md](terrain.md)). `src/app/TerrainRuntime.{h,cpp}` owns everything
-derived from it: one static height field over the whole map per Eager
-instance, stamped with the release it came from, and, shared by every
-viewport and every instance of a release, the GPU meshes of the draw units the
+derived from it, shared by every instance of a release: the height field
+pieces a `TerrainCollisionResidency` builds for the bodies that need them
+(#128), and, shared by every viewport, the GPU meshes of the draw units the
 viewports select (#125).
 
 ```
 Initialize     -> TerrainRuntime::Bind      streaming settings -> TerrainStreamingSettings, TerrainStreamer resources;
-                                            renderer mesh streaming; registers itself in the ViewDrawSources resource
-Run (any mode) -> TerrainRuntime::Update    TerrainStreamer::Update, TerrainMeshResidency::Install: the install point
-LoadScene      -> TerrainRuntime::Load      CollectTerrainScene, ResolveTerrainWorld (Eager wait), colliders
+                                            renderer mesh streaming; collision residency; registers itself in the
+                                            ViewDrawSources and PhysicsStepGates resources
+Run (any mode) -> TerrainRuntime::Update    TerrainStreamer::Update, TerrainMeshResidency::Install,
+                                            TerrainCollisionResidency::Install: the install point; outside Play the
+                                            bodies' collision needs too
+LoadScene      -> TerrainRuntime::Load      CollectTerrainScene, ResolveTerrainWorld (Async), collision instances
 Run (Edit)     -> TerrainRuntime::Refresh   an edit settled 0.5 s, or a current pointer moved (polled every 1 s)
 PlayScene      -> Refresh(force)            adopt a newer complete release, then the snapshot pins it
 StopScene      -> ForgetMeshes, ReleaseSceneResources, ..., Refresh(force)
-UnloadCurrentScene -> Unload                meshes forgotten, height fields destroyed, TerrainWorld emptied
+UnloadCurrentScene -> Unload                meshes forgotten, collision pieces removed, TerrainWorld emptied
+FixedUpdate    -> TerrainRuntime::BeforeStep  as a PhysicsStepGate before each step: install pieces, update needs,
+                                            hold or resume each dynamic body, restrict its contacts
 Render         -> TerrainRuntime::Prepare   per viewport: select, SetInterest; then request every viewport's meshes
                   AppendViewDraws           that view's draws
                   AppendVolumeDraws         shadow casters at viewport 0's detail
@@ -278,15 +283,29 @@ configures the renderer's mesh streaming (staging ring, bytes a frame) and a
 a scene with terrain, are one error, and no terrain loads; a game without
 terrain needs no file.
 
-Releases resolve through the streamer. The height field still covers a whole
-instance, so an Eager release is waited for until all of it is resident
-(blocking the main thread at scene load, on Play entry and at an Edit switch,
-the stop-gap until collision residency) and gets its height field from the
-resident heights, with no file read. An Interest release (too big for what the
-budget leaves, or the game asked for Interest) loads with a warning and no
-collider: viewports draw it as its payloads arrive, and nothing collides with it
-until collision residency (#128). Either way every map tile must have source
-LOD and normal records in the index, or the instance is dropped with an error.
+Releases resolve through the streamer with `TerrainEagerLoad::Async`, so
+nothing waits at load, on Play entry or at an Edit switch. The resolved
+releases and placements go to the collision residency with the streamer's
+mode for each: an Eager release collides as one piece over the map, an
+Interest release (too big for what the budget leaves, or the game asked for
+Interest) in pieces its sources ask for. Every map tile must have source LOD
+and normal records in the index, or the instance is dropped with an error.
+
+Collision sources are every dynamic `RigidBody` (position and velocity from
+Jolt, radius from its shape, gravity as acceleration,
+`collision.bodyToleranceMeters` as tolerance) plus whatever a game puts in the
+`TerrainCollisionSources` resource, which gets each source's status back.
+`TerrainRuntime` is a `PhysicsStepGate`: before every fixed step it installs
+finished pieces, updates the needs with the step's `dt` and holds each body
+whose answer is `Pending` or `Failed` with `PhysicsWorld::HoldBody`, resuming
+it once the answer is `Ready` or `CoarseSufficient`. It logs each hold (at
+spawn, after a teleport or in motion), resume and state change at INFO, with
+the pieces counted and the contact error, and a body with no single owner
+piece once as a warning. Then it restricts each body's contacts
+(`RestrictContacts`) to the pieces its answer names. Pieces placed and retired
+are logged at INFO with spacing, error, build time, bytes and, for a piece a
+body waited for, the time from first need to collidable; a failed piece is an
+error, and the bodies that need it stay held.
 
 Drawing is per viewport. `RenderSystem` hands `Prepare` every viewport's camera
 each frame; for each one, `TerrainRuntime` keeps a `TerrainViewSelector` and a
@@ -313,15 +332,17 @@ ready, uploading and building, held and retiring bytes, streamer residency,
 the renderer's uploaded bytes and device and queue waits) is logged when it
 changes, at most every `kTerrainViewLogSeconds`.
 
-A swap builds every new height field first, then destroys the old ones, retires
-the meshes of releases no longer loaded (with their builds and uploads) and
-replaces the `TerrainWorld` value;
-viewports pick the new release from the next frame. A terrain whose collider
-cannot be built is dropped whole with an error, so the query never answers for
-ground nothing collides with. Each problem is logged once per loaded scene.
-The height field is `BuildTerrainAreaSamples`'s block handed to
-`PhysicsWorld::CreateStaticHeightField` at placement plus the block's first
-sample.
+A swap retires the meshes of releases no longer loaded (with their builds and
+uploads), replaces the `TerrainWorld` value and hands the new instances to the
+collision residency, which removes the colliders of placements and releases no
+longer there at once; viewports pick the new release from the next frame. A
+piece that cannot be built no longer drops its terrain: it is an error, and the
+bodies that need it stay held. Each problem is logged once per loaded scene. A
+piece is `BuildTerrainUniformSamples`'s block handed to
+`PhysicsWorld::BuildHeightField` on a worker; its static body is
+`CreateStaticHeightField(shape, origin)` at placement plus the block's first
+sample, tagged with the instance's entity, one body per placement of a shared
+shape.
 
 ## Rules
 
@@ -423,14 +444,20 @@ selects its own units and wants their payloads; nothing is drawn that the
 selection did not pick, a unit draws once its GPU mesh is usable, and an area
 with nothing ready is left out while it loads. No terrain mesh is built or
 uploaded on the frame path with a wait: builds run on the worker pool and
-uploads go through `QueueMesh` within the `gpu` budgets. Only Eager instances
-have a collider until collision residency.
+uploads go through `QueueMesh` within the `gpu` budgets.
+
+**A body waits for its ground, alone.** Before every fixed step each dynamic
+body whose predicted range needs terrain collision that is not ready (and has
+no coarse piece within its tolerance) is held at its pose with its velocities
+kept; other bodies simulate. Terrain colliders are placed and removed only in
+`TerrainCollisionResidency::Install`, at the top of a frame or in the step gate,
+never during a step; nothing on the frame path waits for a read or a build.
 
 **Terrain changes only at an Edit frame boundary.** `TerrainRuntime::Refresh`
 runs at the top of an Edit frame, in `PlayScene` before the snapshot and at the
 end of `StopScene`, never during Play: one Play keeps the releases it entered
-with, and a mesh, query or height field of another release never shares a frame
-or a physics step with them.
+with, and a mesh, query or collision piece of another release never shares a
+frame or a physics step with them.
 
 ## State
 
@@ -454,9 +481,13 @@ logged error. `smoke.TerrainCheck` loads a far-world terrain from the release
 the build just published, with ray tracing requested, plus a second terrain
 that streams by interest; `smoke.TerrainCheck.game-mode` plays it from the
 scene camera, which sees both, so the per-viewport selection draws, streams and
-traces them. The terrain state machine
-is tested in `terrain` (`TerrainScene.tests.cpp`) and the collider assembly in
-`physics` (`TerrainCollider.tests.cpp`); the Play/publish/Stop sequence through
+traces them; a sphere on each map is held until its ground is collidable and
+then lands on it. The terrain state machine
+is tested in `terrain` (`TerrainScene.tests.cpp`), the collider assembly in
+`physics` (`TerrainCollider.tests.cpp`), and collision residency in `terrain`
+with a fake physics side and in `physics` (`TerrainCollisionResidency.tests.cpp`)
+with Jolt bodies held and resumed the way `TerrainRuntime` does it; the
+Play/publish/Stop sequence through
 `App` itself was checked once with a local harness (terrain ADR 0018).
 
 ## Backlog
@@ -476,6 +507,18 @@ is tested in `terrain` (`TerrainScene.tests.cpp`) and the collider assembly in
    cheap for a large scene.
 
 ## Changed
+
+*2026-10-12* — **Terrain collision by residency, bodies held per step (#128).**
+Was: `TerrainRuntime` built one height field per Eager instance at load on the
+main thread, after resolving waited for every Eager release (at load, on Play
+entry, at an Edit switch), dropped a terrain whose collider failed and gave
+Interest instances no collider. Now: it resolves with `TerrainEagerLoad::Async`,
+owns a `TerrainCollisionResidency` whose pieces build on the worker pool, and
+is a `PhysicsStepGate` that holds each dynamic body until its ground is
+collidable and restricts its contacts to its owner piece; it logs holds,
+resumes, placed, retired and failed pieces. TerrainCheck's scene gains
+`StreamedSphere` (entity 6) over the streamed map, and its
+`terrain_streaming.json` the `collision` section.
 
 *2026-10-11* — **Terrain meshes stream to the GPU without waits (#127).** Was:
 `TerrainMeshCache` built a unit's mesh on the main thread and uploaded it with
