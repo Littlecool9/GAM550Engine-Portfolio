@@ -139,12 +139,14 @@ resolves scripts and meshes again, same as `LoadScene` — `RestoreWorld`'s enti
 with the same only-names-round-trip gap.
 
 Terrain is pinned for the whole Play (terrain ADR 0018, local). `PlayScene` runs
-the terrain safe point once more before the snapshot, so a release published a
-moment earlier is adopted rather than missed; nothing refreshes terrain during
-Play, so a release published then changes no mesh, query or collider. After
-`StopScene` the viewports upload again the terrain meshes `ReleaseSceneResources`
-freed, or, when `current` moved during Play, switch to that release, which
-`StopScene` adopts in the same call.
+the terrain safe point once more before the snapshot, which puts in place a newer
+release that is already checked and warm; one still being checked or prewarmed
+does not hold Play up, and `TerrainRuntime::BeginPlay` lets its work go until
+Stop (terrain ADR 0025, local). Nothing refreshes terrain during Play, so a
+release published then changes no mesh, query or collider. After `StopScene` the
+viewports upload again the terrain meshes `ReleaseSceneResources` freed, and a
+release published during Play is checked and prewarmed in the background, then
+switched to at a later Edit frame boundary.
 
 ## API
 
@@ -258,12 +260,16 @@ viewports select (#125).
 Initialize     -> TerrainRuntime::Bind      streaming settings -> TerrainStreamingSettings, TerrainStreamer resources;
                                             renderer mesh streaming; collision residency; registers itself in the
                                             ViewDrawSources and PhysicsStepGates resources
-Run (any mode) -> TerrainRuntime::Update    TerrainStreamer::Update, TerrainMeshResidency::Install,
-                                            TerrainCollisionResidency::Install: the install point; outside Play the
-                                            bodies' collision needs too
-LoadScene      -> TerrainRuntime::Load      CollectTerrainScene, ResolveTerrainWorld (Async), collision instances
-Run (Edit)     -> TerrainRuntime::Refresh   an edit settled 0.5 s, or a current pointer moved (polled every 1 s)
-PlayScene      -> Refresh(force)            adopt a newer complete release, then the snapshot pins it
+Run (any mode) -> TerrainRuntime::Update    TerrainStreamer::Update, TerrainReleaseSwitch::Update,
+                                            TerrainMeshResidency::Install, TerrainCollisionResidency::Install: the
+                                            install point; outside Play the bodies' collision needs too; each staged
+                                            release's prewarm reported to the switch
+LoadScene      -> TerrainRuntime::Load      CollectTerrainScene, ResolveTerrainWorld (Async, keepLoaded), collision
+                                            instances
+Run (Edit)     -> TerrainRuntime::Refresh   an edit settled 0.5 s; current pointers polled every 1 s (a newer release
+                                            of a loaded asset starts a background check); a ready switch adopted
+PlayScene      -> Refresh(force), BeginPlay adopt a ready switch, then Play pins what is loaded; a switch in progress
+                                            waits for Stop
 StopScene      -> ForgetMeshes, ReleaseSceneResources, ..., Refresh(force)
 UnloadCurrentScene -> Unload                meshes forgotten, collision pieces removed, TerrainWorld emptied
 FixedUpdate    -> TerrainRuntime::BeforeStep  as a PhysicsStepGate before each step: install pieces, update needs,
@@ -284,7 +290,18 @@ a scene with terrain, are one error, and no terrain loads; a game without
 terrain needs no file.
 
 Releases resolve through the streamer with `TerrainEagerLoad::Async`, so
-nothing waits at load, on Play entry or at an Edit switch. The resolved
+nothing waits at load, on Play entry or at an Edit switch, and with
+`keepLoaded`, so a loaded asset keeps its release until its
+`TerrainReleaseSwitch` has checked the newer one on the worker pool (index and
+every pack, one at a time) and prewarmed it. Prewarm runs a second selector per
+viewport over the staged release, never drawn, whose Visible units are asked
+for as Prefetch, and hands the staged release to the collision residency as
+staged instances, built but not placed; it is warm when those selections draw
+only their chosen units and every staged piece is built. The switch then
+retires the old release's meshes, moves the colliders between steps and logs
+what the old release still held and the release directories kept on disk. A
+failed check, mesh or piece of the staged release is one error and the loaded
+release stays. The resolved
 releases and placements go to the collision residency with the streamer's
 mode for each: an Eager release collides as one piece over the map, an
 Interest release (too big for what the budget leaves, or the game asked for
@@ -457,7 +474,8 @@ never during a step; nothing on the frame path waits for a read or a build.
 runs at the top of an Edit frame, in `PlayScene` before the snapshot and at the
 end of `StopScene`, never during Play: one Play keeps the releases it entered
 with, and a mesh, query or collision piece of another release never shares a
-frame or a physics step with them.
+frame or a physics step with them. A staged release is selected, read, meshed and
+built in Edit, but never drawn or placed, and Play drops its staging.
 
 ## State
 
@@ -486,9 +504,10 @@ then lands on it. The terrain state machine
 is tested in `terrain` (`TerrainScene.tests.cpp`), the collider assembly in
 `physics` (`TerrainCollider.tests.cpp`), and collision residency in `terrain`
 with a fake physics side and in `physics` (`TerrainCollisionResidency.tests.cpp`)
-with Jolt bodies held and resumed the way `TerrainRuntime` does it; the
-Play/publish/Stop sequence through
-`App` itself was checked once with a local harness (terrain ADR 0018).
+with Jolt bodies held and resumed the way `TerrainRuntime` does it; the release
+switch in `terrain` (`TerrainReleaseSwitch.tests.cpp`) through the same
+composition with gated reads; the Play/publish/Stop sequence through
+`App` itself was checked with local harnesses (terrain ADR 0018 and 0025).
 
 ## Backlog
 
@@ -507,6 +526,15 @@ Play/publish/Stop sequence through
    cheap for a large scene.
 
 ## Changed
+
+*2026-10-13* — **Terrain release switches checked and prewarmed in the
+background (#129).** Was: the Edit poll, `PlayScene` and `StopScene` adopted a
+moved `current` at once, opening its index on the main thread. Now:
+`TerrainRuntime` owns a `TerrainReleaseSwitch`, resolves with `keepLoaded`,
+prewarms a checked release through staged selectors and staged collision
+instances, and adopts it at an Edit frame boundary; `PlayScene` calls the new
+`BeginPlay`, which logs the pinned releases and lets a switch in progress wait
+for Stop.
 
 *2026-10-12* — **Terrain collision by residency, bodies held per step (#128).**
 Was: `TerrainRuntime` built one height field per Eager instance at load on the

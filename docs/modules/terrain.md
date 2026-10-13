@@ -424,9 +424,10 @@ budget has left after the other Eager releases. Nothing else is pinned: no
 Region level stays resident for a whole map unless the whole release fits.
 
 **Verification.** Opening a release reads and checks its index once; each
-payload is checked against its record when it is read. The engine no longer
-reads packs whole: `VerifyAllPacks` stays in TerrainTool's validate and
-publish.
+payload is checked against its record when it is read. The engine reads packs
+whole only to check a newly published release before an Edit switch, one pack at
+a time on a worker (see [Release switch](#release-switch-issue-129));
+`VerifyAllPacks` stays in TerrainTool's validate and publish.
 
 **Threads.** `TerrainWorkerPool` (`terrain/TerrainExecutor.h`,
 `io.workerThreads` `std::jthread`s) runs posted jobs; tests inject a
@@ -842,6 +843,92 @@ collidable 0.09 s after `StreamedSphere` first needs it; the sphere is held
 19 s, so the 2 x 2 map's sphere waits that long (through all of a Debug smoke
 run).
 
+### Release switch (issue #129)
+
+Release identity was already part of every name: payload keys, mesh keys (the
+geometry payload key), collision piece keys and height results all carry the
+asset and release, and every worker job holds its own release handle and
+payload pointers. A `TerrainReleaseSwitch` (`terrain/TerrainReleaseSwitch.h`)
+adds the move of a loaded asset from release A to the release B its `current`
+names, without any frame, step or query seeing the two mixed.
+
+```cpp
+TerrainReleaseSwitch releases(workerPool, TerrainReleasesRoot(gameDir));  // one per app
+// Edit, at the top of a frame, before any system:
+releases.Update(streamer);                     // install point: check results; a verified B goes to the streamer staged
+for (const auto &b : releases.Staged())        // select, mesh and build B's collision, never draw or place it
+    releases.Report(b->Info().asset, MeasureTerrainPrewarm(b->Info(), streamer, &meshes, &collision, viewsWarm));
+if (releases.Poll(terrainWorld)) resolve = true;  // reads only the current pointers
+for (TerrainReleaseAdoption &ready : releases.TakeReady())
+    options.adopt.push_back(ready.release);    // ResolveTerrainWorld(..., options) puts B in place of A
+// PlayScene: releases.Suspend() after the last adoption; StopScene: Resume()
+```
+
+**Verification.** When `current` of a loaded asset names another release, a
+worker opens its index (`OpenTerrainRelease`, or a `TerrainReleaseOpener` a test
+wraps) and lists the asset's release directories, then reads and checks one pack
+at a time (`TerrainReleaseHandle::VerifyPack`: size, whole-file checksum, header,
+every payload decoded, the checks `VerifyAllPacks` makes), so at most one worker
+is busy with it. The main thread reads only the pointer files, once a poll
+period in Edit. A missing, truncated, corrupt or misnamed B fails with one error
+naming the pack and the reason; A stays in use and B is not read again until
+`current` moves. `current` moving on, back to A, or the asset leaving the scene
+drops the candidate, and its job's late result is discarded.
+
+**Prewarm.** A verified B is added to the streamer staged (`Add(release, true)`):
+its mode is chosen as if A were gone, and an Eager B's payloads are wanted only
+as Prefetch with the lowest rank until B is added again unstaged, so they use
+room A does not need. App runs a second selector per viewport over B (never
+drawn) and asks for B's Visible units as Prefetch, so B's meshes build and
+upload below everything A wants. The collision residency gets B as staged
+instances (`SetInstances(active, staged)`): pieces are built for what the
+sources would need there, as prefetch, never placed, and `StagedStatus` counts
+them. `MeasureTerrainPrewarm` turns this into a report: warm when every
+viewport's B selection draws only the units it chose and every staged piece is
+built; failed when one of B's payloads, meshes or pieces fails, or a tile lacks
+its source LOD and normal records. B is ready when warm, or after
+`kTerrainSwitchIdleReports` reports in a row with none of its work in flight
+(a budget keeps it from getting warmer).
+
+**Switch.** At the next Edit frame boundary `TakeReady` hands B to
+`ResolveTerrainWorld` through `TerrainResolveOptions::adopt` (which adds B again
+unstaged, so an Eager B becomes Required); `keepLoaded` keeps every other loaded
+release whatever its `current` names. App then retires A's meshes
+(`RetireReleases`; freed after the last frame that used them), sets the collision
+instances (A's colliders leave between steps, B's prebuilt pieces are placed at
+the next `Install`), and A's last `TerrainResidentRelease` goes with the old
+`TerrainWorld`, so the streamer drops A's entries at its next `Update`. Workers
+still holding A's payloads or handle finish on their own references; their
+results find no ticket and are discarded (`discarded` in the streamer, mesh and
+collision stats; a streamer result whose bytes came from another release than
+its key is discarded too).
+
+**Play.** Play never polls or switches. `PlayScene` adopts a B that is already
+ready; otherwise Play enters on A without waiting, and `Suspend` lets B's staged
+release go (its late reads and builds are discarded, its verification result is
+kept) and posts no further checks until `StopScene`.
+
+**Diagnostics.** Logs only; the engine writes nothing into the releases tree.
+App logs Play's pinned release per asset, a candidate started, verified (worker
+seconds, packs, bytes), dropped, failed or ready, the switch with what A still
+held (CPU payloads, GPU meshes, collision pieces) and the asset's release
+directories kept on disk with their sizes, and pieces built ahead of a switch.
+`TerrainReleaseSwitch::Candidates`/`Stats`, `ListTerrainReleases` and
+`Usage(release)` on the streamer and both residencies give the same per release.
+
+**Measurements** (TerrainCheck's 2 x 2 map, editor and game layouts, a local
+harness that plays A, publishes B with TerrainTool during Play, stops and plays
+B; development baselines). During Play every query, ray and body stayed on A and
+the streamer held nothing of B. B (5.77 MiB in 4 packs) took 0.044 to 0.048 s of
+worker time to check in Release (0.35 to 0.37 s in Debug). The switch came 1.25
+to 1.33 s after Stop in Release (20.3 to 20.8 s in Debug), set by B's whole 1 m
+collision piece built ahead (1.13 s; 19.4 s in Debug), and the resolve at the
+switch took under a millisecond. With the scene camera the view drew B on the
+switch frame with no area loading, and the next Play let its sphere through at
+spawn where the first Play on A had held it 1.2 s. While B prewarmed, the CPU
+residency sat at its 16 MiB budget (A's and B's Eager payloads plus the streamed
+map): the overlap #130 has to budget for.
+
 ### Tile meshes
 
 The first renderer draws terrain as ordinary triangle meshes built from a
@@ -904,8 +991,12 @@ bounds plus translation) overlap are refused; touching ones both load.
 App owns the `TerrainWorld` World resource and replaces it only at an Edit frame
 boundary, handing its releases and placements to the collision residency at the
 same point (see [app.md](app.md)). One Play
-keeps the releases it entered with; a publish during Play is adopted at the
-first Edit frame boundary after Stop.
+keeps the releases it entered with. The engine resolves with
+`TerrainResolveOptions::keepLoaded`, so a loaded asset keeps its release whatever
+`current` names; a publish during Play is checked and prewarmed after Stop and
+put in place at an Edit frame boundary through `adopt` once ready (see
+[Release switch](#release-switch-issue-129)). Only an asset with nothing loaded
+follows a moved `current` at once.
 
 ### Source, candidates and published releases
 
@@ -1086,7 +1177,10 @@ tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-
 | `TerrainRegionCoord`, `TerrainRegionGrid` | `terrain/TerrainRegionGrid.h` | a Region's level and x, z; the quadtree over a reference grid: levels, counts, ordinals, tiles, rect, valid extent, meshed domain, grid lines, cell spacing, parent and children |
 | `TerrainRegionMesh`, `EncodeTerrainRegion`, `DecodeTerrainRegion` | `terrain/TerrainRegion.h` | a Region payload (origin-relative positions, normals, indices, provenance, error) and its checked codec; `EvaluateTerrainRegion`, `TerrainRegionCoversDomain`, `TerrainRegionDeviation` against `TerrainSourceLookup`, `TerrainRegionSourceChecksums` |
 | `TerrainByteSource`, `TerrainFileSource`, `TerrainMemorySource` | `terrain/TerrainByteSource.h` | where a release's files come from, with read and byte counters |
-| `TerrainReleaseHandle`, `OpenTerrainRelease`, `OpenCurrentTerrainRelease` | `terrain/TerrainRelease.h` | one opened release; `ReadTile`, `ReadLod`, `ReadNormals`, `ReadRegion` (one range), `ReadPayload` (any record of the index, checksum checked), `VerifyAllPacks`; release directory and `current` pointer naming |
+| `TerrainReleaseHandle`, `OpenTerrainRelease`, `OpenCurrentTerrainRelease` | `terrain/TerrainRelease.h` | one opened release; `ReadTile`, `ReadLod`, `ReadNormals`, `ReadRegion` (one range), `ReadPayload` (any record of the index, checksum checked), `VerifyAllPacks`, `VerifyPack` (one pack); release directory and `current` pointer naming |
+| `TerrainStoredRelease`, `ListTerrainReleases` | `terrain/TerrainRelease.h` | an asset's release directories on disk with file counts and bytes, by id; directory entries only |
+| `TerrainReleaseSwitch` | `terrain/TerrainReleaseSwitch.h` | moving a loaded asset to the release `current` names: `Poll` (pointers only), `Update` (install point; verified releases staged in the streamer), `Staged`, `StagingVersion`, `Report`, `TakeReady`, `Suspend`/`Resume` (Play), `Clear`, `Candidates`, `TakeEvents`, `Stats` |
+| `TerrainReleaseCandidate`, `TerrainSwitchState`, `TerrainSwitchEvent`, `TerrainSwitchStats`, `TerrainReleaseAdoption`, `TerrainPrewarmReport`, `MeasureTerrainPrewarm`, `kTerrainSwitchIdleReports` | `terrain/TerrainReleaseSwitch.h` | a candidate's releases, state (Verifying, Prewarming, Ready, Failed), packs and bytes checked, times, failure and kept directories; started, verified, dropped, failed, ready and unreadable events; a ready release to adopt; warm, in flight or failed as measured from the residencies |
 | `TerrainAssetPath`, `ResolveTerrainAssetPath`, `TerrainReleasesRoot` | `terrain/TerrainAssetPath.h` | recipe path to logical path and asset id (`kTerrainRecipeSuffix`), game directory to its releases root, `IsTerrainFileExcludedFromCook` for AssetCooker |
 | `TileSamplesView`, `TileSampleLookup` | `terrain/TerrainSurface.h` | one tile's final float32 samples, not owned, in the release block layout |
 | `CellTriangulation`, `TriangulateCell` | `terrain/TerrainSurface.h` | a cell's diagonal and two triangles as global sample indices, counter-clockwise from +Y |
@@ -1096,18 +1190,19 @@ tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-
 | `TerrainHeightRequest`, `TerrainHeightResult`, `TerrainHeightStatus`, `TerrainHeightFailure` | `terrain/TerrainHeightQuery.h` | bound release and required spacing in; status, local height, `worldPoint`, spacing, source spacing, known or unknown `maxError`, release, tile and layer out |
 | `TerrainHeightLayer`, `TerrainPayloadRequest`, `TerrainTileResidency` | `terrain/TerrainHeightQuery.h` | one spacing of the release (baked tiles, measured deviation); a missing payload for a loader; a tile's slot state |
 | `PreloadTerrainTiles`, `PreloadAllTerrainTiles` | `terrain/TerrainHeightQuery.h` | synchronous fill of a query from its own release handle, recording per-tile failures; tools and tests |
-| `TerrainStreamer` | `terrain/TerrainStreamer.h` | asynchronous payload reads and CPU residency: `Add` (residency mode), `Find`, `ModeOf`, `AddInterest`/`SetInterest`/`RemoveInterest`, `Update` (the per-frame install point), `WaitForEager`, `WaitForCompletion`, `Status`, `Heights`/`Lod`/`Normals`/`Region`, `RetryFailed`, `Stats` |
+| `TerrainStreamer` | `terrain/TerrainStreamer.h` | asynchronous payload reads and CPU residency: `Add` (residency mode; staged for a release switch), `Find`, `ModeOf`, `AddInterest`/`SetInterest`/`RemoveInterest`, `Update` (the per-frame install point), `WaitForEager`, `WaitForCompletion`, `Status`, `Heights`/`Lod`/`Normals`/`Region`, `RetryFailed`, `Stats`, `Usage` |
+| `TerrainReleaseUsage` | `terrain/TerrainStreamer.h` | one release's share of a residency (waiting, in flight, ready, failed, bytes, first failure); `Usage(release)` on the streamer, the mesh residency and the collision residency |
 | `TerrainPayloadKey`, `TerrainPayloadWant`, `TerrainDemand`, `TerrainPayloadState`, `TerrainPayloadStatus`, `TerrainStreamingStats` | `terrain/TerrainStreamer.h` | the key (asset, release, kind, level, layer, tile or Region), a want with demand and rank, the states, budget and counters; `TerrainPayloadKeyOf`, `TerrainPayloadFootprint`, `DescribeTerrainPayloadKey` |
 | `TerrainExecutor`, `TerrainWorkerPool`, `TerrainManualExecutor` | `terrain/TerrainExecutor.h` | where background jobs run: a pool of `std::jthread`s, or a queue a test runs by hand |
 | `TerrainStreamingSettings`, `TerrainResidencyMode`, `LoadTerrainStreamingSettings`, `ValidateTerrainStreamingSettings` | `terrain/TerrainStreamingSettings.h` | the CPU budget, IO, retry, residency, per-viewport detail (`view`), GPU mesh (`gpu`) and collision piece (`collision`) settings with no code defaults; the game file plus the machine-local override, every problem by path and file; `kTerrainSeamMarginCells` |
 | `TerrainCollisionPolicy`, `ValidTerrainCollisionPolicy`, `TerrainUniformSamples`, `TerrainCollisionError` | `terrain/TerrainCollision.h` | P2's collision spacings and error (from the `collision` settings; a World resource overrides them); a uniform block with its deviation, slope and height bound; the error sum |
 | `BuildTerrainUniformSamples`, `TerrainSourceTileLookup`, `TerrainCollisionErrorBudget`, `TerrainCollisionCovers` | `terrain/TerrainCollision.h` | a uniform block over the whole map from a height query, or over any bounds from a source lookup (any thread); its error for a placement and decoded shape; whether the decoded shape covers it |
-| `TerrainCollisionResidency` | `terrain/TerrainCollisionResidency.h` | height field pieces collision sources need: `SetInstances`, `SetPolicy`, `Install` (finished builds placed, unused retired; between fixed steps), `Update` (needs, reads, builds, answers), `Answer`, `ForEachCollider`, `Clear`, `PredictionSeconds`, `TakeEvents`, `Stats` |
+| `TerrainCollisionResidency` | `terrain/TerrainCollisionResidency.h` | height field pieces collision sources need: `SetInstances` (active, and staged ones built ahead but never placed), `SetPolicy`, `Install` (finished builds placed, unused retired; between fixed steps), `Update` (needs, reads, builds, answers), `Answer`, `StagedStatus`, `ForEachCollider`, `Clear`, `PredictionSeconds`, `TakeEvents`, `Stats`, `Usage` |
 | `TerrainCollisionSource`, `TerrainCollisionSources`, `TerrainCollisionState`, `TerrainCollisionStatus`, `TerrainCollisionAnswer` | `terrain/TerrainCollisionResidency.h` | a source's position, velocity, radius, acceleration, tolerance, floor and range; the World resource for a game's sources and their status; Ready, CoarseSufficient, Pending, Failed with counts and contact error; the colliders a source may touch and whether it has one owner |
 | `TerrainColliderPhysics`, `TerrainColliderShape`, `TerrainBuiltCollider`, `TerrainColliderId`, `kTerrainColliderHole` | `terrain/TerrainCollisionResidency.h` | the physics side a caller implements (`Build` on any thread with one quantization range, `Place` and `Remove` between steps); an opaque shared shape with its measured errors, extent and bytes |
 | `TerrainCollisionOwners`, `TerrainCollisionPieceArea`, `TerrainCollisionEvent`, `TerrainCollisionPieceName`, `TerrainCollisionStats` | `terrain/TerrainCollisionResidency.h` | which pieces a footprint may touch; placed, retired and failed pieces with spacing, error, build time, latency and bytes; held, peak and budget bytes, builds and latencies |
 | `TerrainViewSelector` | `terrain/TerrainViewSelection.h` | one viewport's selection over placed releases: `Update` (detail in every direction with hysteresis, frustum draws, wants), `Draws`, `Collect` (the same detail in another volume), `Wants`, `Stats` |
-| `TerrainMeshResidency` | `terrain/TerrainMeshResidency.h` | GPU meshes of draw units within the `gpu` budgets: `Install` (finished builds and uploads), `Request` (every viewport's wants: builds, hand-over, retirement), `State`, `Ready`, `Acquire`, `RetireReleases`, `RetireAll`, `Forget`, `TakeFailures`, `Stats` |
+| `TerrainMeshResidency` | `terrain/TerrainMeshResidency.h` | GPU meshes of draw units within the `gpu` budgets: `Install` (finished builds and uploads), `Request` (every viewport's wants: builds, hand-over, retirement), `State`, `Ready`, `Acquire`, `RetireReleases`, `RetireAll`, `Forget`, `TakeFailures`, `Stats`, `Usage` |
 | `TerrainMeshUploader`, `TerrainMeshData`, `TerrainGpuMeshId`, `TerrainGpuMeshState`, `TerrainMeshState`, `TerrainResidentMesh`, `TerrainMeshStats` | `terrain/TerrainMeshResidency.h` | the renderer side a caller implements (footprint, queued bytes, upload, state, retire, retiring bytes); a built mesh in its own frame; an upload's id and state; where a unit's mesh is; a ready mesh's id and origin; held, retiring and peak bytes and counters |
 | `TerrainView`, `TerrainCullVolume`, `TerrainSelectionInstance`, `TerrainDrawUnit`, `TerrainUnitKind`, `TerrainUnitReady`, `TerrainViewStats` | `terrain/TerrainViewSelection.h` | the eye, camera-relative clip volume, focal length in pixels and far distance; a release at a placement; a tile at a LOD or a Region with its payload keys, distance and projected error; whether a unit can be drawn; drawn, stand-in, missing, wanted and prefetch counts |
 | `TerrainTileMesh`, `TerrainMeshVertex` | `terrain/TerrainTileMesh.h` | one tile's raster mesh: release, surface version, tile, double origin, sample range, float vertices (position, normal), `TriangulateCell` indices, bounds |
@@ -1117,9 +1212,10 @@ tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-
 | `TerrainInstance`, `RegisterTerrainComponents` | `terrain/components/TerrainInstance.h`, `terrain/ComponentRegistration.h` | the scene component: `recipePath` (String, at most 63 characters) relative to assetsRoot; placement is the root entity's Transform position |
 | `TerrainSceneSpec`, `TerrainInstanceSpec`, `TerrainIssue`, `TerrainIssueKind` | `terrain/TerrainScene.h` | what the World asks for, sorted by content; refusals with a one-line message (`MissingRecipe`, `BadRecipePath`, `InvalidPlacement`, `NoRelease`, `BadRelease`, `Overlap`); `HasTerrain` |
 | `CollectTerrainScene` | `terrain/TerrainScene.h` | reads every `TerrainInstance` and its Transform; resolves the asset id, checks the placement |
-| `TerrainResidentRelease` | `terrain/TerrainScene.h` | one release opened (index only) with its height query, filled by a streamer; `Open`, `Create`, `Info`, `Layout`, `Handle`, `SharedHandle`, `Query`, `Lookup` |
+| `TerrainResidentRelease` | `terrain/TerrainScene.h` | one release opened (index only) with its height query, filled by a streamer; `Open`, `Create` (from a handle or a shared one), `Info`, `Layout`, `Handle`, `SharedHandle`, `Query`, `Lookup` |
 | `TerrainWorld`, `TerrainInstanceState`, `TerrainWorldRect` | `terrain/TerrainScene.h` | World resource: per asset the pinned release and what `current` last named, per instance placement, effective XZ bounds and release; `HeightAt`, `SameDerivedState`, `RemoveInstance` |
-| `ResolveTerrainWorld`, `TerrainEagerLoad`, `TerrainCurrentMoved` | `terrain/TerrainScene.h` | resolve a spec against the releases through a streamer, reusing what is loaded; with `Wait` a new Eager release is waited for, with `Async` (the engine) not; the Edit poll |
+| `ResolveTerrainWorld`, `TerrainEagerLoad`, `TerrainCurrentMoved` | `terrain/TerrainScene.h` | resolve a spec against the releases through a streamer, reusing what is loaded; with `Wait` a new Eager release is waited for, with `Async` (the engine) not; a poll of the pointers |
+| `TerrainResolveOptions`, `TerrainReleaseOpener`, `TerrainReleaseFileOpener` | `terrain/TerrainScene.h` | `eager`; `keepLoaded` (the engine: a loaded asset keeps its release whatever `current` names); `adopt` (verified releases put in place of their assets' loaded ones); `open` (how a release is opened, on any thread; `OpenTerrainRelease` under the releases root by default) |
 | `PeekTerrainCurrentPointer` | `terrain/TerrainRelease.h` | `ReadTerrainCurrentPointer` without the FileIO log line when nothing is published |
 
 ## Rules
@@ -1236,7 +1332,8 @@ own IO failures once.
 **Only the release reader touches disk, and only to read.** It goes through
 core `ReadBytes`, `ReadByteRange`, `FileSize` and `ReadText`, opening a file
 per read; `PeekTerrainCurrentPointer` checks that the pointer exists first, so
-an Edit poll of an unpublished asset logs nothing. Nothing here writes a release or the `current` pointer: TerrainTool's
+an Edit poll of an unpublished asset logs nothing; `ListTerrainReleases` reads
+only directory entries and file sizes. Nothing here writes a release or the `current` pointer: TerrainTool's
 bake writes the encoded bytes itself, into a candidate directory only, and its
 publish copies, verifies and switches the pointer. The one other file the
 module reads is the streaming settings, through `serial`.
@@ -1432,6 +1529,16 @@ without reading the release again. So a broken publish is reported once, not on
 every poll, and a release stays the same object (and the same meshes and
 collision pieces) until `current` moves to one that loads.
 
+**A loaded release changes only through a checked, warm switch.** With
+`keepLoaded` a resolve never follows a moved `current` for an asset that has a
+release; a `TerrainReleaseSwitch` brings the new one once a worker has checked
+its index and every pack and its working set is warm (or as warm as the budgets
+allow), and only at an Edit frame boundary, never in Play. A release that fails
+the check is reported once and never read again until `current` moves; the
+loaded one stays. A staged release is never drawn and its pieces are never
+placed; only the active releases' units and colliders reach a frame or a step.
+Old releases are never deleted or written, and their late work is discarded.
+
 **A unit is drawable only once its GPU copy is.** `TerrainMeshResidency::Ready`
 is true only after the uploader reported the upload complete, and results land
 only in `Install`, once per frame; a worker runs only the mesh build, from the
@@ -1451,7 +1558,7 @@ while its queued bytes are below the same budget.
 
 ## State
 
-*As of 2026-10-12.* Format 2 supports sparse layers, independent payload
+*As of 2026-10-13.* Format 2 supports sparse layers, independent payload
 ranges and unique per-tile source records (#145). Recipes and runtime meshes
 still use one layer until the remaining P2 issues are integrated. See
 [the P2 summary](../terrain-p2-summary.md) for validation and full-map measurements.
@@ -1470,7 +1577,11 @@ drawing a unit only once its GPU copy is usable. Since #128 a
 `TerrainCollisionResidency` builds the height field pieces collision sources
 need on the same pool (one whole piece for an Eager release, pieces by interest
 otherwise), and app holds each dynamic body whose ground is not collidable yet
-before each fixed step; nothing waits at load.
+before each fixed step; nothing waits at load. Since #129 a newer published
+release of a loaded asset is checked pack by pack on a worker, prewarmed beside
+the loaded one (staged in the streamer, the mesh and the collision residency)
+and switched to at an Edit frame boundary (`TerrainReleaseSwitch`); Play keeps
+its release and does not wait for one being checked.
 Scenes load terrain (#118): app's private `TerrainRuntime` resolves every
 `TerrainInstance` into the `TerrainWorld` resource and hands its pinned
 releases to the collision residency, and `games/TerrainCheck/` (a 2x2
@@ -1510,7 +1621,8 @@ Region reads with no tile read; coverage, error bounds against random probes
 and tight bounds on aligned cells; malformed Region header fields, records,
 offsets and payloads; writer refusals),
 `TerrainRelease` (naming, pointer parsing, disk reads, a handle kept across a
-pointer switch, the committed fixture in `tests/fixtures/releases/`),
+pointer switch, one pack checked on its own, an asset's release directories
+listed with their sizes, the committed fixture in `tests/fixtures/releases/`),
 `TerrainSurface` (2x2 tiles of 256 m at 4 m around the origin, at mixed signs
 and about 150 km out: every sample, dense shared-edge probes from all sides and
 their neighbouring doubles, four-tile corners, random points against explicit
@@ -1578,21 +1690,37 @@ spelling of one asset id, queries/meshes/collider block from one release at the
 far placement, missing/corrupt/incompatible releases next to a working one,
 touching and overlapping instances, a release pinned across a publish and the
 safe-point switch, a broken publish reported once and never re-read; every
-resolve goes through a streamer on a worker pool, Eager, with `Wait`).
+resolve goes through a streamer on a worker pool, Eager, with `Wait`),
+`TerrainReleaseSwitch` (the app's composition over a real worker pool with gated
+range reads, a fake uploader and a fake physics side: Play pinned on A while B is
+published, A's reads let go newest first, every draw, mesh, collider and height
+result from A; after Stop B checked, prewarmed and switched, A's held reads
+discarded, nothing of A left in any residency and its files unchanged, Play on
+B; a corrupt, truncated, partial or index-less B kept out, reported once and not
+read again, then a good C; Play entered while B is checked or prewarmed, its late
+reads discarded; candidates dropped when `current` moves on or back or the asset
+leaves; an unreadable pointer reported once; an asset with nothing loaded
+resolved again; a staged Eager release using only room left; staged pieces built
+but placed only once active).
 `engine_terrain_tests` links `mir::scene` for that last file only. Jolt-backed
 collision residency is tested in `modules/physics/tests/TerrainCollisionResidency.tests.cpp`
-(bodies held over Eager terrain until placed, a fast descent held short of
-unloaded ground, low runs over ridges with hard turns, a failed piece holding
-only its bodies until a retry, a teleport, and the `[collision-seams]` crossing
-above), with the terrain test support headers.
+(bodies held over Eager terrain until placed, a body resting on A while B's
+height field is built beside it and on B after the switch, a fast descent held
+short of unloaded ground, low runs over ridges with hard turns, a failed piece
+holding only its bodies until a retry, a teleport, and the `[collision-seams]`
+crossing above), with the terrain test support headers (the fake uploader and
+physics side are in `tests/TerrainResidencyTestSupport.h`).
 
 ## Backlog
 
-1. Streaming after #128: release switches verified off the main thread (#129;
-   collision pieces are keyed by release and must switch with meshes and
-   queries) and measured budgets and thresholds with telemetry (#130),
+1. Streaming after #129: measured budgets and thresholds with telemetry (#130),
    including the `gpu` and `collision` values and the prefetch budget, which
-   decides how much ground behind a turning camera is already on the GPU.
+   decides how much ground behind a turning camera is already on the GPU, and
+   the overlap of a release switch (both releases' working sets are held until
+   the switch). A switch checks every pack of the new release, so its time grows
+   with the release; it runs on one worker in Edit only. Loading a scene (and a
+   first publish of an asset with nothing loaded) still uses what `current`
+   names without that check, so a corrupt release then fails where it is used.
    Collision residency only makes sure the ground is there: bodies keep Jolt's
    discrete motion quality, so a very fast body can still sink into or pass a
    thin ridge between steps, as on any static body. `Update` walks
@@ -1636,6 +1764,21 @@ above), with the terrain test support headers.
     out of P3).
 
 ## Changed
+
+*2026-10-13* — **Release switches checked and prewarmed off the main thread
+(#129).** Was: in Edit the poll adopted a moved `current` at once, opening the
+new index on the main thread, and `PlayScene` and `StopScene` did the same; a
+new Eager release with a damaged payload failed where it was used, with the old
+release already gone. Now: the engine resolves with `keepLoaded`, and a
+`TerrainReleaseSwitch` checks the new release's index and every pack on a
+worker, prewarms its working set staged in the streamer, the mesh and the
+collision residency, and puts it in place at an Edit frame boundary through
+`adopt`; a failed one is reported once and the loaded release stays. Play enters
+on the loaded release without waiting, and a switch in progress lets its work go
+until Stop. `TerrainReleaseHandle::VerifyPack`, `ListTerrainReleases`, staged
+`TerrainStreamer::Add` and `TerrainCollisionResidency::SetInstances`,
+`Usage(release)` on the three residencies and `discarded` counts on the mesh and
+collision stats are new.
 
 *2026-10-12* — **Collision residency (#128).** Was: app built one height field
 over a whole Eager instance at load, the engine waited for every Eager release

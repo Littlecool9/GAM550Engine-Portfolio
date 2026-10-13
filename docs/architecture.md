@@ -209,7 +209,7 @@ type. The flow is in [A file](#a-file).
 ```
 PollEvents                       close flag and framebuffer size refresh here
 dt = min(elapsed, mMaxDeltaSeconds)
-TerrainRuntime::Update           installs finished terrain reads, mesh builds, uploads and collision pieces (every mode); then, in Edit, its Refresh
+TerrainRuntime::Update           installs finished terrain reads, release checks, mesh builds, uploads and collision pieces (every mode); then, in Edit, its Refresh (which may switch to a checked, prewarmed release)
 ImGuiRuntime::BeginFrame         the NewFrame trio
 Editor::DrawLayout               -> EditorActions (scene action, game to open)
 UIContext::BeginFrame/EndFrame   game UI into the background list, scene viewport or whole window
