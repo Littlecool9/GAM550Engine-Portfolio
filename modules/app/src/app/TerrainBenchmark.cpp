@@ -214,7 +214,7 @@ namespace mir
                 const std::filesystem::path candidate = mConfigPath.parent_path() / route.at("candidate").get<std::string>();
                 std::vector<std::string> args{"publish", "--candidate", candidate.string(), "--releases",
                     TerrainReleasesRoot(app.Project().mRootDir).string(), "--report", mOutputPath.string() + ".publish.json"};
-                if (!mPublisher.Start(ExecutableDir() / "TerrainTool.exe", args))
+                if (!mPublisher.Start(ExecutableDir() / "tools" / "TerrainTool" / "TerrainTool.exe", args))
                     mFailed = true;
             }
             MIR_LOG_INFO("Terrain benchmark route {}: {}", mRoute, route.at("name").get<std::string>());
@@ -225,10 +225,12 @@ namespace mir
             for (size_t i = 0; i < route.at("interests").get<size_t>(); ++i)
                 mInterests.push_back(sources.Add({}));
         }
-        if (mPublisher.Running())
-            (void)mPublisher.Poll();
-        else if (const auto exit = mPublisher.Poll(); exit && *exit != 0)
-            mFailed = true;
+        if (const auto exit = mPublisher.Poll(); exit)
+        {
+            mOutput["publisherExitCode"] = *exit;
+            if (*exit != 0)
+                mFailed = true;
+        }
         const Json &route = mPlan.at("routes").at(mRoute);
         if (route.at("action") == "play_after_switch" && IsEditing(world))
         {
@@ -362,9 +364,11 @@ namespace mir
 
     bool TerrainBenchmark::Save(bool completed)
     {
-        mOutput["completed"] = completed && !mFailed;
         mOutput["pendingRequests"] = mTelemetry->Pending();
         mOutput["publisherRunning"] = mPublisher.Running();
+        if (mPublisher.Running())
+            mFailed = true;
+        mOutput["completed"] = completed && !mFailed;
         std::error_code error;
         std::filesystem::create_directories(mOutputPath.parent_path(), error);
         if (error || !WriteJsonFile(mOutputPath, mOutput))
