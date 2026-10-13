@@ -10,6 +10,7 @@ engine_add_module_tests(terrain
     TerrainPackIntegrity.tests.cpp
     TerrainRegion.tests.cpp
     TerrainRelease.tests.cpp
+    TerrainReleaseSwitch.tests.cpp
     TerrainScene.tests.cpp
     TerrainStreamer.tests.cpp
     TerrainStreamingSettings.tests.cpp

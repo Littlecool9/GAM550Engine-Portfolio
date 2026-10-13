@@ -17,6 +17,7 @@ target_sources(engine_terrain PRIVATE
     src/terrain/TerrainRegion.cpp
     src/terrain/TerrainRegionGrid.cpp
     src/terrain/TerrainRelease.cpp
+    src/terrain/TerrainReleaseSwitch.cpp
     src/terrain/TerrainRenderMesh.cpp
     src/terrain/TerrainScene.cpp
     src/terrain/TerrainStreamer.cpp
