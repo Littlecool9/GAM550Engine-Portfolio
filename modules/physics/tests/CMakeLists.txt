@@ -4,6 +4,7 @@ engine_add_module_tests(physics
     PhysicsWorld.tests.cpp
     TerrainCollider.tests.cpp
     TerrainCollision.tests.cpp
+    TerrainCollisionResidency.tests.cpp
 )
 
 # Test-only: checks contact against the terrain surface; engine_physics never links terrain.
