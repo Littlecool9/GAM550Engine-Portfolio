@@ -1,6 +1,7 @@
 engine_add_module_tests(terrain
     TerrainAreaSamples.tests.cpp
     TerrainAssetPath.tests.cpp
+    TerrainCollisionResidency.tests.cpp
     TerrainHeightQuery.tests.cpp
     TerrainIdentity.tests.cpp
     TerrainLayout.tests.cpp
