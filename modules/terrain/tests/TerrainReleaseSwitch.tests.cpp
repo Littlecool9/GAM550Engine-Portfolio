@@ -68,7 +68,7 @@ namespace
         return *TerrainLayout::CreateFromTileSize(64.0, 4.0, {0.0, 0.0, 256.0, 256.0});
     }
 
-    // 4 x 4 tiles of 64 m at 4 m with an 8 m LOD, level 0 Regions of 2 x 2 tiles and one root.
+    // Source tiles with one coarser LOD and two Region levels, every height raised by salt.
     TerrainEncodedRelease SwitchRelease(const TerrainReleaseInfo &info, float salt)
     {
         std::vector<TerrainLayout> layers{SourceLayout(),
