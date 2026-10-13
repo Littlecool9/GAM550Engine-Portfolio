@@ -394,6 +394,51 @@ TEST_CASE("A body over Eager terrain is held until its height field is placed, t
     CHECK(std::abs(rest.y - 0.5 - scene.Surface(rest.x, rest.z)) <= kSink);
 }
 
+TEST_CASE("A body rests on release A while B's height field is built beside it, and on B once switched to",
+          "[physics][terrain][collision-residency]")
+{
+    Scene scene(TerrainResidencyMode::Eager, Ridges, Ground(), 2, 64.0);
+    const glm::dvec3 placement{1000.25, -40.0, -500.5};
+    scene.Place(placement);
+    const glm::dvec3 start{1010.25, scene.Surface(1010.25, -490.5) + 1.0, -490.5};
+    const size_t sphere = scene.AddSphere(start, 0.5);
+    scene.Run(240);
+    const glm::dvec3 onA = scene.Position(sphere);
+    REQUIRE(std::abs(onA.y - 0.5 - scene.Surface(onA.x, onA.z)) <= kSink);
+
+    std::vector<TileHeights> tilesB;
+    const TerrainReleaseInfo infoB = Info(scene.info.asset, 0xB0D2);
+    const ControlledRelease b = OpenControlled(Release(
+        infoB, scene.layout, [](double x, double z) { return Ridges(x, z) - 1.0; }, tilesB));
+    scene.streamer->Add(b.release, true);
+    const TerrainPlacement where{scene.info.asset, At(placement)};
+    const TerrainCollisionInstance active{scene.release.release->SharedHandle(), where, TerrainResidencyMode::Eager};
+    const TerrainCollisionInstance staged{b.release->SharedHandle(), where, TerrainResidencyMode::Eager};
+    scene.residency->SetInstances({&active, 1}, {&staged, 1});
+    scene.Run(180);
+    REQUIRE(scene.residency->StagedStatus(infoB).state == TerrainCollisionState::Ready);
+    const glm::dvec3 stillOnA = scene.Position(sphere);
+    CHECK(std::abs(stillOnA.y - 0.5 - scene.Surface(stillOnA.x, stillOnA.z)) <= kSink);
+
+    scene.streamer->Add(b.release);
+    scene.residency->SetInstances({&staged, 1});
+    scene.Run(240);
+    CHECK(scene.residency->Answer(sphere).status.state == TerrainCollisionState::Ready);
+    const glm::dvec3 onB = scene.Position(sphere);
+    const SurfaceSample surfaceB = EvaluateSurface(
+        scene.layout, *TerrainLocalPosition::FromMeters(onB - placement),
+        [&](TileCoord tile)
+        {
+            for (const TileHeights &t : tilesB)
+                if (t.Tile() == tile)
+                    return t.Samples();
+            return std::span<const float>();
+        });
+    REQUIRE(surfaceB.IsOk());
+    CHECK(std::abs(onB.y - 0.5 - (placement.y + surfaceB.height)) <= kSink);
+    CHECK(onB.y < onA.y - 0.5);
+}
+
 TEST_CASE("A fast descent toward raised ground is held short of unloaded terrain, never let through it",
           "[physics][terrain][collision-residency]")
 {
