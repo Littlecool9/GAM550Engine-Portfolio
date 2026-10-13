@@ -39,11 +39,11 @@ try {
                 $plan | Add-Member -NotePropertyName revision -NotePropertyValue ((git -C $benchmarkRoot rev-parse HEAD).Trim())
                 $plan | Add-Member -NotePropertyName runUtc -NotePropertyValue ([DateTime]::UtcNow.ToString('o'))
                 [IO.File]::WriteAllText($generatedPlan, ($plan | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
-                Push-Location (Split-Path $executable -Parent)
-                try {
-                    & $executable --terrain-benchmark $generatedPlan *> (Join-Path $OutputDirectory "$stem.log")
-                    if ($LASTEXITCODE -ne 0) { throw "Benchmark failed: $stem ($LASTEXITCODE)" }
-                } finally { Pop-Location }
+                $process = Start-Process -FilePath $executable -ArgumentList ('--terrain-benchmark "' + $generatedPlan + '"') `
+                    -WorkingDirectory (Split-Path $executable -Parent) -WindowStyle Hidden -Wait -PassThru `
+                    -RedirectStandardOutput (Join-Path $OutputDirectory "$stem.log") `
+                    -RedirectStandardError (Join-Path $OutputDirectory "$stem.stderr.log")
+                if ($process.ExitCode -ne 0) { throw "Benchmark failed: $stem ($($process.ExitCode))" }
                 $trace = Get-Content -Raw -LiteralPath $tracePath | ConvertFrom-Json
                 if (-not $trace.completed) { throw "Incomplete benchmark trace: $tracePath" }
                 $tracePaths += $tracePath

@@ -291,7 +291,7 @@ namespace mir
             at.y = route.at("interestHeightMeters").get<double>();
             TerrainCollisionSource source;
             source.position = Position(at);
-            source.velocity = velocity;
+            source.velocity = {velocity.x, 0.0, velocity.z};
             source.radius = 2.0;
             source.tolerance = settings.collision.bodyToleranceMeters;
             source.floor = -20.0;
@@ -327,6 +327,7 @@ namespace mir
         const auto result = app.GetWorld().Resource<TerrainWorld>().HeightAt(mEye, route.at("querySpacingMeters").get<double>());
         mTelemetry->Record("height_query", std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
         row["heightStatus"] = int(result.status);
+        row["heightHasResult"] = result.HasHeight();
         const auto eye = mEye.Meters();
         row["cameraPosition"] = {eye.x, eye.y, eye.z};
         row["heightWorldY"] = result.HasHeight() && result.worldPoint
