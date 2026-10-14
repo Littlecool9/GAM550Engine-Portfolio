@@ -34,6 +34,7 @@
 #include <glm/vec2.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -550,6 +551,12 @@ TEST_CASE("A pinned release ignores a publish until a safe point, which switches
 
     // The remembered refusal comes back word for word.
     const TerrainIssue refusal = issues[0];
+    TerrainStreamer &streamer = scene.world.Resource<TerrainStreamer>();
+    while (streamer.Stats().loading != 0)
+    {
+        streamer.WaitForCompletion(std::chrono::seconds(1));
+        streamer.Update();
+    }
     std::filesystem::remove_all(TerrainReleaseDir(root, asset, c.info.release));
     TerrainWorld still = Resolve(scene.world, root, &kept, issues);
     REQUIRE(issues.size() == 1);
