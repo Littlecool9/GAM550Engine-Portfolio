@@ -1,6 +1,6 @@
 {
   "cpu": {
-    "budgetMiB": 16
+    "budgetMiB": 32
   },
   "io": {
     "workerThreads": 2,
@@ -13,31 +13,31 @@
     "failedHoldSeconds": 10.0
   },
   "residency": {
-    "mode": "Auto",
+    "mode": "Interest",
     "queryLeaseSeconds": 2.0
   },
   "view": {
     "refineErrorPixels": 1.0,
     "mergeErrorPixels": 0.75,
     "prefetchErrorPixels": 0.5,
-    "prefetchBudgetMiB": 4
+    "prefetchBudgetMiB": 12
   },
   "gpu": {
     "budgetMiB": 128,
-    "uploadMiBPerFrame": 8,
-    "stagingMiB": 32,
-    "meshRetainSeconds": 2.0
+    "uploadMiBPerFrame": 4,
+    "stagingMiB": 16,
+    "meshRetainSeconds": 4.0
   },
   "collision": {
     "spacingsMeters": [8.0, 4.0, 2.0, 1.0],
     "maxErrorMeters": 0.05,
-    "pieceTiles": 4,
+    "pieceTiles": 2,
     "seamOverlapMeters": 64.0,
     "bodyToleranceMeters": 0.05,
-    "loadLatencySeconds": 0.5,
-    "latencyMarginSeconds": 0.5,
-    "prefetchSeconds": 2.0,
-    "budgetMiB": 64,
-    "retainSeconds": 2.0
+    "loadLatencySeconds": 0.1,
+    "latencyMarginSeconds": 0.25,
+    "prefetchSeconds": 1.0,
+    "budgetMiB": 16,
+    "retainSeconds": 4.0
   }
 }

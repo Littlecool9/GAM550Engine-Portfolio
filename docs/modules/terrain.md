@@ -442,27 +442,28 @@ has no code defaults. `LoadTerrainStreamingSettings` reads the game's
 `terrain_streaming.local.json` beside the executable, which overrides it key by
 key: what an installer would write per machine (git-ignored). Every missing,
 unknown or invalid key is reported with its JSON path and the file it is in,
-and then nothing loads. Later P3 issues add their own sections. TerrainCheck
-ships:
+and then nothing loads. TerrainCheck ships measured target-machine values
+from #130, **pending user/team approval**:
 
 ```json
-{ "cpu": { "budgetMiB": 16 }, "io": { "workerThreads": 2, "maxInstallsPerFrame": 32 },
+{ "cpu": { "budgetMiB": 32 }, "io": { "workerThreads": 2, "maxInstallsPerFrame": 32 },
   "retry": { "maxAttempts": 3, "firstDelaySeconds": 0.1, "maxDelaySeconds": 2.0, "failedHoldSeconds": 10.0 },
-  "residency": { "mode": "Auto", "queryLeaseSeconds": 2.0 },
+  "residency": { "mode": "Interest", "queryLeaseSeconds": 2.0 },
   "view": { "refineErrorPixels": 1.0, "mergeErrorPixels": 0.75, "prefetchErrorPixels": 0.5,
-            "prefetchBudgetMiB": 4 },
-  "gpu": { "budgetMiB": 128, "uploadMiBPerFrame": 8, "stagingMiB": 32, "meshRetainSeconds": 2.0 },
-  "collision": { "spacingsMeters": [8.0, 4.0, 2.0, 1.0], "maxErrorMeters": 0.05, "pieceTiles": 4,
-                 "seamOverlapMeters": 64.0, "bodyToleranceMeters": 0.05, "loadLatencySeconds": 0.5,
-                 "latencyMarginSeconds": 0.5, "prefetchSeconds": 2.0, "budgetMiB": 64, "retainSeconds": 2.0 } }
+            "prefetchBudgetMiB": 12 },
+  "gpu": { "budgetMiB": 128, "uploadMiBPerFrame": 4, "stagingMiB": 16, "meshRetainSeconds": 4.0 },
+  "collision": { "spacingsMeters": [8.0, 4.0, 2.0, 1.0], "maxErrorMeters": 0.05, "pieceTiles": 2,
+                 "seamOverlapMeters": 64.0, "bodyToleranceMeters": 0.05, "loadLatencySeconds": 0.1,
+                 "latencyMarginSeconds": 0.25, "prefetchSeconds": 1.0, "budgetMiB": 16, "retainSeconds": 4.0 } }
 ```
 
-These are provisional development-machine values, not measured budgets; #130
-measures and replaces them. The `view` section is #125's (see the next
-section), the `gpu` section #127's and the `collision` section #128's (see
-[Collision residency](#collision-residency-issue-128)); the 16 MiB budget
-(256 MiB in #126) keeps TerrainCheck's 2 x 2 map Eager while its larger map
-streams by interest.
+The values cover the committed TerrainCheck fixtures on Ryzen 7 5800H,
+RTX 3070 Laptop and NVMe with a warm file cache; see #130's measurements
+below. The explicit Interest policy applies to both maps and avoids the
+small map's whole-release Eager collision preparation. Auto and Eager remain
+available and tested. The original Auto settings are retained as a complete
+benchmark control; a larger CPU cap alone would make more maps Eager, so the
+policy change and budget change must be reviewed together.
 
 **No wait at load (#128).** The engine resolves with `TerrainEagerLoad::Async`:
 an Eager release's payloads are requested as `Required` and arrive like any
@@ -929,6 +930,158 @@ spawn where the first Play on A had held it 1.2 s. While B prewarmed, the CPU
 residency sat at its 16 MiB budget (A's and B's Eager payloads plus the streamed
 map): the overlap #130 has to budget for.
 
+### Streaming profile and budgets (issue #130)
+
+`MjolnirEngine --terrain-benchmark <plan.json>` runs TerrainCheck through the
+normal App, streamer, selection, GPU residency and physics step gates. The
+shipped `games/TerrainCheck/terrain_benchmark.json` fixes the camera route,
+simulation tick, viewport projections and explicit collision interests. It
+includes high altitude, approach and landing, horizontal high-speed travel,
+turns, four teleports, two viewports with three interests, and recoverable
+range-read failures. A route can also launch TerrainTool publish on a child
+process, Stop into Edit, and enter Play after a changed release is adopted.
+The benchmark never writes a release tree itself. Generated candidates,
+plans, traces and publish reports stay in the build directory.
+
+`TerrainTelemetry` is an optional thread-safe sink. Normal runs leave it
+unattached. Queryable latency starts with the scheduler's first merged Height
+demand and ends when the decoded height is installed; renderable latency
+starts with the first mesh want, including CPU/budget waits, and ends when the
+uploader reports GPU readiness. Collidable latency starts when a piece is
+first needed and ends after its active colliders are placed. Requests already
+ready before demand have no loading latency sample. Canceled/failed requests
+are separate from successful samples, and outstanding requests remain in the
+JSON alongside per-frame pending/held collision status. The reader wrapper
+times actual ranges, detects owner-thread range calls, and injects failures
+before the normal retry policy. `EvictPayloads` clears CPU residency without
+invalidating existing shared payload owners, interests or release identities;
+the fault route uses it to force new reads after scene reload.
+
+The trace separates range IO, read plus checksum, decode, mesh assembly,
+upload-to-ready, GPU upload/BLAS commands, deferred GPU retirement, Jolt shape
+work, collision assembly, body holds and release verification/preparation.
+Vulkan timestamps bracket each submitted frame and its upload work. Results
+are read after that frame slot completes, without a profiling wait; the last
+in-flight frames can be absent from GPU samples and their counts stay visible.
+Primary raster draw calls exclude shadows and ImGui; RT dispatches have no
+raster primary draw calls, while terrain draw-unit counts still describe the
+selected geometry. Multi-view frames use the existing raster fallback.
+
+Every frame records CPU payload residency/loading reservations, GPU meshes
+including deferred-retirement overlap, upload queues, staging usage/capacity,
+collision bytes, per-release active/staged shares, and sampled process and
+device allocation totals. Persistent staging capacity is reported separately
+and added once to the mesh/retirement total. Sampled process peaks include the
+in-memory trace and can miss short CPU allocation peaks; they are not a terrain
+allocator high-water mark. Missing areas and duplicate tile coverage are
+selection counters, not GPU pixel masks; smoke.terrain-render retains the
+existing independent raster/RT surface checks. Startup and explicit scene
+reload spikes remain in the report, separately labeled from steady movement.
+
+`tools/run_terrain_benchmarks.ps1` runs the data-defined alternatives in
+`terrain_benchmark_variants.json`, raster and RT, and repeated fresh processes;
+it restores any pre-existing machine-local override in a finally block.
+`tools/aggregate_terrain_benchmark.py` aggregates nearest-rank P50/P95/P99,
+spikes above an explicitly supplied reporting threshold, memory peaks,
+capability sample counts, missing coverage and main-thread range reads.
+First processes start with empty engine residency; the Windows file cache is
+uncontrolled. Subsequent file replays are warm comparisons, not proven cold
+NVMe reads. No system-wide file cache flush is performed.
+
+**Target-machine measurements.** MSVC Release, 1280 x 720, validation off,
+Ryzen 7 5800H, nominal 16 GiB RAM, RTX 3070 Laptop (8 GiB VRAM), NVMe.
+The two committed maps are a mixed-resolution 2 x 2 map and a 16 x 16 streamed
+map. Six controls ran raster and RT twice (80,640 frames); the combined
+recommendation ran both twice again (13,440 frames). Tables show ranges
+across repetitions, not percentiles pooled across distinct runs. Each run
+used a fresh engine residency; Windows file cache was not flushed.
+
+| Case | CPU / mode | Prefetch | GPU / upload / staging (MiB) | Sharp-turn missing frames | Straight / multi-view missing frames |
+|---|---|---:|---|---:|---|
+| Original control | 16 / Auto | 4 | 128 / 8 / 32 | 92 | 6 / 11 |
+| More prefetch and retention | 16 / Auto | 8 | 128 / 8 / 32 | 32 | 0 / 0 |
+| Larger caches and Interest | 32 / Interest | 12 | 192 / 8 / 32 | 0 | 0 / 0 |
+| Tight upload | 16 / Auto | 8 | 64 / 2 / 16 | 131 | 0 / 3 |
+| Relaxed LOD thresholds | 16 / Auto | 8 | 128 / 8 / 32 | 4 | 0 / 0 |
+| Smaller collision pieces | 16 / Auto | 8 | 128 / 8 / 32 | 32 | 0 / 0 |
+| Recommendation | 32 / Interest | 12 | 128 / 4 / 16 | 0 | 0 / 0 |
+
+All controls and recommendations had zero duplicated tile coverage and zero
+main-thread payload range reads. The larger-cache control changes policy as
+well as memory, so it does not isolate the CPU-cap effect. The recommendation
+keeps the original LOD accuracy thresholds, raises prefetch and retention,
+and halves upload/staging capacity. Sampled peaks were 14.66 MiB CPU payload,
+41.17 MiB raster or 80.73 MiB RT meshes plus staging capacity, and 0.463 MiB
+collision. The caps allow handover and release overlap; they are not measured
+requirements for a larger map. Process working set was 272.88–304.35 MiB
+(including the trace); sampled device allocation was 384.74 / 432.11 MiB.
+
+| Successful readiness (ms) | Raster P50 / P95 / P99 | RT P50 / P95 / P99 | Samples per run |
+|---|---|---|---:|
+| queryable | 16.10–16.41 / 17.37–17.83 / 266.82–283.54 | 16.51–16.56 / 17.40–18.43 / 230.21–282.63 | 125 |
+| renderable | 205.98–206.84 / 392.45–393.37 / 426.54–426.78 | 273.85–310.66 / 694.57–750.55 / 743.61–800.44 | 544 / 541–542 |
+| collidable | 48.81–49.53 / 199.48–199.75 / 199.48–199.75 | 49.79–50.46 / 198.82–260.11 / 198.82–260.11 | 11 |
+
+Query tails include the two injected read failures and retries. Each run
+recorded both failed range/checksum attempts separately; RT runs canceled
+two or three renderable requests at the scene reload, and all runs ended
+with no pending requests. With eleven collision samples P95/P99 equal the
+maximum; that is a small sample, not a latency guarantee. Height-query P99
+was 0.006–0.007 ms, mesh-build P99 0.356–0.400 ms, and upload-to-ready P99
+33.13–34.21 ms. Full stage distributions remain in the JSON.
+
+| Route | CPU frame P99, raster / RT (ms) | GPU frame P99, raster / RT (ms) | Missing frames per run |
+|---|---|---|---:|
+| High altitude (240 frames) | 5.81–6.12 / 3.87–4.22 | 1.74–2.09 / 2.18–2.28 | 31–33 initially |
+| Approach and landing (600) | 3.84–3.89 / 3.64–3.95 | 4.76–4.76 / 5.40–5.64 | 0 |
+| Straight, 200 m/s (1080) | 3.21–3.41 / 3.69–3.70 | 5.56–5.60 / 5.23–5.56 | 0 |
+| Sharp turns, 180 degrees/s (360) | 3.24–3.46 / 3.33–3.41 | 2.97–2.97 / 4.89–5.02 | 0 |
+| Four teleports (120 each) | 3.07–4.19 / 3.04–8.54 | 2.74–3.04 / 3.31–15.84 | 2 / 2 / 0 / 2 |
+| Two views, three interests (300) | 3.52–3.73 / 3.47–8.27 | 2.30–2.31 / 2.30–2.82 | 0 |
+| Reload with two read failures (300) | 6.42–6.65 / 4.25–6.54 | 5.80–6.02 / 6.41–7.14 | 16–20 initially |
+
+The RT multi-view route uses the existing raster fallback. Raster draw-call
+P95 is 8 at high altitude, 133 on approach, 175 on the straight route and
+83 on turns; actual primary RT draw calls are zero. Every steady movement
+route had zero device/queue idle waits. Startup CPU frames remained
+349–370 ms in the final runs (the controls reached 570 ms); reload frames
+were 40–53 ms. These spikes and initial holes remain in the report. The
+reporting threshold is not a performance gate, and these fixtures do not
+establish a 150 km or cold-disk guarantee. A control repetition overlapped a
+local read-only audit and showed extra CPU spikes; raw repetitions were
+retained rather than discarded. The recommendation was measured without
+build/test interference. Per-route telemetry P99 reached 0.22–1.24 ms and
+is included in CPU frame times.
+
+The existing Region experiment was rerun: 4096 m / 128 cells produced
+17,613,912 bytes in 10.80 s, with an L0 bound around 5.8 m, versus
+8192 m / 128 cells at 4,329,392 bytes in 7.47 s and around 15 m. Keep
+4096 / 128 for the finer hierarchy. The hidden mesh experiment (50 repeats)
+found native build / decoded-cache assembly means of 6.158 / 23.217 ms at
+1 m and 0.104 / 0.327 ms at 8 m. Cache assembly includes provenance
+validation; the native fixture has heights and neighbors already resident.
+Retain the existing LOD/Normal format for mixed-resolution seams, without
+claiming a CPU win or introducing a full renderer-vertex disk cache.
+
+Two additional 1440-frame RT routes published during Play, stopped, prewarmed
+and adopted the new release, then played it. The query release remained A
+during publishing and became B only after Stop; the source-limit height at
+the fixed probe changed from -2.7413 to 3.0488 m. A second near-ground
+interest actually built a staged B collider: 0.319 MiB held beside A for
+three sampled frames. Active plus staged release shares peaked at 15.70 MiB
+CPU, 36.04 MiB GPU and 0.657 MiB collision (including the unchanged second
+asset); total meshes/retirement/staging peaked at 81.98 MiB. Verification
+took 44.92–47.11 ms and preparation 278.50–278.77 ms, one sample per route.
+Publishing and Play B had no missing frames; Stop's scene-resource reset
+had three. Duplicate coverage and main-thread ranges remained zero. The
+near-ground Stop route had CPU/GPU P99 4.08/5.60 ms; Play entry retained a
+28.12 ms CPU spike. First-mesh admission may exceed the upload frame budget,
+as in #127: the switch observed 13.94 MiB frame cost including BLAS, with
+10.60 MiB staging used. The 4 MiB setting is not a strict per-mesh limit.
+An attempted repeat with an already published candidate correctly failed
+without changing current; its incomplete trace is kept separately. Repeating
+the publish route requires baking a new candidate identity.
+
 ### Tile meshes
 
 The first renderer draws terrain as ordinary triangle meshes built from a
@@ -1190,7 +1343,9 @@ tools\TerrainTool\TerrainTool.exe publish --candidate terrain-candidates\relief-
 | `TerrainHeightRequest`, `TerrainHeightResult`, `TerrainHeightStatus`, `TerrainHeightFailure` | `terrain/TerrainHeightQuery.h` | bound release and required spacing in; status, local height, `worldPoint`, spacing, source spacing, known or unknown `maxError`, release, tile and layer out |
 | `TerrainHeightLayer`, `TerrainPayloadRequest`, `TerrainTileResidency` | `terrain/TerrainHeightQuery.h` | one spacing of the release (baked tiles, measured deviation); a missing payload for a loader; a tile's slot state |
 | `PreloadTerrainTiles`, `PreloadAllTerrainTiles` | `terrain/TerrainHeightQuery.h` | synchronous fill of a query from its own release handle, recording per-tile failures; tools and tests |
-| `TerrainStreamer` | `terrain/TerrainStreamer.h` | asynchronous payload reads and CPU residency: `Add` (residency mode; staged for a release switch), `Find`, `ModeOf`, `AddInterest`/`SetInterest`/`RemoveInterest`, `Update` (the per-frame install point), `WaitForEager`, `WaitForCompletion`, `Status`, `Heights`/`Lod`/`Normals`/`Region`, `RetryFailed`, `Stats`, `Usage` |
+| `TerrainStreamer` | `terrain/TerrainStreamer.h` | asynchronous payload reads and CPU residency: `Add` (residency mode; staged for a release switch), `Find`, `ModeOf`, `AddInterest`/`SetInterest`/`RemoveInterest`, `Update` (the per-frame install point), `WaitForEager`, `WaitForCompletion`, `Status`, `Heights`/`Lod`/`Normals`/`Region`, `RetryFailed`, `Stats`, `Usage`, `SetTelemetry`, `EvictPayloads` (drops cache ownership and stale requests while acquired payloads stay valid) |
+| `TerrainTelemetry`, `TerrainTimingSample` | `terrain/TerrainTelemetry.h` | optional thread-safe sink: `Request`, `Complete`, `Cancel`, `Record`, `TakeSamples`, `Pending`; injectable clock and owner-thread detection |
+| `TerrainProfiledSource`, `TerrainReadFaults` | `terrain/TerrainProfiledSource.h` | source wrapper: time reads, count main-thread ranges, inject recoverable range failures; configured only for a benchmark |
 | `TerrainReleaseUsage` | `terrain/TerrainStreamer.h` | one release's share of a residency (waiting, in flight, ready, failed, bytes, first failure); `Usage(release)` on the streamer, the mesh residency and the collision residency |
 | `TerrainPayloadKey`, `TerrainPayloadWant`, `TerrainDemand`, `TerrainPayloadState`, `TerrainPayloadStatus`, `TerrainStreamingStats` | `terrain/TerrainStreamer.h` | the key (asset, release, kind, level, layer, tile or Region), a want with demand and rank, the states, budget and counters; `TerrainPayloadKeyOf`, `TerrainPayloadFootprint`, `DescribeTerrainPayloadKey` |
 | `TerrainExecutor`, `TerrainWorkerPool`, `TerrainManualExecutor` | `terrain/TerrainExecutor.h` | where background jobs run: a pool of `std::jthread`s, or a queue a test runs by hand |
@@ -1558,6 +1713,14 @@ while its queued bytes are below the same budget.
 
 ## State
 
+#130 adds optional telemetry through `SetTelemetry` on the streamer and both
+residencies, plus the source wrapper and app benchmark entry. Seven registered
+telemetry tests cover merged readiness, pending/canceled requests, successful
+installation, source faults, payload eviction preserving acquired owners,
+and mesh Forget cancellation. The native/cache measurement is hidden and
+unregistered. `smoke.terrain-benchmark` checks a bounded real engine trace;
+`smoke.terrain-render` retains the independent GPU coverage oracle.
+
 *As of 2026-10-13.* Format 2 supports sparse layers, independent payload
 ranges and unique per-tile source records (#145). Recipes and runtime meshes
 still use one layer until the remaining P2 issues are integrated. See
@@ -1713,11 +1876,10 @@ physics side are in `tests/TerrainResidencyTestSupport.h`).
 
 ## Backlog
 
-1. Streaming after #129: measured budgets and thresholds with telemetry (#130),
-   including the `gpu` and `collision` values and the prefetch budget, which
-   decides how much ground behind a turning camera is already on the GPU, and
-   the overlap of a release switch (both releases' working sets are held until
-   the switch). A switch checks every pack of the new release, so its time grows
+1. Streaming after #130: the target-machine recommendation awaits user/team
+   approval; cold-disk, larger-map and longer collision-tail measurements
+   remain. Initial load, teleport and reload can show missing ground, and
+   startup/reload CPU spikes remain. A switch checks every pack of the new release, so its time grows
    with the release; it runs on one worker in Edit only. Loading a scene (and a
    first publish of an asset with nothing loaded) still uses what `current`
    names without that check, so a corrupt release then fails where it is used.
@@ -1764,6 +1926,13 @@ physics side are in `tests/TerrainResidencyTestSupport.h`).
     out of P3).
 
 ## Changed
+
+*2026-10-13* — **Measured streaming budgets and readiness (#130).** Added
+optional request-to-query/render/collision timing, source IO profiling,
+Vulkan frame timestamps and a repeatable engine route plan with aggregation.
+The target-machine recommendation changes TerrainCheck from Auto to Interest,
+raises CPU/prefetch retention, and lowers upload/staging and collision caps.
+It is pending user/team approval; initial holes and boundary spikes remain.
 
 *2026-10-13* — **Release switches checked and prewarmed off the main thread
 (#129).** Was: in Edit the poll adopted a moved `current` at once, opening the

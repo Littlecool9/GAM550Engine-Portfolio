@@ -17,7 +17,7 @@ what makes teardown correct, so declaration order in `App.h` is load-bearing
 rather than cosmetic. Adding a subsystem means editing `App`, which forces a
 decision about where it belongs in that order.
 
-`Run` is a plain loop with no fixed timestep.
+`Run` normally uses wall-clock frame dt with fixed physics substeps.
 
 ```
 Start(scheduler)                       systems cache their queries
@@ -147,6 +147,19 @@ release published then changes no mesh, query or collider. After `StopScene` the
 viewports upload again the terrain meshes `ReleaseSceneResources` freed, and a
 release published during Play is checked and prewarmed in the background, then
 switched to at a later Edit frame boundary.
+
+### Terrain benchmark launch
+
+`--terrain-benchmark <json>` selects TerrainCheck when no game was specified
+and disables the editor layout. App loads the plan before startup, applies its
+validation/tick settings, attaches the optional terrain timing/source wrapper
+before scene resolution, and drives data-defined cameras and interests after
+the usual camera setup. BeginFrame performs explicit reload, Stop, Play or
+asynchronous TerrainTool publish actions; normal terrain Update and the fixed
+step gates perform all installations. Each frame records readiness, residency,
+coverage and GPU timestamps, and a closed/interrupted run preserves partial
+JSON. The plan controls pacing and RT; there are no additional streaming
+budget defaults in the driver. See [terrain profiling](terrain.md#streaming-profile-and-budgets-issue-130).
 
 ## API
 
@@ -509,6 +522,11 @@ switch in `terrain` (`TerrainReleaseSwitch.tests.cpp`) through the same
 composition with gated reads; the Play/publish/Stop sequence through
 `App` itself was checked with local harnesses (terrain ADR 0018 and 0025).
 
+`smoke.terrain-benchmark` runs the real plan entry with validation on, checks
+that every requested frame completed, GPU samples exist, and no duplicated
+tiles or main-thread payload ranges were recorded. Measurement runs use
+Release and validation off; their startup/reload spikes remain in the trace.
+
 ## Backlog
 
 1. **A headless mode**, which needs the renderer abstraction. It is also the
@@ -526,6 +544,12 @@ composition with gated reads; the Play/publish/Stop sequence through
    cheap for a large scene.
 
 ## Changed
+
+*2026-10-13* — **Repeatable terrain profiling (#130).** The optional
+`--terrain-benchmark` plan selects TerrainCheck, drives camera and C++ interest
+routes with fixed simulation steps, and records readiness, residency, coverage
+and frame timing. Publish actions launch the built TerrainTool asynchronously
+and retain its exit code; failed or unfinished actions make the trace incomplete.
 
 *2026-10-13* — **Terrain release switches checked and prewarmed in the
 background (#129).** Was: the Edit poll, `PlayScene` and `StopScene` adopted a

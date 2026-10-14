@@ -87,6 +87,19 @@ lot of code: there are no render passes and no framebuffers, since
 `vkCmdBeginRendering` is used throughout, there are only synchronization2
 barriers, and frame pacing is one timeline semaphore rather than a fence pool.
 
+### Optional frame profiling
+
+`EnableFrameProfiling` creates timestamp queries for each frame slot after
+device initialization. `FrameProfile.h` exposes submitted-frame serials,
+GPU frame/upload durations, primary raster draw counts and the device's
+timestamp period/valid bits. BeginProfile reads the slot only after its normal
+timeline wait, checks availability without a profiling wait, handles timestamp
+wrap, and resets it in the new command buffer. EndProfile records the frame's
+last timestamp before submission. TakeFrameTimings drains completed samples;
+the last in-flight frames may be unsampled. Mesh retirement timing ends when
+the deferred garbage is actually freed. Profiling is optional and its query
+pool is destroyed after device idle during normal shutdown.
+
 ## API
 
 ```cpp
@@ -641,6 +654,13 @@ Everything that needs a device is verified by the smoke tests and
    raster/RT, and RT inherits that gap rather than fixing it.
 
 ## Changed
+
+*2026-10-13* — **Optional frame timestamps (#130).** Profiling reports actual
+primary raster draw calls and GPU frame/upload intervals by submitted serial.
+Results are read only after the normal frame-slot timeline wait, with
+availability checks and timestamp valid-bit masking; profiling adds no wait.
+Mesh retirement timing ends at actual resource reclamation. Both are inactive
+unless a caller enables profiling.
 
 *2026-10-11* — **Asynchronous meshes (#127).** Was: the only way to make or
 free a mesh was `CreateMesh` (a staging buffer, a submit and a queue wait, then

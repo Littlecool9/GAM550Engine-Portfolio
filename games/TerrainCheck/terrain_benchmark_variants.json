@@ -1,8 +1,359 @@
 [
-  { "name": "baseline", "overrides": {} },
-  { "name": "prefetch", "overrides": { "view": { "prefetchBudgetMiB": 8 }, "gpu": { "meshRetainSeconds": 4 } } },
-  { "name": "larger-caches", "overrides": { "cpu": { "budgetMiB": 32 }, "residency": { "mode": "Interest" }, "view": { "prefetchBudgetMiB": 12 }, "gpu": { "budgetMiB": 192, "meshRetainSeconds": 4 } } },
-  { "name": "tight-upload", "overrides": { "view": { "prefetchBudgetMiB": 8 }, "gpu": { "budgetMiB": 64, "uploadMiBPerFrame": 2, "stagingMiB": 16, "meshRetainSeconds": 1 } } },
-  { "name": "lod-relaxed", "overrides": { "view": { "refineErrorPixels": 1.5, "mergeErrorPixels": 1, "prefetchErrorPixels": 0.75, "prefetchBudgetMiB": 8 }, "gpu": { "meshRetainSeconds": 4 } } },
-  { "name": "collision-smaller", "overrides": { "view": { "prefetchBudgetMiB": 8 }, "gpu": { "meshRetainSeconds": 4 }, "collision": { "pieceTiles": 2, "loadLatencySeconds": 0.1, "latencyMarginSeconds": 0.25, "prefetchSeconds": 1, "budgetMiB": 16, "retainSeconds": 4 } } }
+  {
+    "name": "baseline",
+    "overrides": {
+      "cpu": {
+        "budgetMiB": 16
+      },
+      "io": {
+        "workerThreads": 2,
+        "maxInstallsPerFrame": 32
+      },
+      "retry": {
+        "maxAttempts": 3,
+        "firstDelaySeconds": 0.1,
+        "maxDelaySeconds": 2.0,
+        "failedHoldSeconds": 10.0
+      },
+      "residency": {
+        "mode": "Auto",
+        "queryLeaseSeconds": 2.0
+      },
+      "view": {
+        "refineErrorPixels": 1.0,
+        "mergeErrorPixels": 0.75,
+        "prefetchErrorPixels": 0.5,
+        "prefetchBudgetMiB": 4
+      },
+      "gpu": {
+        "budgetMiB": 128,
+        "uploadMiBPerFrame": 8,
+        "stagingMiB": 32,
+        "meshRetainSeconds": 2.0
+      },
+      "collision": {
+        "spacingsMeters": [
+          8.0,
+          4.0,
+          2.0,
+          1.0
+        ],
+        "maxErrorMeters": 0.05,
+        "pieceTiles": 4,
+        "seamOverlapMeters": 64.0,
+        "bodyToleranceMeters": 0.05,
+        "loadLatencySeconds": 0.5,
+        "latencyMarginSeconds": 0.5,
+        "prefetchSeconds": 2.0,
+        "budgetMiB": 64,
+        "retainSeconds": 2.0
+      }
+    }
+  },
+  {
+    "name": "prefetch",
+    "overrides": {
+      "cpu": {
+        "budgetMiB": 16
+      },
+      "io": {
+        "workerThreads": 2,
+        "maxInstallsPerFrame": 32
+      },
+      "retry": {
+        "maxAttempts": 3,
+        "firstDelaySeconds": 0.1,
+        "maxDelaySeconds": 2.0,
+        "failedHoldSeconds": 10.0
+      },
+      "residency": {
+        "mode": "Auto",
+        "queryLeaseSeconds": 2.0
+      },
+      "view": {
+        "refineErrorPixels": 1.0,
+        "mergeErrorPixels": 0.75,
+        "prefetchErrorPixels": 0.5,
+        "prefetchBudgetMiB": 8
+      },
+      "gpu": {
+        "budgetMiB": 128,
+        "uploadMiBPerFrame": 8,
+        "stagingMiB": 32,
+        "meshRetainSeconds": 4
+      },
+      "collision": {
+        "spacingsMeters": [
+          8.0,
+          4.0,
+          2.0,
+          1.0
+        ],
+        "maxErrorMeters": 0.05,
+        "pieceTiles": 4,
+        "seamOverlapMeters": 64.0,
+        "bodyToleranceMeters": 0.05,
+        "loadLatencySeconds": 0.5,
+        "latencyMarginSeconds": 0.5,
+        "prefetchSeconds": 2.0,
+        "budgetMiB": 64,
+        "retainSeconds": 2.0
+      }
+    }
+  },
+  {
+    "name": "larger-caches",
+    "overrides": {
+      "cpu": {
+        "budgetMiB": 32
+      },
+      "io": {
+        "workerThreads": 2,
+        "maxInstallsPerFrame": 32
+      },
+      "retry": {
+        "maxAttempts": 3,
+        "firstDelaySeconds": 0.1,
+        "maxDelaySeconds": 2.0,
+        "failedHoldSeconds": 10.0
+      },
+      "residency": {
+        "mode": "Interest",
+        "queryLeaseSeconds": 2.0
+      },
+      "view": {
+        "refineErrorPixels": 1.0,
+        "mergeErrorPixels": 0.75,
+        "prefetchErrorPixels": 0.5,
+        "prefetchBudgetMiB": 12
+      },
+      "gpu": {
+        "budgetMiB": 192,
+        "uploadMiBPerFrame": 8,
+        "stagingMiB": 32,
+        "meshRetainSeconds": 4
+      },
+      "collision": {
+        "spacingsMeters": [
+          8.0,
+          4.0,
+          2.0,
+          1.0
+        ],
+        "maxErrorMeters": 0.05,
+        "pieceTiles": 4,
+        "seamOverlapMeters": 64.0,
+        "bodyToleranceMeters": 0.05,
+        "loadLatencySeconds": 0.5,
+        "latencyMarginSeconds": 0.5,
+        "prefetchSeconds": 2.0,
+        "budgetMiB": 64,
+        "retainSeconds": 2.0
+      }
+    }
+  },
+  {
+    "name": "tight-upload",
+    "overrides": {
+      "cpu": {
+        "budgetMiB": 16
+      },
+      "io": {
+        "workerThreads": 2,
+        "maxInstallsPerFrame": 32
+      },
+      "retry": {
+        "maxAttempts": 3,
+        "firstDelaySeconds": 0.1,
+        "maxDelaySeconds": 2.0,
+        "failedHoldSeconds": 10.0
+      },
+      "residency": {
+        "mode": "Auto",
+        "queryLeaseSeconds": 2.0
+      },
+      "view": {
+        "refineErrorPixels": 1.0,
+        "mergeErrorPixels": 0.75,
+        "prefetchErrorPixels": 0.5,
+        "prefetchBudgetMiB": 8
+      },
+      "gpu": {
+        "budgetMiB": 64,
+        "uploadMiBPerFrame": 2,
+        "stagingMiB": 16,
+        "meshRetainSeconds": 1
+      },
+      "collision": {
+        "spacingsMeters": [
+          8.0,
+          4.0,
+          2.0,
+          1.0
+        ],
+        "maxErrorMeters": 0.05,
+        "pieceTiles": 4,
+        "seamOverlapMeters": 64.0,
+        "bodyToleranceMeters": 0.05,
+        "loadLatencySeconds": 0.5,
+        "latencyMarginSeconds": 0.5,
+        "prefetchSeconds": 2.0,
+        "budgetMiB": 64,
+        "retainSeconds": 2.0
+      }
+    }
+  },
+  {
+    "name": "lod-relaxed",
+    "overrides": {
+      "cpu": {
+        "budgetMiB": 16
+      },
+      "io": {
+        "workerThreads": 2,
+        "maxInstallsPerFrame": 32
+      },
+      "retry": {
+        "maxAttempts": 3,
+        "firstDelaySeconds": 0.1,
+        "maxDelaySeconds": 2.0,
+        "failedHoldSeconds": 10.0
+      },
+      "residency": {
+        "mode": "Auto",
+        "queryLeaseSeconds": 2.0
+      },
+      "view": {
+        "refineErrorPixels": 1.5,
+        "mergeErrorPixels": 1,
+        "prefetchErrorPixels": 0.75,
+        "prefetchBudgetMiB": 8
+      },
+      "gpu": {
+        "budgetMiB": 128,
+        "uploadMiBPerFrame": 8,
+        "stagingMiB": 32,
+        "meshRetainSeconds": 4
+      },
+      "collision": {
+        "spacingsMeters": [
+          8.0,
+          4.0,
+          2.0,
+          1.0
+        ],
+        "maxErrorMeters": 0.05,
+        "pieceTiles": 4,
+        "seamOverlapMeters": 64.0,
+        "bodyToleranceMeters": 0.05,
+        "loadLatencySeconds": 0.5,
+        "latencyMarginSeconds": 0.5,
+        "prefetchSeconds": 2.0,
+        "budgetMiB": 64,
+        "retainSeconds": 2.0
+      }
+    }
+  },
+  {
+    "name": "collision-smaller",
+    "overrides": {
+      "cpu": {
+        "budgetMiB": 16
+      },
+      "io": {
+        "workerThreads": 2,
+        "maxInstallsPerFrame": 32
+      },
+      "retry": {
+        "maxAttempts": 3,
+        "firstDelaySeconds": 0.1,
+        "maxDelaySeconds": 2.0,
+        "failedHoldSeconds": 10.0
+      },
+      "residency": {
+        "mode": "Auto",
+        "queryLeaseSeconds": 2.0
+      },
+      "view": {
+        "refineErrorPixels": 1.0,
+        "mergeErrorPixels": 0.75,
+        "prefetchErrorPixels": 0.5,
+        "prefetchBudgetMiB": 8
+      },
+      "gpu": {
+        "budgetMiB": 128,
+        "uploadMiBPerFrame": 8,
+        "stagingMiB": 32,
+        "meshRetainSeconds": 4
+      },
+      "collision": {
+        "spacingsMeters": [
+          8.0,
+          4.0,
+          2.0,
+          1.0
+        ],
+        "maxErrorMeters": 0.05,
+        "pieceTiles": 2,
+        "seamOverlapMeters": 64.0,
+        "bodyToleranceMeters": 0.05,
+        "loadLatencySeconds": 0.1,
+        "latencyMarginSeconds": 0.25,
+        "prefetchSeconds": 1,
+        "budgetMiB": 16,
+        "retainSeconds": 4
+      }
+    }
+  },
+  {
+    "name": "recommended",
+    "overrides": {
+      "cpu": {
+        "budgetMiB": 32
+      },
+      "io": {
+        "workerThreads": 2,
+        "maxInstallsPerFrame": 32
+      },
+      "retry": {
+        "maxAttempts": 3,
+        "firstDelaySeconds": 0.1,
+        "maxDelaySeconds": 2.0,
+        "failedHoldSeconds": 10.0
+      },
+      "residency": {
+        "mode": "Interest",
+        "queryLeaseSeconds": 2.0
+      },
+      "view": {
+        "refineErrorPixels": 1.0,
+        "mergeErrorPixels": 0.75,
+        "prefetchErrorPixels": 0.5,
+        "prefetchBudgetMiB": 12
+      },
+      "gpu": {
+        "budgetMiB": 128,
+        "uploadMiBPerFrame": 4,
+        "stagingMiB": 16,
+        "meshRetainSeconds": 4
+      },
+      "collision": {
+        "spacingsMeters": [
+          8.0,
+          4.0,
+          2.0,
+          1.0
+        ],
+        "maxErrorMeters": 0.05,
+        "pieceTiles": 2,
+        "seamOverlapMeters": 64.0,
+        "bodyToleranceMeters": 0.05,
+        "loadLatencySeconds": 0.1,
+        "latencyMarginSeconds": 0.25,
+        "prefetchSeconds": 1,
+        "budgetMiB": 16,
+        "retainSeconds": 4
+      }
+    }
+  }
 ]
