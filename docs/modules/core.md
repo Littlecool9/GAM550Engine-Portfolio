@@ -78,8 +78,12 @@ const ComponentOps &health = ComponentRegistry::Instance().RegisterRuntime("Heal
 | `Signature` | `ecs/Signature.h` | 256-bit component set, the archetype key |
 | `Archetype`, `ComponentColumn` | `ecs/Archetype.h` | Rows sharing a signature; one type's data in one |
 | `World` | `ecs/World.h` | Owns entities, archetypes, resources |
-| `HierarchyIndex` | `ecs/HierarchyIndex.h` | The scene graph, held as a resource |
+| `HierarchyIndex` | `ecs/HierarchyIndex.h` | The scene graph and the root order, held as a resource |
+| `SetParent`, `MoveToLastSibling` | `ecs/TransformHierarchy.h` | Reparent or reorder, keeping the world pose by default; move to the end of the siblings |
+| `CanSetParent`, `CanSetParentAll` | `ecs/TransformHierarchy.h` | The checks `SetParent` makes, without changing anything; for one entity or a list |
+| `TopmostInHierarchyOrder` | `ecs/TransformHierarchy.h` | A list in hierarchy order, minus entries whose ancestor is also listed |
 | `Transform`, `WorldTransform` | `ecs/components/` | Authored local TRS; derived world matrix plus staleness stamps |
+| `DecomposeRotationScale` | `ecs/components/WorldTransform.h` | A linear matrix split into rotation and per-axis scale, shear dropped, a mirror on x |
 | `Query<Ts...>` | `ecs/Query.h` | Cached view over matching archetypes |
 | `RuntimeQuery` | `ecs/RuntimeQuery.h` | The same walk for terms known only at runtime |
 | `ComponentRegistry`, `FieldDesc` | `ecs/ComponentRegistry.h`, `ecs/ComponentFields.h` | Name to erased ops; one named, typed value |
@@ -148,10 +152,46 @@ systems can safely cache a pointer in `OnStart`.
 `HierarchyIndex`, where `RemoveComponent` cannot reach them.
 
 `SetParent` refuses rather than asserts. It returns `false` on a cycle, on
-self-parenting, and on a chain that would pass `kMaxHierarchyDepth`. Asserts
-compile out under `NDEBUG`, and a single cycle makes every upward walk in the
-engine non-terminating, so the graph has to stay bounded and acyclic in every
-build.
+self-parenting, on a chain that would pass `kMaxHierarchyDepth`, and on an
+anchor that is not a sibling under the new parent. Asserts compile out under
+`NDEBUG`, and a single cycle makes every upward walk in the engine
+non-terminating, so the graph has to stay bounded and acyclic in every build.
+
+`CanSetParent` runs the same checks without changing anything.
+`HierarchyIndex::SetParent` calls it first, so the editor's drop highlight
+matches the graph checks. The keep-world position fit is checked only when the
+move is applied, so a highlighted drop can still be refused.
+
+**Every entity has a place in an ordered list.** A child sits in its parent's
+children, and a root sits in `HierarchyIndex::Roots()`. A `World` create hook
+appends each new entity to the roots, so roots keep creation order.
+`InstallHierarchy` registers that hook, and on first install it adds the
+entities that already exist, in slot order.
+
+`SetParent(world, child, parent, before)` inserts the child in front of the
+sibling `before`, or last when `before` is null. A null `parent` uses the root
+list the same way. The same parent with a null anchor is a no-op, as in Unity,
+so a redundant call never reorders. Moving to the end of the current parent is
+`MoveToLastSibling`, Unity's `SetAsLastSibling`.
+
+**`SetParent` keeps the world pose by default.** With `keepWorld` on, it
+computes the local values that hold the child's world position, rotation and
+scale under the new parent. It computes them before changing the graph, and
+writes them through the `Transform` setters only once the graph accepts the
+move. A move whose position does not fit under the new parent is refused
+whole.
+
+The rotation and scale come from `DecomposeRotationScale` over
+`inverse(parentLinear) * childWorldLinear`. A rotated parent with non-uniform
+scale produces shear, which TRS cannot hold, so the shear is dropped. A mirror
+is kept as a negative x scale, so the rotation stays a unit quaternion. A parent
+axis shorter than `1e-12` makes the parent count as translation only, which
+keeps `glm::inverse`'s determinant clear of float underflow.
+
+A reorder under the same parent skips the recompute, so local values never
+drift from a round trip. An entity without a `Transform` is reparented in the
+graph only. Callers whose values are already parent-local pass `keepWorld =
+false`: `AddTransform`, scene load and snapshot restore.
 
 Destroying an entity destroys its subtree. That is the only policy — detaching a
 subtree instead is not expressible today.
@@ -257,9 +297,10 @@ free to leave in hot paths.
 
 ## State
 
-*As of 2026-09-18.* Working: entities, archetype storage with tags, filtered and
+*As of 2026-10-09.* Working: entities, archetype storage with tags, filtered and
 runtime queries, deferred structural change, phase scheduling, typed resources,
-the transform hierarchy with lazy world-matrix resolution, the component registry
+the transform hierarchy with lazy world-matrix resolution, ordered siblings and
+roots, keep-world reparenting, the component registry
 with named field access, script-declared component types, and the file-byte
 primitives in `fs/FileIO.h`.
 
@@ -289,13 +330,22 @@ hooks, and row migration when a script component's layout changes.
    read and write set. Resources are invisible to the query machinery that would
    otherwise report it, so either resources gain declared access, or systems that
    touch them stay serial.
-4. **Reparenting is O(children)**, because stable child order rules out
-   swap-and-pop erase. Tombstones plus a stored index would make it O(1). Waiting
-   on a profile.
+4. **Reparenting is O(siblings)**, because stable order rules out swap-and-pop
+   erase. The root list is one list of every root, so a scene load that parents
+   N entities costs O(N²) in the worst case. Tombstones plus a stored index would
+   make it O(1). Waiting on a profile.
 5. Undecided: whether systems should be forbidden from calling
    `World::AddComponent` directly, rather than it being convention.
 
 ## Changed
+
+*2026-10-09* — **`SetParent` keeps the world pose and takes a position.** Was:
+`SetParent` only appended and left the local `Transform` alone, so a reparent
+moved the entity in the world, and roots had no stored order. The Hierarchy
+panel drew roots in slot order, which slot reuse scrambled. Now: `keepWorld`
+defaults to on, an anchor sets the position, and `HierarchyIndex::Roots()` holds
+root order, fed by the new `World::AddCreateHook`. The editor's drag-to-reparent
+needed all three.
 
 *2026-10-01* — **`ReadByteRange` and `FileSize` added.** Was: a file could be
 read whole or by its first N bytes only. Now: one exact byte range and a file's

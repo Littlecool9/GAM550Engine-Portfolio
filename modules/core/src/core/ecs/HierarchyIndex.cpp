@@ -63,6 +63,17 @@ namespace mir
         return node ? std::span<const Entity>(node->children) : std::span<const Entity>{};
     }
 
+    std::span<const Entity> HierarchyIndex::Roots() const
+    {
+        return mRoots;
+    }
+
+    std::span<const Entity> HierarchyIndex::SiblingsOf(Entity entity) const
+    {
+        const std::vector<Entity> *siblings = FindSiblingsUnder(ParentOf(entity));
+        return siblings ? std::span<const Entity>(*siblings) : std::span<const Entity>{};
+    }
+
     uint32_t HierarchyIndex::DepthOf(Entity entity) const
     {
         uint32_t depth = 0;
@@ -123,10 +134,47 @@ namespace mir
             node->children.erase(found);
     }
 
-    bool HierarchyIndex::SetParent(Entity child, Entity parent)
+    void HierarchyIndex::EraseRoot(Entity entity)
+    {
+        const auto found = std::find(mRoots.begin(), mRoots.end(), entity);
+        if (found != mRoots.end())
+            mRoots.erase(found);
+    }
+
+    void HierarchyIndex::AddRoot(Entity entity)
+    {
+        GetNode(entity);
+        mRoots.push_back(entity);
+    }
+
+    std::vector<Entity> &HierarchyIndex::SiblingsUnder(Entity parent)
+    {
+        return parent.IsNull() ? mRoots : GetNode(parent).children;
+    }
+
+    const std::vector<Entity> *HierarchyIndex::FindSiblingsUnder(Entity parent) const
+    {
+        if (parent.IsNull())
+            return &mRoots;
+
+        const Node *node = Find(parent);
+        return node ? &node->children : nullptr;
+    }
+
+    bool HierarchyIndex::CanSetParent(Entity child, Entity parent, Entity before) const
     {
         if (child.IsNull())
             return false;
+
+        if (!before.IsNull())
+        {
+            if (before == child)
+                return false;
+
+            const std::vector<Entity> *siblings = FindSiblingsUnder(parent);
+            if (siblings == nullptr || std::find(siblings->begin(), siblings->end(), before) == siblings->end())
+                return false;
+        }
 
         if (!parent.IsNull())
         {
@@ -142,18 +190,43 @@ namespace mir
                 return false;
         }
 
+        return true;
+    }
+
+    bool HierarchyIndex::SetParent(Entity child, Entity parent, Entity before)
+    {
+        if (!CanSetParent(child, parent, before))
+            return false;
+
         const Entity previous = ParentOf(child);
-        if (previous == parent)
+        if (previous == parent && before.IsNull())
             return true;
 
         if (!previous.IsNull())
             Unlink(child, previous);
+        else
+            EraseRoot(child);
 
         GetNode(child).parent = parent;
 
-        if (!parent.IsNull())
-            GetNode(parent).children.push_back(child);
+        // `before` was checked above; the erase cannot have removed it
+        std::vector<Entity> &siblings = SiblingsUnder(parent);
+        siblings.insert(before.IsNull() ? siblings.end() : std::find(siblings.begin(), siblings.end(), before), child);
 
+        return true;
+    }
+
+    bool HierarchyIndex::MoveToLastSibling(Entity entity)
+    {
+        if (Find(entity) == nullptr)
+            return false;
+
+        std::vector<Entity> &siblings = SiblingsUnder(ParentOf(entity));
+        const auto found = std::find(siblings.begin(), siblings.end(), entity);
+        if (found == siblings.end())
+            return false;
+
+        std::rotate(found, found + 1, siblings.end());
         return true;
     }
 
@@ -182,6 +255,8 @@ namespace mir
 
         if (!parent.IsNull())
             Unlink(entity, parent);
+        else
+            EraseRoot(entity);
 
         for (const Entity child : node->children)
         {

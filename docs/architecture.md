@@ -391,10 +391,17 @@ table. See [script.md](modules/script.md).
 1. No input. `window` surfaces no events at all.
 2. No renderer abstraction. `Renderer.h` is a placeholder and `App` names
    `VulkanRenderer` directly, so there is no headless mode, and nothing in
-   `app`, `renderer` or `editor` is unit tested.
+   `app`, `renderer` or `editor` is unit tested, except `ContentBrowserWatcher`
+   (see [modules/app.md](modules/app.md)), whose disk-polling logic has no
+   renderer/ECS dependency to need one.
 3. No typed assets. Everything cooks as a raw passthrough blob.
 4. Linux sources exist, but there is no Linux preset. macOS fails at configure.
 5. No CI. Tests are run by hand.
+6. **The Content Browser's rename detection is best-effort.** A rename is
+   recognized only when it is the single remove+add pair in a 250ms poll tick
+   with a matching size+mtime signature; renaming/moving an asset never
+   rewrites scene references to its old `AssetId` (see
+   [modules/assets.md](modules/assets.md)).
 
 ## Changed
 

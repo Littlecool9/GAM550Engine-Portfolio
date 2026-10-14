@@ -17,6 +17,8 @@
 
 #include <fstream>
 #include <iterator>
+#include <span>
+#include <vector>
 #include <string>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/vec3.hpp>
@@ -675,4 +677,100 @@ TEST_CASE("SaveScene removes the file of an entity destroyed since the last save
     CHECK(std::filesystem::exists(entitiesDir / (std::to_string(keptId) + ".json")));
     CHECK(std::filesystem::exists(entitiesDir / "notes.json"));
     CHECK(std::filesystem::exists(entitiesDir / "notes.txt"));
+}
+
+namespace
+{
+    // Ids of `entities`, read back through the loaded scene
+    std::vector<StableId> IdsOf(std::span<const Entity> entities, const LoadedScene &scene)
+    {
+        std::vector<StableId> ids;
+        for (const Entity entity : entities)
+        {
+            for (const auto &[id, candidate] : scene.mEntities)
+            {
+                if (candidate == entity)
+                    ids.push_back(id);
+            }
+        }
+        return ids;
+    }
+
+    void WriteEntityFile(const std::filesystem::path &dir, StableId id, const std::string &body)
+    {
+        std::ofstream file(dir / "entities" / (std::to_string(id) + ".json"));
+        file << body;
+    }
+}
+
+TEST_CASE("Root and child order survive a save and load", "[scene][order]")
+{
+    mir::RegisterCoreComponents();
+
+    World world;
+    LoadedScene scene = NewScene("test");
+    const Entity a = CreateSceneEntity(world, scene);
+    CreateSceneEntity(world, scene);
+    const Entity c = CreateSceneEntity(world, scene);
+    const Entity x = CreateSceneEntity(world, scene, a);
+    CreateSceneEntity(world, scene, a);
+    const Entity z = CreateSceneEntity(world, scene, a);
+
+    // roots become [c, a, b] and a's children [z, x, y], neither in id order
+    REQUIRE(mir::SetParent(world, c, mir::kNullEntity, a));
+    REQUIRE(mir::SetParent(world, z, a, x));
+
+    TempSceneDir dir("sibling_order");
+    REQUIRE(mir::SaveScene(world, dir.mPath, scene));
+
+    World loadedWorld;
+    const LoadedScene loaded = mir::LoadScene(loadedWorld, dir.mPath);
+    const mir::HierarchyIndex &index = loadedWorld.Resource<mir::HierarchyIndex>();
+
+    CHECK(IdsOf(index.Roots(), loaded) == std::vector<StableId>{ 3, 1, 2 });
+    CHECK(IdsOf(index.ChildrenOf(loaded.mEntities.at(1)), loaded) == std::vector<StableId>{ 6, 4, 5 });
+}
+
+TEST_CASE("A scene saved before sibling order loads in id order", "[scene][order]")
+{
+    mir::RegisterCoreComponents();
+
+    TempSceneDir dir("no_sibling_index");
+    std::filesystem::create_directories(dir.mPath / "entities");
+    {
+        std::ofstream manifest(dir.mPath / "scene.json");
+        manifest << R"({"name":"test","nextId":5,"entities":[1,2,3,4]})";
+    }
+    WriteEntityFile(dir.mPath, 1, R"({"id":1,"parent":0,"components":[]})");
+    WriteEntityFile(dir.mPath, 2, R"({"id":2,"parent":0,"components":[]})");
+    WriteEntityFile(dir.mPath, 3, R"({"id":3,"parent":1,"components":[]})");
+    WriteEntityFile(dir.mPath, 4, R"({"id":4,"parent":1,"components":[]})");
+
+    World world;
+    const LoadedScene loaded = mir::LoadScene(world, dir.mPath);
+    const mir::HierarchyIndex &index = world.Resource<mir::HierarchyIndex>();
+
+    CHECK(IdsOf(index.Roots(), loaded) == std::vector<StableId>{ 1, 2 });
+    CHECK(IdsOf(index.ChildrenOf(loaded.mEntities.at(1)), loaded) == std::vector<StableId>{ 3, 4 });
+}
+
+TEST_CASE("Tied and missing sibling indices fall back to id order", "[scene][order]")
+{
+    mir::RegisterCoreComponents();
+
+    TempSceneDir dir("tied_sibling_index");
+    std::filesystem::create_directories(dir.mPath / "entities");
+    {
+        std::ofstream manifest(dir.mPath / "scene.json");
+        manifest << R"({"name":"test","nextId":5,"entities":[1,2,3,4]})";
+    }
+    WriteEntityFile(dir.mPath, 1, R"({"id":1,"parent":0,"components":[]})");
+    WriteEntityFile(dir.mPath, 2, R"({"id":2,"parent":0,"siblingIndex":1,"components":[]})");
+    WriteEntityFile(dir.mPath, 3, R"({"id":3,"parent":0,"siblingIndex":0,"components":[]})");
+    WriteEntityFile(dir.mPath, 4, R"({"id":4,"parent":0,"siblingIndex":0,"components":[]})");
+
+    World world;
+    const LoadedScene loaded = mir::LoadScene(world, dir.mPath);
+
+    CHECK(IdsOf(world.Resource<mir::HierarchyIndex>().Roots(), loaded) == std::vector<StableId>{ 3, 4, 2, 1 });
 }

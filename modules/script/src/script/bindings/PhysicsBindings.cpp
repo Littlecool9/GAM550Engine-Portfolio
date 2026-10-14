@@ -13,6 +13,7 @@
 
 #include <core/ecs/World.h>
 #include <core/log/Log.h>
+#include <physics/CollisionEvents.h>
 #include <physics/PhysicsWorld.h>
 #include <physics/components/RigidBody.h>
 
@@ -247,6 +248,38 @@ namespace mir
         }
     }
 
+    namespace
+    {
+        // From entity's side: normal points from other toward it; other is nil when untagged or dead.
+        sol::table WorldCollisions(World &world, Entity entity, sol::this_state state)
+        {
+            sol::state_view lua(state);
+            sol::table out = lua.create_table();
+
+            const CollisionEvents *events = world.TryResource<CollisionEvents>();
+            if (events == nullptr || !world.IsAlive(entity))
+                return out;
+
+            int count = 0;
+            for (const CollisionEvent &event : events->mEvents)
+            {
+                const bool isA = event.mEntityA == entity;
+                if (!isA && event.mEntityB != entity)
+                    continue;
+
+                const Entity other = isA ? event.mEntityB : event.mEntityA;
+                sol::table collision = lua.create_table();
+                if (world.IsAlive(other))
+                    collision["other"] = other;
+                collision["point"] = WorldVec3ToLua(lua, event.mPoint.Meters());
+                collision["normal"] = Vec3ToLua(lua, isA ? -event.mNormal : event.mNormal);
+                collision["phase"] = event.mPhase == CollisionPhase::Begin ? "begin" : "end";
+                out[++count] = collision;
+            }
+            return out;
+        }
+    }
+
     void RegisterPhysicsBindings(sol::state &lua)
     {
         sol::table worldType = lua["World"];
@@ -261,5 +294,6 @@ namespace mir
         worldType.set_function("apply_impulse", &WorldApplyImpulse);
         worldType.set_function("apply_angular_impulse", &WorldApplyAngularImpulse);
         worldType.set_function("raycast", &WorldRaycast);
+        worldType.set_function("collisions", &WorldCollisions);
     }
 }

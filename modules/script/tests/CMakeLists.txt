@@ -2,6 +2,7 @@ engine_add_module_tests(script
     WorldBindings.tests.cpp
     InputBindings.tests.cpp
     PhysicsBindings.tests.cpp
+    CollisionBindings.tests.cpp
     AudioBindings.tests.cpp
     TerrainBindings.tests.cpp
 )

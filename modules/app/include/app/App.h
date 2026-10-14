@@ -34,6 +34,7 @@
 
 #if MIR_WITH_EDITOR
 #include <app/AssetImportManager.h>
+#include <app/ContentBrowserWatcher.h>
 #include <editor/Editor.h>
 #endif
 
@@ -181,6 +182,7 @@ namespace mir
         void ApplyEditorActions(const EditorActions &actions);
         void ApplyEntityAction(const EntityAction &action);
         void ApplyImportedAssets();
+        void OpenInExternalIde(const std::string &relativePath);
     #endif
 
         SplashScreen mSplash;
@@ -195,6 +197,7 @@ namespace mir
         GameShell mGameShell;
     #if MIR_WITH_EDITOR
         AssetImportManager mAssetImport;
+        ContentBrowserWatcher mContentBrowser;
     #endif
 
             // Before mWorld, so it is destroyed after it

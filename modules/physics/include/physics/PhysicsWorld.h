@@ -11,6 +11,7 @@
  */
 #pragma once
 
+#include <physics/CollisionEvents.h>
 #include <physics/PhysicsTypes.h>
 
 #include <core/ecs/Entity.h>
@@ -25,6 +26,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <vector>
 
 namespace mir
 {
@@ -192,6 +194,9 @@ namespace mir
 
         // Advances by dt seconds. Non-positive dt is a no-op, not an error.
         void Step(float dt);
+
+        // Oldest first; events pile up until drained.
+        std::vector<CollisionEvent> DrainCollisionEvents();
 
     private:
         struct Impl;

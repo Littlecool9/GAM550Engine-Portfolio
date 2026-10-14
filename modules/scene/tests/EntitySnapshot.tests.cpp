@@ -19,6 +19,7 @@
 #include <glm/vec3.hpp>
 
 #include <cstring>
+#include <span>
 #include <vector>
 
 namespace
@@ -311,6 +312,33 @@ TEST_CASE("DuplicateSceneEntity keeps a root entity at the root", "[scene][snaps
 
     REQUIRE(world.IsAlive(copy));
     CHECK(ParentOf(world, copy).IsNull());
+}
+
+TEST_CASE("DuplicateSceneEntity places the copy right after its source", "[scene][snapshot]")
+{
+    World world;
+    LoadedScene scene = NewScene("test");
+    Entity parent = CreateSceneEntity(world, scene);
+    Entity first = CreateSceneEntity(world, scene, parent);
+    Entity last = CreateSceneEntity(world, scene, parent);
+    Entity otherRoot = CreateSceneEntity(world, scene);
+
+    SECTION("among children")
+    {
+        const Entity copy = mir::DuplicateSceneEntity(world, scene, first);
+        CHECK(ChildrenOf(world, parent) == std::vector<Entity>{ first, copy, last });
+    }
+    SECTION("as the last child")
+    {
+        const Entity copy = mir::DuplicateSceneEntity(world, scene, last);
+        CHECK(ChildrenOf(world, parent) == std::vector<Entity>{ first, last, copy });
+    }
+    SECTION("among roots")
+    {
+        const Entity copy = mir::DuplicateSceneEntity(world, scene, parent);
+        const std::span<const Entity> roots = world.Resource<mir::HierarchyIndex>().Roots();
+        CHECK(std::vector<Entity>(roots.begin(), roots.end()) == std::vector<Entity>{ parent, copy, otherRoot });
+    }
 }
 
 TEST_CASE("DuplicateSceneEntity returns null for an entity that is not alive", "[scene][snapshot]")

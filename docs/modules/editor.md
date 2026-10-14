@@ -17,7 +17,8 @@ mImGui.BeginFrame();                                    // ImGuiRuntime: the New
 if (windowVisible)
     Act(mEditor.DrawLayout(mDesc.mEnableEditorLayout,   // EditorActions
                            world.Resource<InputMap>(), world.Resource<RenderSettings>(),
-                           world.Resource<EngineModeState>(), projectMenu, currentProject, world));
+                           world.Resource<EngineModeState>(), projectMenu, currentProject, world,
+                           mAssetImport.View(), mRenderer, mContentBrowser.View()));
 
 mRenderer.SetImGuiDrawData(mImGui.EndFrame());          // ImGuiRuntime: ImGui::Render, hand off draw data
 mRenderSystem.SetViewportRect(0, mEditor.SceneViewportRect());
@@ -76,7 +77,8 @@ void Shutdown();                  // before ImGuiRuntime::Shutdown
 // between ImGuiRuntime::BeginFrame and EndFrame
 EditorActions DrawLayout(bool enableLayout, InputMap &inputMap, RenderSettings &renderSettings,
                          const EngineModeState &mode, std::span<const ProjectMenuEntry> projects,
-                         std::string_view currentProject, World &world);
+                         std::string_view currentProject, World &world, const AssetImportView &assetImport,
+                         const VulkanRenderer &renderer, const ContentBrowserView &contentBrowser);
 
 VkRect2D SceneViewportRect() const;
 bool IsInitialized() const;
@@ -89,21 +91,37 @@ EditorCamera &SceneCamera();
 |---|---|---|
 | `SceneMenuAction` | `editor/Editor.h` | `None`/`New`/`Save`/`Load`/`Play`/`TogglePause`/`Stop` |
 | `ProjectMenuEntry` | `editor/Editor.h` | `{mDir, mName}` for one game in Open Project |
-| `EditorActions` | `editor/Editor.h` | `{mScene, mEntity, mOpenProject}`, what the menus and toolbar asked for this frame |
-| `EntityAction`, `EntityActionKind` | `editor/panels/HierarchyPanel.h` | `{mKind, mPreset, mTarget}`: `Create` (null `mPreset` = New), `Delete` or `Duplicate`, for `App` to carry out |
+| `EditorActions` | `editor/Editor.h` | `{mScene, mEntity, mOpenProject, mAssetImport, mContentBrowser, ...}`, what the menus and toolbar asked for this frame |
+| `ContentBrowserView`, `ContentBrowserEntryView` | `editor/panels/ContentBrowserPanel.h` | The open project's content root as a flat list of files/directories, plus `mLastRenamedFrom`/`mLastRenamedTo` for one tick when a same-tick remove+add looks like a rename |
+| `ContentBrowserAction`, `ContentBrowserActionKind` | `editor/panels/ContentBrowserPanel.h` | `{mKind, mTargetPath, mNewName}`: `CreateFolder`, `Rename`, `Delete` or `OpenInIde`, for `App` to carry out (see [app.md](app.md)) |
+| `IdeSettings`, `DetectDefaultIde` | `editor/IdeSettings.h` | The `project_settings.json` "ide.path" string (empty: auto-detect VS Code), edited from `ProjectSettingsPanel`'s External Tools section |
+| `EntityAction`, `EntityActionKind` | `editor/panels/HierarchyPanel.h` | `{mKind, mPreset, mTarget, mTargets, mParent, mBefore}`: `Create` (null `mPreset` = New), `Delete`, `Duplicate`, or `Reparent` (a list moved under `mParent` before `mBefore`), for `App` to carry out |
 | `NeighborInHierarchy` | `editor/panels/HierarchyPanel.h` | The entity to select after deleting one: next sibling, else previous, else the parent |
 | `IsBaselineComponent`, `AddMissingBaseline` | `editor/EntityBaseline.h` | The components every editor-created entity has: `Transform`, `WorldTransform`, `Name` |
 | `EditorCamera` | `editor/EditorCamera.h` | Free-fly scene camera, `WorldPosition` + yaw/pitch (`Pose()`, `Translate`, `FocusOn`), outside the `World` |
-| `Selection` | `editor/Selection.h` | `{mSelected}` (a `vector<Entity>`, ordered by selection - `.back()` is primary), the `World` resource `Hierarchy` and viewport picking write and `Inspector`/the gizmo read |
+| `Selection` | `editor/Selection.h` | `{mSelected, mAnchor}` (a `vector<Entity>`, ordered by selection - `.back()` is primary - and the shift-click range start), the `World` resource `Hierarchy` and viewport picking write and `Inspector`/the gizmo read |
 
 `LogPanel`, in `src/editor/panels/LogPanel.cpp`, renders `core`'s `LogHistory`
 into the `Output` dock. `HierarchyPanel`, in
 `src/editor/panels/HierarchyPanel.cpp`, renders the `World`'s live entities
-into the `Hierarchy` dock as a tree built from `HierarchyIndex` (roots are
-entities `ParentOf` reports null for). `InspectorPanel`, in
+into the `Hierarchy` dock as a tree built from `HierarchyIndex`, roots in
+`Roots()` order. `InspectorPanel`, in
 `src/editor/panels/InspectorPanel.cpp`, renders the `Selection`'s components
 into the `Inspector` dock. None of the three are public — panels are reached
 only through `DrawLayout`.
+
+`ContentBrowserPanel`, in `src/editor/panels/ContentBrowserPanel.cpp`, is a
+floating window (Project > Content Browser) rather than part of the fixed
+dock split: a folder tree built client-side from `ContentBrowserView`'s flat
+entry list on the left, and a file/folder table for the selected folder on
+the right — directories are explicit entries, so an empty or just-created one
+still shows up. Clicking selects, double-clicking a folder navigates into it,
+and a row's context menu offers Rename and Delete; Delete goes through a
+confirm modal (no undo exists anywhere in this engine - see [app.md](app.md)
+for `ContentBrowserWatcher`, which actually watches the disk and carries out
+the mutations). This closes #152: the panel never caches a stale listing, so
+a file added, removed or renamed outside the editor shows up on the watcher's
+next poll with no restart.
 
 Clicking an entity in `Hierarchy`, or clicking it directly in the scene
 viewport (`Editor::UpdateViewportPicking`, a ray/AABB test against every
@@ -112,10 +130,17 @@ viewport (`Editor::UpdateViewportPicking`, a ray/AABB test against every
 (`editor/Selection.h`), a `World` resource `HierarchyPanel` installs on
 first draw if nothing already has. Both call the same
 `ApplyClick(Selection&, Entity, bool additive)`: a plain click replaces the
-whole selection, `additive` (ctrl- or shift-click, `io.KeyCtrl ||
-io.KeyShift` - either works, same effect) toggles the clicked entity's
-membership instead, and a null `Entity` (clicked empty space) clears the
-selection unless `additive`. `HierarchyPanel` prunes any no-longer-alive
+whole selection, `additive` toggles the clicked entity's membership instead,
+and a null `Entity` (clicked empty space) clears the selection unless
+`additive`. Either click sets `mAnchor`. The viewport passes `io.KeyCtrl ||
+io.KeyShift` as `additive`, since it has no row order. `Hierarchy` passes
+`io.KeyCtrl` alone, and sends shift-clicks to `ApplyRangeClick`, as Windows
+Explorer does. Shift-click selects the visible rows from `mAnchor` through the
+clicked row, and Ctrl+Shift adds them to the selection. Rows inside a
+collapsed parent are not visible, so they are skipped. The clicked row ends up
+primary and the anchor stays. The range is taken after every row is drawn, so
+it sees rows below the clicked one. An anchor that is dead or hidden starts
+the range at the click. `HierarchyPanel` prunes any no-longer-alive
 entities out of `mSelected` every frame, so a stale handle never lingers
 past the frame its entity died - this runs before viewport picking in
 `DrawLayout`, so picking never has to prune again itself. `InspectorPanel`
@@ -141,6 +166,33 @@ text field is active. Each of these only fills `EntityAction`.
 `App::ApplyEntityAction` carries it out (see [app.md](app.md)) and selects the
 result. After a delete it selects `NeighborInHierarchy`, computed before the
 entity is gone.
+
+Dragging a row reparents or reorders. The drag carries the whole selection, or
+only the grabbed row if a Ctrl-press removed it from the selection. Each row
+splits into three bands over its height plus half the gap on each side. The top
+quarter inserts before the row and draws a line above it. The middle half makes
+the row the new parent and draws a box around it. The bottom quarter inserts
+after the row as its next sibling, as Godot does, even when the row is open.
+Anywhere no row claims, the panel's whole area takes the drop, and the entities
+become the last roots. The drag tooltip names what the hovered target would do,
+such as "Make child of Player".
+
+A press on a row that is already part of a multi-selection waits for the
+release, as in Explorer and Unity. A release without a drag then collapses the
+selection to that row, and a drag carries the whole selection instead.
+
+`App::ApplyEntityAction` puts the dragged list in hierarchy order and drops any
+entity whose ancestor is also listed, so a subtree moves once and siblings keep
+their order. It moves each through `SetParent`, which keeps the world pose, and
+selects them. A drop after the last sibling under the current parent is
+`MoveToLastSibling`. On the next frame the panel opens their ancestors and
+scrolls the last one into view, only as far as needed.
+
+While dragging, the panel scrolls when the mouse is within 8 px of its top or
+bottom edge, at 960 px/s scaled by frame time. A collapsed row hovered for 0.7 s
+opens. Rows opened that way stay open after a drop and close again if the drag
+is cancelled. These numbers are Unity's; Unity's 16 px per drag event is 960 px/s
+at 60 fps.
 
 `InspectorPanel` walks every `seq` up to `kMaxComponentTypes`, asking
 `ComponentRegistry::FindBySeq` for each one and skipping those the selection
@@ -250,6 +302,27 @@ type moves nothing.
 **Entity and component edits are allowed during Play.** Stop restores the `World`
 from `PlaySnapshot`, so it discards them along with everything else Play changed.
 
+**A drop is checked by the same code that refuses it.** Every row target calls
+`CanSetParentAll`, the check `SetParent` makes. One entity that cannot move
+refuses the whole drop, and `App` runs the same check again before moving
+anything. An invalid row still takes the payload, so the root target behind it
+does not light up. It draws nothing and shows the not-allowed cursor.
+
+**Row targets accept with `AcceptBeforeDelivery`.** Without it,
+`AcceptDragDropPayload` returns the payload only on the release frame, so the
+band indicator would never draw while hovering. The indicator is drawn after
+every row, because the next row's hover background would cover a line drawn
+earlier.
+
+**The root target is submitted after the rows.** ImGui gives an overlapping
+payload to the smallest target that accepts it, so a row wins over the panel's
+whole area. Each row's target is stretched by half the gap above and below, so a
+drop between two rows never falls through to the root.
+
+**The reveal runs one frame late.** `App` applies the action after `Draw`
+returns, so the panel keeps the dropped list and opens the new ancestors on the
+next `Draw`, when the graph has changed.
+
 ## State
 
 *As of 2026-09-14.* One fixed layout: `Hierarchy` left, `Inspector` right,
@@ -268,6 +341,9 @@ switches viewport 0 to the World's default camera in Play (see
 *As of 2026-10-08.* `Hierarchy` creates, duplicates and deletes entities, and
 `Inspector` adds, removes, copies and pastes components. Each acts on one
 entity: the right-clicked row, or `Selection::Primary()`.
+
+*As of 2026-10-09.* `Hierarchy` reparents and reorders by drag and drop, for
+the whole selection, and the order survives save and Play.
 
 No tests. It needs a device and a display. `smoke.switch` covers the restart that
 Open Project asks for, but not the menu or the dialog themselves.
@@ -293,8 +369,61 @@ Open Project asks for, but not the menu or the dialog themselves.
    per-triangle picking, matching the renderer's own choice not to retain
    CPU-side mesh geometry after upload.
 7. **Delete and Duplicate act on one entity, not the whole selection.**
+8. **`ContentBrowserPanel` has no drag-drop, multi-select, copy/paste or
+   thumbnails** — icons are Font Awesome glyphs by extension, since no
+   texture-thumbnail infrastructure exists in this module. Renaming or
+   deleting an asset does not rewrite scene references to it (see
+   [assets.md](assets.md)'s `AssetId` rename gap); Delete's reference guard
+   (in `App`, see [app.md](app.md)) only checks the top-level path being
+   deleted, not everything recursively under a deleted folder.
 
 ## Changed
+
+*2026-10-10* — **Double-clicking a `.lua` or `.json` file in the Content
+Browser opens the whole project folder as the workspace root, in a new IDE
+window, with the file open.** Was (2026-10-09): opened just the file, no
+project root. `IdeSettings` (`editor/IdeSettings.h`) gained `argsTemplate`
+("ide.args" in `project_settings.json`, default `kDefaultIdeArgsTemplate` =
+`"--new-window {project} {file}"`), edited next to "ide.path" in
+`ProjectSettingsPanel`'s "External Tools" section. `IdeSettings::BuildArgs`
+splits the template on whitespace and substitutes `{project}` (the game's
+root dir) and `{file}` (the double-clicked file's absolute path) into each
+token - no shell quoting involved, so flags/placeholders can't contain
+spaces. The default targets VS Code's CLI; pointing `ide.path` at a
+different tool means also rewriting `ide.args` to that tool's syntax.
+`ContentBrowserPanel`'s `IsTextFile` (was `IsScriptFile`, `.lua`-only) gates
+which files trigger this - an explicit allowlist, not everything-but-known-
+binary, so new binary asset types stay excluded without a code change there.
+
+*2026-10-09* — **Double-clicking a `.lua` file in the Content Browser opens
+it in an external IDE.** New `IdeSettings` (`editor/IdeSettings.h`): the
+"ide.path" string in `project_settings.json`, edited from a new "External
+Tools" section in `ProjectSettingsPanel`. Empty (the default) falls back to
+`DetectDefaultIde()`, which looks for a VS Code install at the usual
+per-user/system locations. `ContentBrowserPanel::Draw` reports this as
+`ContentBrowserActionKind::OpenInIde`; `App::ApplyEditorActions` resolves the
+configured (or detected) IDE and calls `core`'s `LaunchProcess` with the
+file's absolute path, rather than routing it through `ContentBrowserWatcher`
+(see [app.md](app.md)) - it spawns a process, it doesn't touch the project
+tree.
+
+*2026-10-09* — **Added `ContentBrowserPanel`.** A folder tree + file table for
+the open project's content root, closing #152 (disk changes made outside the
+editor - add, remove, rename - now appear without an editor restart). Backed
+by `app`'s `ContentBrowserWatcher` (see [app.md](app.md)), which polls the
+project's content root the same way `AssetImportManager` polls its asset
+subtree, rather than widening that manager's cook-queue-specific watcher to
+every file type.
+
+*2026-10-09* — **Shift-click in `Hierarchy` selects a range.** Was: shift-click
+toggled one entity, the same as ctrl-click. Now: it selects the visible rows
+from the anchor, and Ctrl+Shift adds the range. The viewport keeps shift as
+ctrl, since it has no row order.
+
+*2026-10-09* — **`Hierarchy` reparents and reorders by drag and drop.** Was: the
+tree could not be edited, and roots were drawn in slot order. Now: rows are drag
+sources and drop targets, `EntityAction` has a `Reparent` kind, and a press on a
+selected row waits for release so a drag can carry the selection.
 
 *2026-10-08* — **`Hierarchy` creates, duplicates and deletes entities, and
 `Inspector` adds, removes, copies and pastes components.** Was: the Create menu

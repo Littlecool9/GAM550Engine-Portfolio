@@ -120,7 +120,8 @@ when `mEnableEditorLayout` is off: a game build plays.
 option (see [build.md](../build.md#a-build-without-the-editor)). It reaches the
 code as `MIR_WITH_EDITOR`, 1 or 0, a PUBLIC compile definition of `mir::app`,
 and `App::kHasEditor` says which build this is. Without it, `App` holds no
-`Editor`, no `AssetImportManager` and no project menu; `mEnableEditorLayout` is
+`Editor`, no `AssetImportManager`, no `ContentBrowserWatcher` and no project
+menu; `mEnableEditorLayout` is
 forced off; the scene viewport is the whole window through the World's camera;
 and nothing sets `InputState::SetUiCapture`, since there is no editor UI to
 want the input. Everything else, the game UI included, is the same code.
@@ -199,7 +200,14 @@ In an editor build, `ApplyEditorActions` passes the frame's `EntityAction` (see
 `CreateSceneEntity`, then the preset, then `AddMissingBaseline`. Delete runs
 `DestroySceneEntity`, and Duplicate runs `DuplicateSceneEntity` (see
 [scene.md](scene.md)). Each one goes through `Scene()`, so the entity is saved or
-dropped with the scene, and the result becomes the `Selection`. Unlike
+dropped with the scene, and the result becomes the `Selection`.
+
+Reparent checks the whole list with `CanSetParentAll` and does nothing if any
+entity fails. It then moves the list in hierarchy order through `SetParent`,
+which keeps each world pose, and selects what moved. A null `mBefore` under the
+entity's current parent means after the last sibling, so that case runs
+`MoveToLastSibling` (see [core.md](core.md)). Reparent changes no
+`LoadedScene` entry, because save reads each parent from `HierarchyIndex`. Unlike
 `NewScene`/`SaveScene`/`LoadScene`, these run during Play too, and Stop discards
 them with the rest of Play's changes.
 
@@ -211,6 +219,7 @@ them with the rest of Play's changes.
 | `mWindow` | early | late | the renderer's surface is built from it |
 | `mRenderer` | after the window | before it | holds `VkSurfaceKHR` and the device |
 | `mEditor` | after the renderer | before it | its Vulkan backend needs a live device, its GLFW backend a live window |
+| `mContentBrowser` (`ContentBrowserWatcher`, editor builds only) | with `App` | with `App` | owns no OS handle - a poll-based watcher only, so no explicit `Shutdown` |
 | `mCommands` | before `mWorld` | after it | outlives the world it records against |
 | `mWorld`, `mScheduler`, `mScriptHost`, `mScene` | with `App` | with `App` | no external resources |
 | `mTerrain` (`TerrainRuntime`, private) | in `Initialize`, after `RenderSystem` | with `App` | holds handles only: its meshes go with the renderer, its height field bodies with the World's `PhysicsWorld`; it unregisters itself from the `ViewDrawSources` and `PhysicsStepGates` resources |
@@ -542,6 +551,10 @@ Release and validation off; their startup/reload spikes remain in the trace.
 6. **No World diffing for Play/Stop** — `PlaySnapshot` destroys and reloads
    every entity rather than diffing what changed, which is simple but not
    cheap for a large scene.
+7. **`ContentBrowserWatcher`'s Delete guard only checks the one path being
+   deleted** against live `ModelPlayer` references, not every asset
+   recursively under a deleted folder. A full recursive reference scan was
+   left for later; the panel's confirm modal is the primary safety net.
 
 ## Changed
 
@@ -602,6 +615,20 @@ resources, `Run` calls `TerrainRuntime::Update` once per frame before any
 system, Eager releases are waited for at load (stop-gap until #128) and meshes
 are built from resident payloads. `games/TerrainCheck/terrain_streaming.json`
 is the first settings file; CMake copies a game's file next to the executable.
+
+*2026-10-09* — **Added `ContentBrowserWatcher`.** Editor-side owner for the
+new Content Browser panel (see [editor.md](editor.md)): polls the open
+project's whole content root (`GameProject::mRootDir`) on a 250ms timer, the
+same signature-diff idiom `AssetImportManager::PollWatcher` uses, and keeps
+`ContentBrowserView` in sync with disk without an editor restart (#152). It
+is a separate class from `AssetImportManager` rather than a widening of its
+watcher: that one's file-type filter and 500ms cook-stability debounce exist
+specifically to avoid cooking a half-written model/image, which has nothing
+to do with browsing arbitrary project files, and it owns a `ChildProcess` it
+must `Terminate()` in `Shutdown` where this watcher owns no OS handle at all.
+`App::ApplyEditorActions` carries out its `CreateFolder`/`Rename`/`Delete`
+actions, reusing the same `ModelPlayer`-reference guard already written for
+`AssetImportActionKind::Remove` before a Delete that targets an asset path.
 
 *2026-10-08* — **Meshes resolve every frame in `MeshResolveSystem`, and `App`
 carries out the editor's entity actions.** Was: `ResolveSceneMeshes` ran once,
