@@ -1007,7 +1007,11 @@ used a fresh engine residency; Windows file cache was not flushed.
 | Recommendation | 32 / Interest | 12 | 128 / 4 / 16 | 0 | 0 / 0 |
 
 All controls and recommendations had zero duplicated tile coverage and zero
-main-thread payload range reads. The larger-cache control changes policy as
+main-thread payload range reads. The source wrapper does not intercept the
+existing synchronous small `current` pointer reads during Edit polling;
+their cost remains included in CPU frame time but is not a separate IO sample.
+Zero range reads therefore does not mean zero main-thread filesystem calls.
+The larger-cache control changes policy as
 well as memory, so it does not isolate the CPU-cap effect. The recommendation
 keeps the original LOD accuracy thresholds, raises prefetch and retention,
 and halves upload/staging capacity. Sampled peaks were 14.66 MiB CPU payload,
