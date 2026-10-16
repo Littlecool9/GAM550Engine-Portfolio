@@ -1,3 +1,20 @@
+# Jackey Cen · Mjolnir Technical Design Portfolio
+
+Public portfolio snapshot of a team-built C++ game engine, based on the terrain P3 integration branch.
+
+**[阅读技术策划作品集说明：个人贡献、案例与代码证据](Jackey-Cen-Technical-Design-Portfolio.md)**
+
+My contributions cover terrain authoring and streaming, Lua physics interfaces, glTF and animation import tools, and large-world precision integration. Mjolnir is a team project; the linked portfolio explains my implementation scope and credits the shared engine foundation.
+
+- P3 code baseline: `ae8ef15c0cd40af9a7d33d0826783ba05f82f996`
+- Original team repository: `GAM550F26/alpha`
+- This repository retains the complete Git history reachable from the P3 baseline.
+- Clone with submodules: `git clone --recurse-submodules https://github.com/Littlecool9/GAM550Engine-Portfolio.git`
+
+The original engine README and build instructions follow.
+
+---
+
 # Mjolnir Engine
 
 A modular 3D engine. It has an archetype ECS, a Vulkan 1.3 renderer, an offline
